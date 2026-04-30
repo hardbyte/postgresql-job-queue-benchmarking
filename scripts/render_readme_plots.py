@@ -261,6 +261,7 @@ def plot_dead_tuples(df: pd.DataFrame, out_path: Path) -> None:
         sub.groupby(["system", "elapsed_s"], as_index=False)["value"].sum()
     )
 
+    medians: dict[str, float] = {}
     for system in SYSTEMS:
         s = grouped[grouped["system"] == system].sort_values("elapsed_s")
         if s.empty:
@@ -268,9 +269,7 @@ def plot_dead_tuples(df: pd.DataFrame, out_path: Path) -> None:
             continue
         xs = s["elapsed_s"].to_numpy(dtype=float)
         ys = s["value"].to_numpy(dtype=float)
-        # For log scale, replace zeros with a small floor so the line stays
-        # visible. Use 1.0 (one dead tuple) as the floor.
-        ys = np.where(ys < 1.0, 1.0, ys)
+        medians[system] = float(np.median(ys))
         # Rolling median smooths the autovacuum sawtooth into a readable
         # envelope at this zoom level (the sawteeth themselves are still
         # visible in the per-system long-horizon plots).
@@ -299,16 +298,42 @@ def plot_dead_tuples(df: pd.DataFrame, out_path: Path) -> None:
         )
 
     ax.set_title(
-        "Total dead tuples on queue tables — log scale",
+        "Total dead tuples on queue tables",
         loc="left",
         pad=12,
     )
     ax.set_xlabel("elapsed time (seconds)")
     ax.set_ylabel("sum of n_dead_tup across queue tables")
     ax.set_xlim(0, 6900)
-    ax.set_yscale("log")
-    ax.set_ylim(1, None)
-    ax.grid(True, axis="y", which="both", linestyle=":", color="#bbb", alpha=0.5)
+    ax.grid(True, axis="y", linestyle=":", color="#bbb", alpha=0.5)
+    # Header table of medians so the awa-near-zero line stays legible
+    # against the autovacuum sawtooth of the row-mutating systems —
+    # a linear-scale chart visually flattens awa, but the table beside
+    # the legend keeps the actual numbers in view.
+    if medians:
+        median_lines = [
+            f"{DISPLAY_NAMES[s]}: {int(round(medians[s])):,}"
+            for s in SYSTEMS
+            if s in medians
+        ]
+        ax.text(
+            0.985,
+            0.97,
+            "Median dead tuples\n" + "\n".join(median_lines),
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=9.5,
+            color="#222",
+            family="DejaVu Sans Mono",
+            bbox=dict(
+                boxstyle="round,pad=0.45",
+                facecolor="white",
+                edgecolor="#ccc",
+                linewidth=0.5,
+                alpha=0.92,
+            ),
+        )
 
     leg = ax.legend(
         loc="upper left",
@@ -320,8 +345,9 @@ def plot_dead_tuples(df: pd.DataFrame, out_path: Path) -> None:
     leg.get_frame().set_linewidth(0.5)
 
     caption = (
-        "Lower is better. awa's append-only design + partition rotation keeps "
-        "the working set small (~hundreds of dead tuples vs tens of thousands)."
+        "Lower is better. awa's append-only design + partition rotation "
+        "keeps the working set in the low hundreds; the row-mutating "
+        "systems sawtooth between autovacuum cycles."
     )
     fig.text(
         0.5,
@@ -369,25 +395,27 @@ def plot_latency(summary: dict, out_path: Path) -> None:
     x = np.arange(len(rows))
     bars = ax.bar(x, values, color=colors, width=0.62, zorder=3, edgecolor="white")
 
-    ax.set_yscale("log")
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("p95 latency (ms, log scale)")
+    ax.set_ylabel("p95 latency (ms)")
     ax.set_title(
         "End-to-end latency p95 (clean phase median across the 1h55m run)",
         loc="left",
         pad=12,
     )
-    ax.grid(True, axis="y", which="both", linestyle=":", color="#bbb", alpha=0.5)
+    ax.grid(True, axis="y", linestyle=":", color="#bbb", alpha=0.5)
     ax.set_axisbelow(True)
 
-    # Annotate each bar with value + which metric it is.
-    ymax = max(values) * 1.7
-    ax.set_ylim(1, ymax)
+    # Annotate each bar with value + which metric it is. Linear scale
+    # makes pg-boss's tower honest about the gap; small bars stay
+    # readable through the annotation.
+    ymax = max(values) * 1.18
+    ax.set_ylim(0, ymax)
+    label_offset = ymax * 0.02
     for bar, value, metric_label in zip(bars, values, metric_labels, strict=True):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
-            value * 1.06,
+            value + label_offset,
             f"{value:.0f} ms\n({metric_label})",
             ha="center",
             va="bottom",
