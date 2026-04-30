@@ -8,6 +8,22 @@ different queue libraries behave when you push them past warm-up — focusing
 on the things that show up in production: latency tail, throughput stability,
 table bloat, and recovery from chaos.
 
+![Sustained throughput vs offered load](results/2026-04-28/plots/throughput_tracking.png)
+
+![Total dead tuples on queue tables](results/2026-04-28/plots/dead_tuples_total.png)
+
+![End-to-end latency p95](results/2026-04-28/plots/latency_p95.png)
+
+The plots above are the headline view of the
+[2026-04-28 long-horizon comparison](results/2026-04-28/SUMMARY.md) —
+six systems, 200 jobs/s offered load, 8 worker concurrency, 115 minutes
+of clean steady-state on a single shared `postgres:17.2-alpine`. Per-system
+architectural notes and "when does this make sense" reads are in
+[`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md). **Author bias: this
+repo is owned by the author of [awa](https://github.com/hardbyte/awa),
+one of the systems benchmarked. Numbers are reproducible — re-run on
+your hardware and check.**
+
 ## Status
 
 Bootstrapping. Currently includes adapters for:
