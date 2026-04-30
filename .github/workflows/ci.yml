@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  harness-tests:
+    name: Harness pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+
+      - name: Install harness deps
+        run: uv sync --extra dev
+
+      - name: Run pytest
+        run: uv run pytest tests/ -q
+
+  smoke-procrastinate:
+    name: Smoke — procrastinate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+
+      - name: Install harness deps
+        run: uv sync
+
+      - name: Bring up Postgres
+        run: docker compose up -d postgres
+
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 30); do
+            docker compose exec -T postgres pg_isready -U bench && exit 0
+            sleep 2
+          done
+          echo "Postgres did not become ready"; exit 1
+
+      - name: Build procrastinate adapter image
+        run: docker build -f procrastinate-bench/Dockerfile -t procrastinate-bench .
+
+      - name: Run 60s smoke
+        run: |
+          uv run python long_horizon.py run \
+            --systems procrastinate \
+            --producer-rate 50 \
+            --worker-count 2 \
+            --replicas 1 \
+            --phase warmup=warmup:15s \
+            --phase clean=clean:45s
+
+      - name: Upload smoke artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-smoke-procrastinate
+          path: results/
+          if-no-files-found: ignore
