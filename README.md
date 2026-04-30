@@ -79,6 +79,57 @@ Outputs land under `results/<run-id>/<system>/` as `manifest.json` +
 uv run python long_horizon.py compare results/<run-id>
 ```
 
+## Scenarios
+
+Each named scenario desugars to a phase sequence; pass `--scenario <name>`
+to `long_horizon.py run`, or compose your own with `--phase
+<label>=<type>:<duration>`.
+
+### `long_horizon.py` scenarios
+
+| Scenario | What it exercises |
+|---|---|
+| `idle_in_tx_saturation` | Steady-state baseline → an idle-in-transaction holder takes a writing tx with an XID assigned and pins the cluster xmin → recovery. The classic Postgres bloat trigger. Surfaces how a system holds up when autovacuum can't reclaim dead tuples. |
+| `long_horizon` | Like `idle_in_tx_saturation` but longer, with a second idle-in-tx phase after recovery. Used for bloat-recovery soak studies. |
+| `sustained_high_load` | Baseline → sustained 1.5× offered load → recovery. Tests whether the queue engine collapses or degrades gracefully when producers outpace workers. |
+| `active_readers` | Baseline → 4 overlapping `REPEATABLE READ` connections running repeating scans against the queue's hot tables → recovery. Mirrors the analytics-on-OLTP pattern that pins MVCC horizon without an explicit idle-in-tx. |
+| `event_delivery_matrix` | Balanced compare profile: clean → readers → high-load → recovery. The "broad shape comparison" scenario for cross-system dashboards. |
+| `event_delivery_burst` | Burst / catch-up profile: clean → 45 min of high-load → 30 min recovery. Measures absorption + drain after a sustained oversupply of work. |
+| `fleet_steady_state` | Multi-replica steady-state. Pair with `--replicas >= 2`. |
+| `soak` | Warmup + 6 hours clean. Used to detect slow drift that shorter runs miss. |
+| `crash_recovery` | Clean → SIGKILL replica 0 → restart → recovery. Pair with `--replicas >= 2` for a meaningful "fleet covers the kill" measurement; single-replica still works but the recovery phase just measures time-to-empty. |
+| `crash_recovery_under_load` | `crash_recovery` with a high-load phase before the kill, so the fleet is already under backlog pressure. Pair with `--replicas >= 2`. |
+
+### Phase types (compose your own)
+
+| Phase type | What it does |
+|---|---|
+| `warmup` | Steady producer load for absorbing startup artifacts; samples are excluded from the summary. |
+| `clean` | Steady-state baseline at the configured `--producer-rate`. |
+| `high-load` | Steady producer load multiplied by `--high-load-multiplier` (default 1.5). |
+| `idle-in-tx` | Opens one `BEGIN` + `SELECT txid_current()` connection that holds an XID for the whole phase. Simulates a long-running writing transaction (held xmin → vacuum starvation). |
+| `active-readers` | Opens N (default 4, set via `ACTIVE_READER_COUNT`) `REPEATABLE READ` connections doing repeating scans against the adapter's hot tables. Simulates analytics readers on the OLTP path. |
+| `recovery` | Producer load drops to baseline; the bench measures how the system catches up after a stress phase. |
+| `kill-worker(instance=N)` | SIGKILLs replica N and waits for the configured duration. Used inside `crash_recovery` scenarios. |
+| `start-worker(instance=N)` | Restarts a previously killed replica and watches for re-registration. |
+
+### `chaos.py` scenarios
+
+`chaos.py` is the correctness-under-adversity comparison runner (separate
+from `long_horizon.py` because it issues SIGKILLs and Postgres restarts
+that are incompatible with throughput sampling).
+
+| Scenario | What it exercises |
+|---|---|
+| `crash_recovery` | SIGKILL the worker mid-flight; verify all enqueued jobs eventually complete after restart with no loss and no duplicates. |
+| `postgres_restart` | Stop and restart the Postgres container while jobs are in flight; verify reconnect + no loss. |
+| `repeated_kills` | SIGKILL the worker repeatedly during a sustained run; verify cumulative no-loss. |
+| `pg_backend_kill` | `pg_terminate_backend` the worker's session repeatedly; verify reconnect path. |
+| `leader_failover` | Force leader election by killing the current leader; verify maintenance work continues. |
+| `pool_exhaustion` | Saturate the worker's connection pool and verify it recovers without hanging. |
+| `retry_storm` | Drive a high concurrent retry rate; verify no duplicate completions. |
+| `priority_starvation` | Mix high- and low-priority work; verify low priority eventually runs (priority aging). |
+
 ## Repo layout
 
 ```
