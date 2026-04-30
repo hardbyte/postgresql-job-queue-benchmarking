@@ -28,10 +28,7 @@ from bench_harness.plots import lttb
 REPO_ROOT = Path("/home/brian/dev/postgresql-job-queue-benchmarking")
 RESULTS_DIR = REPO_ROOT / "results" / "2026-04-28"
 SUMMARY_PATH = RESULTS_DIR / "combined" / "summary.json"
-RAW_CSV = Path(
-    "/home/brian/dev/awa/benchmarks/portable/results/comparison-2026-04-28/"
-    "full-combined-with-pgboss-and-pyfix/raw.csv"
-)
+RAW_CSV = RESULTS_DIR / "combined" / "raw.csv"
 OUT_DIR = RESULTS_DIR / "plots"
 
 # ---------------------------------------------------------------------------
@@ -141,7 +138,14 @@ def plot_throughput(df: pd.DataFrame, out_path: Path) -> None:
         label=f"offered load ({OFFERED_LOAD:g} jobs/s)",
     )
 
-    for system in SYSTEMS:
+    # Render order matters: draw the slowest systems first so they sit
+    # behind, then build up to the systems that hug the 200/s target.
+    # awa and pg-boss both track 200/s exactly, so their lines overlap.
+    # We draw pg-boss as a solid line, then awa as a slightly heavier
+    # dashed line on top, so both are visible where they coincide.
+    render_order = ["river", "oban", "procrastinate", "pgque", "pgboss", "awa"]
+
+    for system in render_order:
         s = grouped[grouped["system"] == system].sort_values("elapsed_s").copy()
         if s.empty:
             print(f"  WARN: no completion_rate samples for {system}")
@@ -154,28 +158,51 @@ def plot_throughput(df: pd.DataFrame, out_path: Path) -> None:
         ys_smoothed = (
             pd.Series(ys_raw).rolling(window=60, center=True, min_periods=10).median().to_numpy()
         )
-        # Light raw underlay to show the variance honestly.
-        ax.plot(
-            xs,
-            ys_raw,
-            color=COLOR[system],
-            linewidth=0.5,
-            alpha=0.18,
-            zorder=2,
-        )
+        # Light raw underlay to show the variance honestly. Skip for awa
+        # so its dashed-on-top line stays crisp where it overlaps pg-boss.
+        if system != "awa":
+            ax.plot(
+                xs,
+                ys_raw,
+                color=COLOR[system],
+                linewidth=0.5,
+                alpha=0.18,
+                zorder=2,
+            )
         px, py = (
             lttb(xs, ys_smoothed, LTTB_TARGET)
             if xs.size > LTTB_TARGET
             else (xs, ys_smoothed)
         )
-        ax.plot(
-            px,
-            py,
-            color=COLOR[system],
-            linewidth=1.8,
-            label=DISPLAY_NAMES[system],
-            zorder=3,
-        )
+        if system == "awa":
+            # Dashed, thicker, on top of pg-boss so the overlap is legible.
+            ax.plot(
+                px,
+                py,
+                color=COLOR[system],
+                linewidth=2.6,
+                linestyle=(0, (6, 3)),
+                label=DISPLAY_NAMES[system],
+                zorder=6,
+            )
+        elif system == "pgboss":
+            ax.plot(
+                px,
+                py,
+                color=COLOR[system],
+                linewidth=2.0,
+                label=DISPLAY_NAMES[system],
+                zorder=4,
+            )
+        else:
+            ax.plot(
+                px,
+                py,
+                color=COLOR[system],
+                linewidth=1.6,
+                label=DISPLAY_NAMES[system],
+                zorder=3,
+            )
 
     ax.set_title(
         "Sustained throughput vs offered load (200 jobs/s target)",
@@ -188,8 +215,25 @@ def plot_throughput(df: pd.DataFrame, out_path: Path) -> None:
     ax.set_ylim(0, 260)
     ax.grid(True, axis="y", linestyle=":", color="#bbb", alpha=0.6)
 
+    # Annotation calling out that awa and pg-boss both track the target
+    # exactly. Without this, the overlap reads as "one line missing".
+    ax.annotate(
+        "awa & pg-boss track the 200 jobs/s target throughout the clean phase",
+        xy=(3500, 200),
+        xytext=(3500, 235),
+        ha="center",
+        fontsize=10,
+        color="#222",
+        arrowprops=dict(
+            arrowstyle="-",
+            color="#666",
+            linewidth=0.8,
+            connectionstyle="arc3,rad=0",
+        ),
+    )
+
     leg = ax.legend(
-        loc="upper right",
+        loc="lower right",
         ncol=4,
         frameon=True,
         framealpha=0.92,
