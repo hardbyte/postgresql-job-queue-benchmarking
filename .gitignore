@@ -13,8 +13,12 @@ _build/
 deps/
 .elixir_ls/
 
-# Bench outputs
-results/
+# Bench outputs (ignore generated runs; checked-in snapshots live under
+# results/<date>/ and are added explicitly). Raw CSVs are too big for
+# git; keep them locally and regenerate on demand.
+results/custom-*/
+results/*-combined/
+results/**/raw.csv
 *.log
 
 # Local env
