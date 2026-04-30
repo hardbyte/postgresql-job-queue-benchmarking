@@ -56,6 +56,9 @@ for the public-API refactor.
 ## Quick start
 
 ```sh
+# Init the pgque submodule (vendored at a pinned upstream SHA)
+git submodule update --init --recursive
+
 # Bring up Postgres (port 15555 by default)
 docker compose up -d postgres
 
