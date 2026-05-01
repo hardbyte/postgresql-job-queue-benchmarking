@@ -77,6 +77,11 @@ PLOT_ORDER = [
     "dead_tuples",
     "dead_tuples_faceted",
     "table_size",
+    # Wait-event histogram per system (clean phase). Only rendered if any
+    # wait-event rows landed in raw.csv; the report's existence-check on
+    # the SVG file means this naturally degrades when --no-wait-events
+    # was set.
+    "wait_events_clean",
 ]
 
 

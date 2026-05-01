@@ -143,6 +143,24 @@ that are incompatible with throughput sampling).
 | `retry_storm` | Drive a high concurrent retry rate; verify no duplicate completions. |
 | `priority_starvation` | Mix high- and low-priority work; verify low priority eventually runs (priority aging). |
 
+## Wait-event sampling
+
+Throughput, latency, and bloat answer *that* one system is slower than
+another. **Wait events** answer *why* — the postgres-side reason a
+system is bottlenecked, not just whether it is. The harness samples
+`pg_stat_activity` once per second from a dedicated connection and
+aggregates non-idle backend snapshots into a per-phase histogram of
+`(wait_event_type, wait_event)`. Same shape as
+[pg_ash](https://github.com/NikolayS/pg_ash) produces, implemented
+inside the harness so we don't have to swap the postgres image.
+
+Output lands in `raw.csv` (`subject_kind=wait_event`), `summary.json`
+(top-10 events per phase plus `total_active_samples`), and a stacked
+bar plot per system in `index.html`. On by default at 1 s cadence;
+opt out with `--no-wait-events` or tune via
+`--wait-event-sample-every <seconds>`. Primer with the common event
+types and how to read the stack: [`docs/wait-events.md`](docs/wait-events.md).
+
 ## Repo layout
 
 ```

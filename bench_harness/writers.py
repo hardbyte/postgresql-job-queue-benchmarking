@@ -287,6 +287,11 @@ def compute_summary(
         ):
             # Defer to the per-timestamp aggregator below; skip raw bucket.
             continue
+        if row.get("subject_kind") == "wait_event":
+            # Wait-event rows have their own dedicated aggregation pass
+            # (top-N histogram per phase) and don't fit the generic
+            # (median, peak, count) shape — skip them in the bucket pass.
+            continue
         instance_id = row.get("instance_id") or ""
         key = (
             row["system"],
@@ -447,6 +452,11 @@ def compute_summary(
                 phase_label=phase_label,
             )
             phase_block["replicas"] = replicas
+            wait = _wait_event_summary(
+                rows, system=system, phase_label=phase_label
+            )
+            if wait is not None:
+                phase_block["wait_events"] = wait
 
     return {
         "run_id": run_id,
@@ -571,6 +581,65 @@ def _phase_summed_values(
             continue
         per_elapsed[elapsed_s] = per_elapsed.get(elapsed_s, 0.0) + value
     return list(per_elapsed.values())
+
+
+def _wait_event_summary(
+    rows: list[dict],
+    *,
+    system: str,
+    phase_label: str,
+    top_n: int = 10,
+) -> dict | None:
+    """Compute the wait-event histogram block for one (system, phase).
+
+    Returns a dict ``{"top": [...], "total_active_samples": N}`` or
+    ``None`` if no wait-event rows exist for this slice. ``top`` is the
+    N most-frequent ``(event_type, event)`` pairs, ordered by count
+    descending. ``total_active_samples`` is the denominator emitted by
+    the harness (sum of non-idle backend observations across all ticks
+    in the phase) so callers can compute percentages.
+    """
+    histogram: dict[str, int] = {}
+    total_active = 0
+    seen_any = False
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row.get("subject_kind") != "wait_event"
+        ):
+            continue
+        seen_any = True
+        try:
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+        if row["metric"] == "total_active_samples":
+            # The harness emits one denominator row per phase boundary;
+            # take the latest (= largest) to be defensive against any
+            # repeated emissions, though today's path emits exactly once.
+            total_active = max(total_active, int(value))
+            continue
+        if row["metric"] != "wait_event_count":
+            continue
+        # Subject is "<event_type>:<event_name>"; we sum counts in case
+        # the orchestrator ever splits a phase across multiple snapshots
+        # for the same label. Today's path emits one snapshot per phase.
+        histogram[row["subject"]] = histogram.get(row["subject"], 0) + int(value)
+    if not seen_any:
+        return None
+    top = sorted(histogram.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    return {
+        "top": [
+            {
+                "event_type": subject.split(":", 1)[0] if ":" in subject else subject,
+                "event": subject.split(":", 1)[1] if ":" in subject else "",
+                "count": count,
+            }
+            for subject, count in top
+        ],
+        "total_active_samples": total_active,
+    }
 
 
 def _autovacuum_count_delta(

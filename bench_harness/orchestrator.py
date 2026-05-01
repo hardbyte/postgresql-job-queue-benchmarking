@@ -49,6 +49,7 @@ from .report import write_interactive_report
 from .replica_pool import ReplicaPool
 from .sample import Sample
 from .versions import capture_adapter_revision
+from .wait_events import WaitEventSampler
 from .writers import (
     RawCsvWriter,
     build_manifest,
@@ -450,6 +451,74 @@ def _check_descriptor_drift(manifest: AdapterManifest, descriptor: dict) -> None
 # ────────────────────────────────────────────────────────────────────────
 
 
+def _emit_wait_event_snapshot(
+    *,
+    sampler: WaitEventSampler,
+    phase: Phase,
+    run_id: str,
+    system: str,
+    bench_start: float,
+    out_queue: "queue.Queue[Sample]",
+) -> None:
+    """Drain the sampler's counts for ``phase`` and queue them for raw.csv.
+
+    Emits one Sample per ``(event_type, event)`` bucket plus a
+    ``total_active_samples`` denominator so consumers can compute
+    percentages without re-summing the histogram. Subject_kind is
+    ``wait_event`` — the discriminator for the new subject_kind so
+    downstream code can keep these rows distinct from adapter / table /
+    cluster metrics.
+
+    The harness writes these rows from a different code path than the
+    adapter stdout tailer (which produces ``subject_kind=adapter``).
+    Keeping the new ``wait_event`` kind makes that distinction explicit
+    in raw.csv so analyses can include or exclude wait-event rows
+    without inferring source from the metric name.
+    """
+    from .sample import now_iso
+
+    rows, total_active = sampler.snapshot(phase.label)
+    elapsed = round(time.time() - bench_start, 3)
+    sampled_at = now_iso()
+    for row in rows:
+        subject = f"{row.wait_event_type}:{row.wait_event}"
+        out_queue.put(
+            Sample(
+                run_id=run_id,
+                system=system,
+                instance_id=0,
+                elapsed_s=elapsed,
+                sampled_at=sampled_at,
+                phase_label=phase.label,
+                phase_type=phase.type.value,
+                subject_kind="wait_event",
+                subject=subject,
+                metric="wait_event_count",
+                value=float(row.count),
+                window_s=float(phase.duration_s),
+            )
+        )
+    # Always emit the denominator — even if zero — so a zero-active phase
+    # is recoverable from raw.csv (otherwise it would look identical to a
+    # phase the sampler didn't observe at all).
+    out_queue.put(
+        Sample(
+            run_id=run_id,
+            system=system,
+            instance_id=0,
+            elapsed_s=elapsed,
+            sampled_at=sampled_at,
+            phase_label=phase.label,
+            phase_type=phase.type.value,
+            subject_kind="wait_event",
+            subject="__total__",
+            metric="total_active_samples",
+            value=float(total_active),
+            window_s=float(phase.duration_s),
+        )
+    )
+
+
 def _drain_loop(
     out_queue: "queue.Queue[Sample]", writer: RawCsvWriter, stop_event: threading.Event
 ) -> None:
@@ -483,6 +552,8 @@ def run_one_system(
     worker_count: int,
     high_load_multiplier: float,
     replicas: int = 1,
+    wait_events_enabled: bool = True,
+    wait_event_sample_every_s: float = 1.0,
 ) -> dict:
     entry = ADAPTERS[system]
     manifest = AdapterManifest.load(entry.bench_dir)
@@ -562,6 +633,20 @@ def run_one_system(
     )
     daemon.start()
 
+    # Wait-event sampler — pg_ash-style ASH from the harness side. Polls
+    # pg_stat_activity once per second by default, aggregates non-idle
+    # rows into a (event_type, event) histogram, snapshot drained at
+    # each phase boundary into raw.csv with subject_kind='wait_event'.
+    # See bench_harness/wait_events.py for the design.
+    wait_sampler: WaitEventSampler | None = None
+    if wait_events_enabled:
+        wait_sampler = WaitEventSampler(
+            database_url=pg_url(manifest.db_name),
+            get_phase=tracker.get,
+            sample_every_s=wait_event_sample_every_s,
+        )
+        wait_sampler.start()
+
     registry = default_registry()
     phase_state: dict[str, object] = {
         "producer_rate_control_file": str(control_file),
@@ -595,9 +680,23 @@ def run_one_system(
                 registry.exit(runtime)
                 # Phase-boundary snapshot: pgstattuple / pgstatindex.
                 daemon.phase_boundary_snapshot()
+                # Wait-event histogram snapshot for this phase. Drains
+                # the per-phase counter from the sampler so the next
+                # phase's counts don't pile on top.
+                if wait_sampler is not None:
+                    _emit_wait_event_snapshot(
+                        sampler=wait_sampler,
+                        phase=phase,
+                        run_id=run_id,
+                        system=system,
+                        bench_start=bench_start,
+                        out_queue=out_queue,
+                    )
     finally:
         daemon.stop()
         daemon.join(timeout=5.0)
+        if wait_sampler is not None:
+            wait_sampler.stop()
         pool.stop_all()
         shutil.rmtree(control_dir, ignore_errors=True)
 
@@ -662,6 +761,8 @@ def drive(
     high_load_multiplier: float,
     replicas: int,
     cli_args: list[str],
+    wait_events_enabled: bool = True,
+    wait_event_sample_every_s: float = 1.0,
 ) -> Path:
     unknown = [s for s in systems if s not in ADAPTERS]
     if unknown:
@@ -755,6 +856,8 @@ def drive(
                 worker_count=worker_count,
                 high_load_multiplier=high_load_multiplier,
                 replicas=replicas,
+                wait_events_enabled=wait_events_enabled,
+                wait_event_sample_every_s=wait_event_sample_every_s,
             )
             # Merge the runtime descriptor the adapter emitted with the
             # harness-proven revision block (git SHA / submodule SHA /
@@ -918,6 +1021,31 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "aggregate. Divide --producer-rate by --replicas to hold total "
         "offered load constant across replica counts.",
     )
+    # Wait-event sampling — pg_ash-style ASH. ON by default; the overhead
+    # is a single short SELECT against pg_stat_activity per second
+    # (< 0.1% of one core). See docs/wait-events.md.
+    wait_group = parser.add_mutually_exclusive_group()
+    wait_group.add_argument(
+        "--no-wait-events",
+        dest="wait_events",
+        action="store_false",
+        help="Disable wait-event sampling (pg_stat_activity polling). "
+        "Default is on.",
+    )
+    wait_group.add_argument(
+        "--wait-events",
+        dest="wait_events",
+        action="store_true",
+        help="Enable wait-event sampling (default).",
+    )
+    parser.set_defaults(wait_events=True)
+    parser.add_argument(
+        "--wait-event-sample-every",
+        type=float,
+        default=1.0,
+        help="Wait-event sampling cadence in seconds (default 1.0). "
+        "Overhead is a single short SELECT per tick.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -998,6 +1126,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         high_load_multiplier=config.high_load_multiplier,
         replicas=config.replicas,
         cli_args=list(sys.argv),
+        wait_events_enabled=config.wait_events,
+        wait_event_sample_every_s=config.wait_event_sample_every,
     )
     return 0
 

@@ -67,6 +67,13 @@ class CliConfig(BaseModel):
     # by replicas before passing).
     replicas: Annotated[int, Field(ge=1)] = 1
 
+    # ── Wait-event sampling ────────────────────────────────────────────
+    # pg_ash-style: poll pg_stat_activity periodically into a per-phase
+    # (event_type, event) histogram. Default ON; overhead is negligible
+    # (< 0.1% of one core at 1 s cadence). See bench_harness/wait_events.py.
+    wait_events: bool = True
+    wait_event_sample_every: Annotated[float, Field(gt=0.0)] = 1.0
+
     @field_validator("scenario")
     @classmethod
     def _scenario_must_be_known(cls, v: str | None) -> str | None:
@@ -130,6 +137,8 @@ class CliConfig(BaseModel):
             worker_count=args.worker_count,
             high_load_multiplier=args.high_load_multiplier,
             replicas=args.replicas,
+            wait_events=getattr(args, "wait_events", True),
+            wait_event_sample_every=getattr(args, "wait_event_sample_every", 1.0),
         )
 
 
