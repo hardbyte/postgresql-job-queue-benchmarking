@@ -602,9 +602,18 @@ pub async fn run() {
                     let store = producer_store
                         .as_ref()
                         .expect("queue storage config missing");
-                    store
-                        .enqueue_params_batch(&producer_pool, &params)
-                        .await
+                    // awa 0.6.0-alpha.1's queue-storage producer:
+                    // direct COPY into ready_entries / deferred_jobs,
+                    // ~9% throughput lift at 128 workers vs the older
+                    // multi-row INSERT path. Set
+                    // AWA_QS_PRODUCER_PATH=batch to A/B back to the
+                    // old path for diagnostic comparison.
+                    match std::env::var("AWA_QS_PRODUCER_PATH").as_deref() {
+                        Ok("batch") => {
+                            store.enqueue_params_batch(&producer_pool, &params).await
+                        }
+                        _ => store.enqueue_params_copy(&producer_pool, &params).await,
+                    }
                 }
                 super::StorageEngineMode::Canonical => {
                     insert_many_copy_from_pool(&producer_pool, &params)
