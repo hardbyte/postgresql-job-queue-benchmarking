@@ -67,32 +67,43 @@ Two distinct behavioural shapes:
 
 ## Per-(system, worker_count) numbers
 
-| System | Workers | Throughput | Queue depth | Claim p95 |
-|---|---:|---:|---:|---:|
-| **awa** | 4 | 76 | 24,485 (overshot) | 53 s |
-| awa | 16 | 643 | 9,012 | 34 s |
-| awa | 64 | 2,434 | 14,002 | 10.4 s |
-| awa | 128 | **4,319** | 11,152 | 6.4 s |
-| **pg-boss** | 4 | 512 | 2,000 | 4.0 s |
-| pg-boss | 16 | 2,048 | 1,232 | 956 ms |
-| pg-boss | 64 | 2,406 | 128 | 126 ms |
-| pg-boss | 128 | **2,637** | 128 | 168 ms |
-| **pgque** | 4 | 201 | 0 | 132 ms |
-| pgque | 16 | 257 | 0 | 124 ms |
-| pgque | 64 | **302** | 0 | 119 ms |
-| pgque | 128 | 276 | 0 | 121 ms |
-| **river** | 4 | 77 | 1,498 | 8,705 ms |
-| river | 16 | 150 | 4 | 56 ms |
-| river | 64 | 283 | 5 | 47 ms |
-| river | 128 | **298** | 5 | 46 ms |
-| **oban** | 4 | 229 | 2 | 21 ms |
-| oban | 16 | **253** | 2 | 17 ms |
-| oban | 64 | 250 | 2 | 17 ms |
-| oban | 128 | 239 | 2 | 16 ms |
-| **procrastinate** | 4 | 150 | 106 | 630 ms |
-| procrastinate | 16 | **196** | 62 | 521 ms |
-| procrastinate | 64 | 150 | 145 | 1,082 ms |
-| procrastinate | 128 | 169 | 37 | 383 ms |
+Throughput and queue depth only. **Claim-latency numbers are not
+reported here** because the depth-target producer overshot
+`TARGET_DEPTH=2000` at low worker counts (its backoff polls every ~1 s
+and the producer can issue thousands of inserts in that window). When
+the queue sits at 24 k jobs deep, the claim-p95 a worker sees is
+"wait at the back of a 24 k-deep queue", not the engine's actual
+claim path. We're tracking that artefact under
+[#8](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/8);
+once the producer overshoot is fixed, claim latency at all worker
+counts becomes meaningful again.
+
+| System | Workers | Throughput | Queue depth |
+|---|---:|---:|---:|
+| **awa** | 4 | 76 | 24,485 (overshot) |
+| awa | 16 | 643 | 9,012 |
+| awa | 64 | 2,434 | 14,002 |
+| awa | 128 | **4,319** | 11,152 |
+| **pg-boss** | 4 | 512 | 2,000 |
+| pg-boss | 16 | 2,048 | 1,232 |
+| pg-boss | 64 | 2,406 | 128 |
+| pg-boss | 128 | **2,637** | 128 |
+| **pgque** | 4 | 201 | 0 |
+| pgque | 16 | 257 | 0 |
+| pgque | 64 | **302** | 0 |
+| pgque | 128 | 276 | 0 |
+| **river** | 4 | 77 | 1,498 |
+| river | 16 | 150 | 4 |
+| river | 64 | 283 | 5 |
+| river | 128 | **298** | 5 |
+| **oban** | 4 | 229 | 2 |
+| oban | 16 | **253** | 2 |
+| oban | 64 | 250 | 2 |
+| oban | 128 | 239 | 2 |
+| **procrastinate** | 4 | 150 | 106 |
+| procrastinate | 16 | **196** | 62 |
+| procrastinate | 64 | 150 | 145 |
+| procrastinate | 128 | 169 | 37 |
 
 ## Reading these numbers honestly
 
@@ -121,14 +132,17 @@ For all four, the framework value is in **what they let you express**
 raw throughput per worker. If your real workload is 100 jobs/s of
 real work doing real things, you'll never notice the plateau.
 
-**Latency notes:** the awa low-worker rows show massive `claim p95`
-(53 s, 34 s) — those reflect huge backlogs because the producer
-overshot what 4 workers could drain. That's not the engine's claim
-latency, it's "wait time at the back of a 24k-deep queue." At 64+
-workers awa keeps the depth bounded (~11 k) and claim latency drops
-to single-digit seconds. The systems that don't show this behaviour
-(pgque, oban) have flat queues at all worker counts because they
-plateau at low rates so the producer never gets ahead.
+**On claim latency:** the worker-bound systems (awa, pg-boss) at low
+worker counts had a producer overshoot that ballooned queue depth
+into the tens of thousands; any claim-latency p95 you'd read off
+those rows is queueing wait, not engine-claim time. The
+plateau-tier systems didn't have this issue because their throughput
+caps low enough that the producer never got ahead. Per-system real
+claim latency under bounded depth is captured in the
+[2026-04-28 long-horizon comparison](../2026-04-28/SUMMARY.md);
+re-running this matrix once the producer overshoot
+([#8](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/8))
+is fixed would put it back into the worker-scaling tables too.
 
 ## Caveats
 

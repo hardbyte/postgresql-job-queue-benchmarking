@@ -28,15 +28,19 @@ pressure relevant at the higher worker counts.
 
 ![awa extended scaling](plots/awa_extended_scaling.png)
 
-| Workers | Throughput | Queue depth | Claim p95 |
-|---:|---:|---:|---:|
-| 4 | 296 | 26,700 | 57.6 s |
-| 16 | 1,204 | 26,378 | 25.2 s |
-| 64 | 4,090 | 14,420 | 9.6 s |
-| 128 | 6,481 | 20,597 | 5.6 s |
-| 256 | **4,800** | 10,688 | 4.9 s |
-| 512 | 5,344 | 9,616 | 7.0 s |
-| 1024 | **7,837** | 12,704 | 2.8 s |
+| Workers | Throughput | Queue depth |
+|---:|---:|---:|
+| 4 | 296 | 26,700 |
+| 16 | 1,204 | 26,378 |
+| 64 | 4,090 | 14,420 |
+| 128 | 6,481 | 20,597 |
+| 256 | **4,800** | 10,688 |
+| 512 | 5,344 | 9,616 |
+| 1024 | **7,837** | 12,704 |
+
+(Claim-p95 omitted — overshot queue depth, same producer-overshoot
+artefact as the cross-system matrix; see
+[#8](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/8).)
 
 The 4 → 128 portion is the same as the bulk-everywhere matrix; 256 / 512
 / 1024 are new.
@@ -65,11 +69,14 @@ The 4 → 128 portion is the same as the bulk-everywhere matrix; 256 / 512
   instrumentation will show whether 256 sits in a `LWLock` cliff or
   a connection-acquire wait. Filed for follow-up.
 
-- **Latency drops as workers climb (mostly).** Claim p95 falls from
-  57 s at 4 workers to 2.8 s at 1024 workers. That's the queueing-delay
-  artefact from the producer overshoot at low worker counts shrinking
-  as workers catch up. The 7 s blip at 512 workers correlates with
-  the 256-trough and the same suspected contention.
+- **Queue depth still elevated at the high end.** Even at 1,024
+  workers the median depth is 12.7 k jobs because the bulk producer
+  is keeping the queue topped up against `--target-depth 4000`. The
+  bench is consumer-bottlenecked at every data point above 16
+  workers, which is what we want for a "max sustained throughput"
+  measurement, but means real engine claim latency under bounded
+  depth isn't observable from this run — see
+  [#8](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/8).
 
 ## What this doesn't tell us
 
