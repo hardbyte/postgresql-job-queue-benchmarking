@@ -37,6 +37,38 @@ repo is owned by the author of [awa](https://github.com/hardbyte/awa),
 one of the systems benchmarked. Numbers are reproducible — re-run on
 your hardware and check.**
 
+## Feature comparison
+
+Throughput numbers above are one shape of the question. The other
+shape is **what each system actually gives you**. This table captures
+the documented feature surface — things you'd reach for in real
+applications. Cells reflect what's available out of the box on the
+default open-source distribution.
+
+| | awa | pg-boss | pgmq | pgque | Oban | Procrastinate | River |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| **Language / runtime** | Rust + Python | Node.js | Postgres extension (Rust core) | Postgres extension (PL/pgSQL) | Elixir | Python | Go |
+| **Postgres extension required** | no | no | yes (`pgmq`) | yes (`pgque`) | no | no | no |
+| **Producer surface — bulk insert** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (COPY) |
+| **Storage shape on hot path** | append-only + receipt ring | row-mutating | partitioned archive | append-only + ticker | row-mutating | row-mutating | row-mutating |
+| **Priorities** | ✓ (with aging) | ✓ | — | — | ✓ | ✓ | ✓ |
+| **Retries with backoff** | ✓ | ✓ | (visibility timeout) | ✓ | ✓ | ✓ | ✓ |
+| **Cron / scheduled jobs** | ✓ | ✓ | — | (delayed) | ✓ | ✓ | ✓ |
+| **Dead-letter queue** | ✓ | (failed-archive) | (archive table) | ✓ | (discarded) | (discarded) | ✓ |
+| **Unique jobs / dedup** | ✓ | ✓ (singleton key) | — | — | ✓ | ✓ | ✓ |
+| **Rate limiting per queue** | ✓ | ✓ (throttling) | — | — | ✓ (Pro for global) | (concurrency limit) | ✓ |
+| **Callbacks / external waits** | ✓ | (event subscription) | — | — | — | — | — |
+| **Mixed-runtime workers** | ✓ (Rust + Python) | — | (DIY worker) | (DIY worker) | — | — | — |
+| **Web UI for ops** | ✓ (`awa serve`) | (3rd party: pgboss-dashboard) | — | — | ✓ (Oban Web, Pro) | (3rd party) | ✓ |
+
+Notes on the "—" entries: dashes indicate "not provided as a
+documented feature out of the box", not "impossible". pgmq / pgque
+in particular are intentionally minimal — you build the worker, you
+choose the lifecycle. Procrastinate has a singleton/dedupe pattern
+via primary key and there are community recipes; "(concurrency
+limit)" reflects what's directly documented. Inaccuracies are
+welcome as PRs.
+
 ## Status
 
 Bootstrapping. Currently includes adapters for:
