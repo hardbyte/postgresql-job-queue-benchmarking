@@ -81,23 +81,37 @@ Numbers are reproducible — re-run on your hardware and check.
 
 ## Chaos / correctness
 
-Partial. The long_horizon harness supports `kill-worker` /
-`start-worker` phase types and emits sample-stream metrics through
-chaos events. Published so far:
+Chaos scenarios run inside the same `long_horizon.py` harness as
+every other workload, as named compositions of phase types. The
+sample-stream metrics, wait-event histograms, and per-phase
+aggregates the steady-state runs produce all carry over; in
+addition the harness derives `jobs_lost` (cumulative
+`enqueue_rate − completion_rate` across the chaos and recovery
+phases) and `chaos_recovery_time_s` (time from end of chaos until
+completion rate re-attains 90% of baseline median) and writes them
+into `summary.json` for the recovery phase. Published so far:
 
 - [awa under crash_recovery](results/2026-05-02-awa-crash-recovery/SUMMARY.md)
   — replica 0 SIGKILLed mid-run; throughput stays in the 400-480
   jobs/s band across all five phases (baseline / pressure / kill /
   restart / recovery), wait-event profile invariant.
 
-The legacy `chaos.py` runner covers more scenarios
-(`postgres_restart`, `repeated_kills`, `pg_backend_kill`,
-`leader_failover`, `pool_exhaustion`, `retry_storm`,
-`priority_starvation`) but hasn't been modernised for awa 0.6's
-queue-storage tables, and doesn't include pgque / pgboss / pgmq.
-The full cross-system chaos picture is tracked under
-[#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12)
-and the runner-architecture rework under
+Available chaos scenarios:
+
+| Scenario | What it exercises |
+|---|---|
+| `chaos_crash_recovery` | Kill replica 0, restart, recover. Pair with `--replicas >= 2`. |
+| `chaos_postgres_restart` | Stop and restart Postgres mid-run; verify reconnect + completion. |
+| `chaos_repeated_kills` | Periodic SIGKILL+restart of replica 0; cumulative no-loss. |
+| `chaos_pg_backend_kill` | `pg_terminate_backend` of the SUT's backends at fixed rate. |
+| `chaos_pool_exhaustion` | Hold N idle connections to verify SUT survives pool pressure. |
+
+The legacy `chaos.py` runner is deprecated and kept only as a
+reference for `leader_failover`, `retry_storm`, and
+`priority_starvation` — those are system-specific and not yet
+folded in. The full cross-system chaos picture is tracked under
+[#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12);
+the runner consolidation lands in
 [#13](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/13).
 
 ## Adapters
@@ -170,6 +184,11 @@ to `long_horizon.py run`, or compose your own with `--phase
 | `soak` | Warmup + 6 hours clean. Used to detect slow drift that shorter runs miss. |
 | `crash_recovery` | Clean → SIGKILL replica 0 → restart → recovery. Pair with `--replicas >= 2` for a meaningful "fleet covers the kill" measurement; single-replica still works but the recovery phase just measures time-to-empty. |
 | `crash_recovery_under_load` | `crash_recovery` with a high-load phase before the kill, so the fleet is already under backlog pressure. Pair with `--replicas >= 2`. |
+| `chaos_crash_recovery` | Warmup → baseline → SIGKILL replica 0 → restart → recovery. Aggregates `jobs_lost` and `chaos_recovery_time_s` into `summary.json`. |
+| `chaos_postgres_restart` | Stop + start the Postgres container mid-run; SUT must reconnect and drain. |
+| `chaos_repeated_kills` | Periodic SIGKILL+restart of replica 0 across a sustained chaos phase. |
+| `chaos_pg_backend_kill` | Steady stream of `pg_terminate_backend` against the SUT's connections. |
+| `chaos_pool_exhaustion` | Hold 300 idle connections to pressure the SUT's pool sizing. |
 
 ### Phase types (compose your own)
 
@@ -183,23 +202,22 @@ to `long_horizon.py run`, or compose your own with `--phase
 | `recovery` | Producer load drops to baseline; the bench measures how the system catches up after a stress phase. |
 | `kill-worker(instance=N)` | SIGKILLs replica N and waits for the configured duration. Used inside `crash_recovery` scenarios. |
 | `start-worker(instance=N)` | Restarts a previously killed replica and watches for re-registration. |
+| `postgres-restart` | `docker compose stop postgres` for half the duration, then `start` for the rest. Drives the harness-managed compose lifecycle. |
+| `pg-backend-kill(rate=N)` | Opens an admin connection that runs `pg_terminate_backend(pid)` against the SUT's database `N` times per second. |
+| `pool-exhaustion(idle_conns=N)` | Holds `N` idle connections against the SUT's database for the duration; releases them on phase end. |
+| `repeated-kill(instance=I,period=Ns)` | Periodic SIGKILL + auto-restart of replica `I` every `period`. Composes `kill-worker` / `start-worker`. |
 
-### `chaos.py` scenarios
+### `chaos.py` (deprecated)
 
-`chaos.py` is the correctness-under-adversity comparison runner (separate
-from `long_horizon.py` because it issues SIGKILLs and Postgres restarts
-that are incompatible with throughput sampling).
-
-| Scenario | What it exercises |
-|---|---|
-| `crash_recovery` | SIGKILL the worker mid-flight; verify all enqueued jobs eventually complete after restart with no loss and no duplicates. |
-| `postgres_restart` | Stop and restart the Postgres container while jobs are in flight; verify reconnect + no loss. |
-| `repeated_kills` | SIGKILL the worker repeatedly during a sustained run; verify cumulative no-loss. |
-| `pg_backend_kill` | `pg_terminate_backend` the worker's session repeatedly; verify reconnect path. |
-| `leader_failover` | Force leader election by killing the current leader; verify maintenance work continues. |
-| `pool_exhaustion` | Saturate the worker's connection pool and verify it recovers without hanging. |
-| `retry_storm` | Drive a high concurrent retry rate; verify no duplicate completions. |
-| `priority_starvation` | Mix high- and low-priority work; verify low priority eventually runs (priority aging). |
+`chaos.py` was the standalone chaos comparison runner. Its
+scenarios have been folded into `long_horizon.py` as named phase
+compositions (see the `chaos_*` rows above and the `kill-worker`,
+`postgres-restart`, `pg-backend-kill`, `pool-exhaustion`, and
+`repeated-kill` phase types). The script is retained in the repo
+as a reference for `leader_failover`, `retry_storm`, and
+`priority_starvation` — those scenarios are system-specific and
+have not yet been migrated. New chaos measurements should go
+through `long_horizon.py run --scenario chaos_*`.
 
 ## Wait-event sampling
 

@@ -155,6 +155,69 @@ def start_postgres(pg_image: str) -> None:
     )
 
 
+def _compose_stop_postgres(pg_image: str) -> None:
+    """Stop (but don't remove) the postgres container — used by the
+    `postgres-restart` chaos phase to take PG down mid-run without
+    blowing away the volume the system-under-test is talking to."""
+    _run_cmd(
+        ["docker", "compose", "stop", "postgres"],
+        cwd=SCRIPT_DIR,
+        env=_compose_env(pg_image),
+        check=False,
+    )
+
+
+def _compose_start_postgres(pg_image: str) -> None:
+    """Start the existing postgres container and wait for readiness.
+
+    Re-uses the same readiness probe as ``start_postgres`` so callers
+    that bring PG back up after a chaos `stop` get the same guarantees
+    (pg_isready + a real SELECT 1 round-trip).
+    """
+    _run_cmd(
+        ["docker", "compose", "start", "postgres"],
+        cwd=SCRIPT_DIR,
+        env=_compose_env(pg_image),
+    )
+    for _ in range(60):
+        r = subprocess.run(
+            [
+                "docker", "compose", "exec", "-T", "postgres",
+                "pg_isready", "-U", "bench",
+            ],
+            cwd=str(SCRIPT_DIR),
+            env={**os.environ, **_compose_env(pg_image)},
+            capture_output=True,
+        )
+        if r.returncode == 0:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("Postgres did not become ready after restart")
+    last_error: Exception | None = None
+    for _ in range(30):
+        try:
+            with psycopg.connect(pg_url("postgres"), autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+            return
+        except psycopg.Error as exc:
+            last_error = exc
+            time.sleep(1)
+    raise RuntimeError(
+        f"Postgres started but never became query-ready: {last_error}"
+    )
+
+
+def _restart_postgres(pg_image: str) -> None:
+    """Stop + start the postgres container. Bound into runtime.state by
+    the orchestrator so the postgres-restart phase hook doesn't need to
+    know about compose at all."""
+    _compose_stop_postgres(pg_image)
+    _compose_start_postgres(pg_image)
+
+
 def stop_postgres(pg_image: str) -> None:
     if os.environ.get("KEEP_DB"):
         print("[harness] KEEP_DB set — leaving postgres running for inspection")
@@ -659,6 +722,16 @@ def run_one_system(
         # rolling-replace — landing in #174 step 4+) act on this.
         # Pre-existing phase hooks ignore it.
         "replica_pool": pool,
+        # Chaos phase types need to drive the compose lifecycle (postgres
+        # restart) and know where to wait afterwards. Stash a no-arg
+        # restart callback + URL probe instead of leaking compose
+        # internals into the hooks module.
+        "postgres_restart_fn": lambda: _restart_postgres(pg_image),
+        "postgres_stop_fn": lambda: _compose_stop_postgres(pg_image),
+        "postgres_start_fn": lambda: _compose_start_postgres(pg_image),
+        "admin_database_url": pg_url("postgres"),
+        "system_database_url": pg_url(manifest.db_name),
+        "system_database_name": manifest.db_name,
     }
     try:
         for phase in phases:
