@@ -14,17 +14,25 @@ table bloat, and recovery from chaos.
 
 ![End-to-end latency p95](results/2026-04-28/plots/latency_p95.png)
 
-![Sustained throughput vs worker concurrency](results/2026-05-01-worker-scaling/plots/throughput_scaling.png)
+![Sustained throughput vs worker concurrency](results/2026-05-01-bulk-everywhere/plots/throughput_scaling_bulk.png)
+
+![Peak: baseline vs documented bulk path](results/2026-05-01-bulk-everywhere/plots/peak_baseline_vs_bulk.png)
 
 The first three plots are the headline view of the
 [2026-04-28 long-horizon comparison](results/2026-04-28/SUMMARY.md):
 six systems, 200 jobs/s offered load, 8 workers, 115 minutes of clean
-steady-state. The fourth is the
-[2026-05-01 worker-scaling matrix](results/2026-05-01-worker-scaling/SUMMARY.md):
-each system measured at 4 / 16 / 64 / 128 workers under depth-target
-producer pressure to find its real sustained-throughput ceiling. Per-system
-architectural notes and "when does this make sense" reads are in
-[`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md). **Author bias: this
+steady-state. The fourth and fifth are from the
+[2026-05-01 bulk-everywhere matrix](results/2026-05-01-bulk-everywhere/SUMMARY.md):
+each system measured at 4 / 16 / 64 / 128 workers, with each adapter
+routed through its system's documented bulk producer path
+(`Oban.insert_all`, river `InsertManyFast`, `pgque.send_batch`,
+`Task.batch_defer_async`, `boss.insert(jobs[])`, `pgmq.send_batch`,
+awa `enqueue_params_batch`). The original
+[row-by-row baseline](results/2026-05-01-worker-scaling/SUMMARY.md)
+is preserved alongside for the comparison.
+
+Per-system architectural notes and "when does this make sense" reads
+are in [`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md). **Author bias: this
 repo is owned by the author of [awa](https://github.com/hardbyte/awa),
 one of the systems benchmarked. Numbers are reproducible — re-run on
 your hardware and check.**
