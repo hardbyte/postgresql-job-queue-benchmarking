@@ -69,6 +69,11 @@ Other reference runs:
   at 4 k jobs/s (spoiler: WAL fsync, not lock contention)
 - [awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md)
   — awa pushed to 256 / 512 / 1024 workers
+- [pgmq on `quay.io/tembo/pg17-pgmq`](results/2026-05-02-pgmq-extension-image/SUMMARY.md)
+  — pgmq's first published numbers in this repo (peak 11,546 jobs/s
+  at 16 workers; visibility-timeout consumer model contends past that)
+- [awa producer-path optimisations](results/2026-05-01-awa-producer-paths/SUMMARY.md)
+  — `enqueue_params_copy` (PR #206) and batched uniqueness sync (PR #208) shipped in 0.6.0-alpha.1
 
 **Author bias:** this repo is owned by the author of
 [awa](https://github.com/hardbyte/awa), one of the systems benchmarked.
@@ -76,12 +81,24 @@ Numbers are reproducible — re-run on your hardware and check.
 
 ## Chaos / correctness
 
-Coming. The harness already supports `chaos.py` scenarios
-(`crash_recovery`, `postgres_restart`, `repeated_kills`,
-`pg_backend_kill`, `leader_failover`, `pool_exhaustion`,
-`retry_storm`, `priority_starvation`) but a published cross-system
-chaos comparison hasn't landed yet. Tracked at
-[#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12).
+Partial. The long_horizon harness supports `kill-worker` /
+`start-worker` phase types and emits sample-stream metrics through
+chaos events. Published so far:
+
+- [awa under crash_recovery](results/2026-05-02-awa-crash-recovery/SUMMARY.md)
+  — replica 0 SIGKILLed mid-run; throughput stays in the 400-480
+  jobs/s band across all five phases (baseline / pressure / kill /
+  restart / recovery), wait-event profile invariant.
+
+The legacy `chaos.py` runner covers more scenarios
+(`postgres_restart`, `repeated_kills`, `pg_backend_kill`,
+`leader_failover`, `pool_exhaustion`, `retry_storm`,
+`priority_starvation`) but hasn't been modernised for awa 0.6's
+queue-storage tables, and doesn't include pgque / pgboss / pgmq.
+The full cross-system chaos picture is tracked under
+[#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12)
+and the runner-architecture rework under
+[#13](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/13).
 
 ## Adapters
 
