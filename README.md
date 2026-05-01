@@ -34,8 +34,9 @@ distribution.
 
 Dashes indicate "not provided as a documented feature out of the box",
 not "impossible". pgmq / pgque in particular are intentionally minimal
-— you build the worker, you choose the lifecycle. Inaccuracies welcome
-as PRs.
+— you build the worker, you choose the lifecycle. If you spot
+something wrong, please open a PR — corrections welcome from the
+maintainers of any of the systems listed.
 
 ## Throughput
 
