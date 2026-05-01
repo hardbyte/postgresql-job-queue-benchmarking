@@ -528,6 +528,18 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	producerMode := envOrDefault("PRODUCER_MODE", "fixed")
 	targetDepth := envInt("TARGET_DEPTH", 1000)
 	sampleEveryS := envInt("SAMPLE_EVERY_S", 10)
+	// Batch size for River's documented bulk-insert API
+	// (Client.InsertManyFast: https://pkg.go.dev/github.com/riverqueue/river#Client.InsertManyFast,
+	// docs: https://riverqueue.com/docs/batch-job-insertion). Uses Postgres
+	// COPY under the hood. Default 1 keeps existing row-by-row behaviour.
+	producerBatchMax := envInt("PRODUCER_BATCH_MAX", 1)
+	if producerBatchMax < 1 {
+		producerBatchMax = 1
+	}
+	producerBatchMs := envInt("PRODUCER_BATCH_MS", 10)
+	if producerBatchMs < 1 {
+		producerBatchMs = 1
+	}
 	if sampleEveryS <= 0 {
 		log.Fatalf("SAMPLE_EVERY_S must be > 0; got %d", sampleEveryS)
 	}
@@ -590,6 +602,9 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	go func() {
 		defer producerWG.Done()
 		var seq int64
+		// Fractional credit budget for fixed-rate batching.
+		var rateCredit float64
+		lastCreditTick := time.Now()
 		for {
 			select {
 			case <-shutdown:
@@ -597,29 +612,78 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 			default:
 			}
 
+			batchCount := 0
 			if producerMode == "depth-target" {
 				producerTargetRate.Store(0)
-				if state.queueDepth.Load() >= int64(targetDepth) {
+				remaining := int64(targetDepth) - state.queueDepth.Load()
+				if remaining <= 0 {
 					time.Sleep(50 * time.Millisecond)
 					continue
+				}
+				batchCount = int(remaining)
+				if batchCount > producerBatchMax {
+					batchCount = producerBatchMax
 				}
 			} else {
 				currentRate := readProducerRate(producerRate)
 				producerTargetRate.Store(int64(currentRate))
 				if currentRate <= 0 {
+					rateCredit = 0
+					lastCreditTick = time.Now()
 					time.Sleep(100 * time.Millisecond)
 					continue
 				}
-				time.Sleep(time.Second / time.Duration(currentRate))
+				if producerBatchMax <= 1 {
+					// Original single-row pacing.
+					time.Sleep(time.Second / time.Duration(currentRate))
+					batchCount = 1
+				} else {
+					// Sleep for producerBatchMs, accumulate rate*dt jobs of
+					// credit, dispatch up to batchMax.
+					period := time.Duration(producerBatchMs) * time.Millisecond
+					sleepFor := period - time.Since(lastCreditTick)
+					if sleepFor > 0 {
+						time.Sleep(sleepFor)
+					}
+					now := time.Now()
+					rateCredit += float64(currentRate) * now.Sub(lastCreditTick).Seconds()
+					lastCreditTick = now
+					if rateCredit < 1.0 {
+						continue
+					}
+					batchCount = int(rateCredit)
+					if batchCount > producerBatchMax {
+						batchCount = producerBatchMax
+					}
+					rateCredit -= float64(batchCount)
+				}
 			}
 
-			_, err := client.Insert(ctx, LongHorizonArgs{Seq: seq, Padding: padding}, nil)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[river] producer insert failed: %v\n", err)
-				continue
+			if batchCount == 1 {
+				_, err := client.Insert(ctx, LongHorizonArgs{Seq: seq, Padding: padding}, nil)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[river] producer insert failed: %v\n", err)
+					continue
+				}
+				state.enqueued.Add(1)
+				seq++
+			} else {
+				// Documented bulk path: Client.InsertManyFast (Postgres COPY).
+				// https://pkg.go.dev/github.com/riverqueue/river#Client.InsertManyFast
+				params := make([]river.InsertManyParams, 0, batchCount)
+				for i := 0; i < batchCount; i++ {
+					params = append(params, river.InsertManyParams{
+						Args: LongHorizonArgs{Seq: seq + int64(i), Padding: padding},
+					})
+				}
+				_, err := client.InsertManyFast(ctx, params)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[river] producer InsertManyFast failed: %v\n", err)
+					continue
+				}
+				state.enqueued.Add(uint64(batchCount))
+				seq += int64(batchCount)
 			}
-			state.enqueued.Add(1)
-			seq++
 		}
 	}()
 
