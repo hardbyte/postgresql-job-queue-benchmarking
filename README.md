@@ -14,10 +14,15 @@ table bloat, and recovery from chaos.
 
 ![End-to-end latency p95](results/2026-04-28/plots/latency_p95.png)
 
-The plots above are the headline view of the
-[2026-04-28 long-horizon comparison](results/2026-04-28/SUMMARY.md) —
-six systems, 200 jobs/s offered load, 8 worker concurrency, 115 minutes
-of clean steady-state on a single shared `postgres:17.2-alpine`. Per-system
+![Sustained throughput vs worker concurrency](results/2026-05-01-worker-scaling/plots/throughput_scaling.png)
+
+The first three plots are the headline view of the
+[2026-04-28 long-horizon comparison](results/2026-04-28/SUMMARY.md):
+six systems, 200 jobs/s offered load, 8 workers, 115 minutes of clean
+steady-state. The fourth is the
+[2026-05-01 worker-scaling matrix](results/2026-05-01-worker-scaling/SUMMARY.md):
+each system measured at 4 / 16 / 64 / 128 workers under depth-target
+producer pressure to find its real sustained-throughput ceiling. Per-system
 architectural notes and "when does this make sense" reads are in
 [`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md). **Author bias: this
 repo is owned by the author of [awa](https://github.com/hardbyte/awa),
