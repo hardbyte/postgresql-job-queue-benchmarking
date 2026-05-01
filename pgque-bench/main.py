@@ -218,6 +218,13 @@ async def scenario_long_horizon() -> None:
     worker_count = env_int("WORKER_COUNT", 32)
     payload_bytes = env_int("JOB_PAYLOAD_BYTES", 256)
     work_ms = env_int("JOB_WORK_MS", 1)
+    # Batch size for the documented bulk-insert API
+    # (`pgque.send_batch(queue, type, payloads text[])`, vendored at
+    # vendor/pgque/sql/pgque-api/send.sql). Default 1 keeps existing
+    # row-by-row behaviour; the bench harness opts in to larger batches
+    # via the env var.
+    producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 1))
+    producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
     db_name = database_url().rsplit("/", 1)[-1]
 
@@ -291,10 +298,18 @@ async def scenario_long_horizon() -> None:
         nonlocal enqueued, current_producer_target_rate
         seq = 0
         next_t = loop.time()
+        # Fixed-rate accounting: instead of sleeping 1/rate per job (which
+        # caps single-row throughput by event-loop scheduling overhead),
+        # accumulate a fractional credit budget and dispatch up to
+        # producer_batch_max jobs per send_batch call.
+        rate_credit = 0.0
+        last_credit_tick = loop.time()
         while not shutdown.is_set():
             if producer_mode == "depth-target":
                 current_producer_target_rate = 0.0
-                if queue_depth >= target_depth:
+                remaining = max(0, target_depth - queue_depth)
+                batch_count = min(producer_batch_max, remaining)
+                if batch_count <= 0:
                     await asyncio.sleep(0.05)
                     continue
                 next_t = loop.time()
@@ -303,30 +318,75 @@ async def scenario_long_horizon() -> None:
                 current_producer_target_rate = float(effective_rate)
                 if effective_rate <= 0:
                     next_t = loop.time()
+                    rate_credit = 0.0
+                    last_credit_tick = loop.time()
                     await asyncio.sleep(0.1)
                     continue
-                next_t = max(next_t + (1.0 / effective_rate), loop.time())
-                sleep_for = next_t - loop.time()
-                if sleep_for > 0:
-                    await asyncio.sleep(sleep_for)
-            payload = json.dumps(
-                {
-                    "seq": seq,
-                    "created_at": _now_iso(),
-                    "padding": payload_padding,
-                }
-            )
+                if producer_batch_max <= 1:
+                    # Preserve original behaviour: precise inter-arrival pacing.
+                    next_t = max(next_t + (1.0 / effective_rate), loop.time())
+                    sleep_for = next_t - loop.time()
+                    if sleep_for > 0:
+                        await asyncio.sleep(sleep_for)
+                    batch_count = 1
+                else:
+                    # Batching path: sleep for producer_batch_ms, accumulate
+                    # rate * dt jobs of credit, dispatch up to batch_max.
+                    period_s = producer_batch_ms / 1000.0
+                    sleep_for = max(0.0, period_s - (loop.time() - last_credit_tick))
+                    if sleep_for > 0:
+                        await asyncio.sleep(sleep_for)
+                    now = loop.time()
+                    rate_credit += effective_rate * (now - last_credit_tick)
+                    last_credit_tick = now
+                    if rate_credit < 1.0:
+                        continue
+                    batch_count = min(producer_batch_max, int(rate_credit))
+                    rate_credit -= batch_count
+
+            # Build the batch payloads — one JSON-encoded text payload per job.
+            payloads: list[str] = []
+            for _ in range(batch_count):
+                payloads.append(
+                    json.dumps(
+                        {
+                            "seq": seq,
+                            "created_at": _now_iso(),
+                            "padding": payload_padding,
+                        }
+                    )
+                )
+                seq += 1
             insert_started = time.monotonic()
             try:
-                async with producer_conn.cursor() as cur:
-                    await cur.execute(
-                        "SELECT pgque.send(%s, %s::text)", (QUEUE_NAME, payload)
-                    )
-                producer_latencies_ms.append(
-                    ((time.monotonic()), max(0.0, (time.monotonic() - insert_started) * 1000.0))
-                )
-                enqueued += 1
-                seq += 1
+                if batch_count == 1:
+                    # Single-row path: keep using send() so the wire profile
+                    # for PRODUCER_BATCH_MAX=1 runs is unchanged from before.
+                    async with producer_conn.cursor() as cur:
+                        await cur.execute(
+                            "SELECT pgque.send(%s, %s::text)",
+                            (QUEUE_NAME, payloads[0]),
+                        )
+                else:
+                    # Documented bulk path:
+                    # `pgque.send_batch(queue, type, payloads text[])` —
+                    # see vendor/pgque/sql/pgque-api/send.sql lines 101-115.
+                    # Default type 'default' matches the no-type send()
+                    # overloads used elsewhere in this adapter.
+                    async with producer_conn.cursor() as cur:
+                        await cur.execute(
+                            "SELECT pgque.send_batch(%s, %s, %s::text[])",
+                            (QUEUE_NAME, "default", payloads),
+                        )
+                elapsed_ms = max(0.0, (time.monotonic() - insert_started) * 1000.0)
+                # Record per-message latency (call-cost / batch-count) so the
+                # producer_*_ms percentiles remain comparable to the row-by-row
+                # baseline despite amortisation.
+                sample_ts = time.monotonic()
+                per_msg_ms = elapsed_ms / max(batch_count, 1)
+                for _ in range(batch_count):
+                    producer_latencies_ms.append((sample_ts, per_msg_ms))
+                enqueued += batch_count
             except Exception as exc:
                 print(f"[pgque] producer send failed: {exc}", file=sys.stderr)
                 await asyncio.sleep(0.05)
