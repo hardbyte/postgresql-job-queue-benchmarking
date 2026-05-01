@@ -477,6 +477,145 @@ def render_plot(
     plt.close(fig)
 
 
+def render_wait_events_clean_phase(
+    rows: list[dict],
+    *,
+    systems: list[str],
+    phases: list[Phase],
+    out_dir: Path,
+    system_meta: SystemMeta | None = None,
+    top_n: int = 5,
+) -> Path | None:
+    """Stacked-bar chart per system showing the top-N wait-event types as a
+    fraction of total active-backend samples during the clean phase.
+
+    Picks the *first* clean phase in the run. Each system gets one bar;
+    each segment is one wait-event type. Segments coloured from the
+    standard palette. If there is no clean phase, or no wait-event rows
+    landed in raw.csv, returns None and writes nothing.
+
+    Title: "Wait-event breakdown — clean phase".
+    """
+    clean_phases = [p for p in phases if p.type is PhaseType.CLEAN]
+    if not clean_phases:
+        return None
+    clean_phase = clean_phases[0]
+
+    # For each system, build (event_type -> count) summed across event names
+    # in the clean phase, plus the total_active denominator.
+    by_system: dict[str, tuple[dict[str, int], int]] = {}
+    for system in systems:
+        per_type: dict[str, int] = {}
+        total_active = 0
+        for r in rows:
+            if (
+                r["system"] != system
+                or r["phase_label"] != clean_phase.label
+                or r.get("subject_kind") != "wait_event"
+            ):
+                continue
+            try:
+                value = int(float(r["value"]))
+            except (TypeError, ValueError):
+                continue
+            if r["metric"] == "total_active_samples":
+                total_active = max(total_active, value)
+                continue
+            if r["metric"] != "wait_event_count":
+                continue
+            subject = r["subject"]
+            event_type = subject.split(":", 1)[0] if ":" in subject else subject
+            per_type[event_type] = per_type.get(event_type, 0) + value
+        if per_type or total_active:
+            by_system[system] = (per_type, total_active)
+    if not by_system:
+        return None
+
+    # Pick top-N event types ranked by total count across all systems so
+    # the colour assignment is stable system-to-system.
+    global_totals: dict[str, int] = {}
+    for per_type, _ in by_system.values():
+        for event_type, count in per_type.items():
+            global_totals[event_type] = global_totals.get(event_type, 0) + count
+    ordered_types = [
+        t for t, _ in sorted(global_totals.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+    top_types = ordered_types[:top_n]
+    other_present = len(ordered_types) > top_n
+
+    type_color = {
+        event_type: _PALETTE[i % len(_PALETTE)]
+        for i, event_type in enumerate(top_types)
+    }
+    if other_present:
+        type_color["Other"] = "#BAB0AC"
+
+    meta = system_meta or {}
+    bar_systems = [s for s in systems if s in by_system]
+    labels = [meta.get(s, (s, s))[1] for s in bar_systems]
+
+    # Build stacked fractions. Denominator is total_active when it's
+    # available (the harness always emits it), else the sum of bucket
+    # counts (covers the test path).
+    fractions: dict[str, list[float]] = {t: [] for t in top_types}
+    if other_present:
+        fractions["Other"] = []
+    for system in bar_systems:
+        per_type, total_active = by_system[system]
+        denom = total_active if total_active > 0 else sum(per_type.values()) or 1
+        used_in_top = 0
+        for event_type in top_types:
+            count = per_type.get(event_type, 0)
+            fractions[event_type].append(count / denom)
+            used_in_top += count
+        if other_present:
+            other_count = sum(per_type.values()) - used_in_top
+            fractions["Other"].append(max(0.0, other_count / denom))
+
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.4 * len(bar_systems) + 3.5), 5.0))
+    x = np.arange(len(bar_systems))
+    bottom = np.zeros(len(bar_systems))
+    for event_type in list(top_types) + (["Other"] if other_present else []):
+        values = np.asarray(fractions[event_type])
+        ax.bar(
+            x,
+            values,
+            bottom=bottom,
+            color=type_color[event_type],
+            label=event_type,
+            edgecolor="white",
+            linewidth=0.5,
+        )
+        bottom = bottom + values
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=20, ha="right")
+    ax.set_ylabel("fraction of active-backend samples")
+    ax.set_ylim(0, 1.0)
+    ax.set_title(
+        f"Wait-event breakdown — clean phase ({clean_phase.label})",
+        pad=14,
+    )
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(True, axis="y", linestyle=":", color="#999", alpha=0.4)
+    ax.legend(
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        fontsize=9,
+        frameon=False,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout(rect=[0, 0, 0.85, 1.0])
+    png = out_dir / "wait_events_clean.png"
+    svg = out_dir / "wait_events_clean.svg"
+    fig.savefig(png, dpi=300)
+    fig.savefig(svg)
+    plt.close(fig)
+    return png
+
+
 def render_faceted_dead_tuples(
     rows: list[dict],
     *,
@@ -606,4 +745,13 @@ def render_all(
         system_meta=system_meta,
     )
     out.append(out_dir / "dead_tuples_faceted.png")
+    wait_png = render_wait_events_clean_phase(
+        rows,
+        systems=systems,
+        phases=phases,
+        out_dir=out_dir,
+        system_meta=system_meta,
+    )
+    if wait_png is not None:
+        out.append(wait_png)
     return out

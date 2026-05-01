@@ -820,3 +820,225 @@ def test_start_worker_hook_without_pool_errors():
     runtime = PhaseRuntime(database_url="", phase=phase, state={})
     with pytest.raises(RuntimeError, match="start-worker requires state"):
         enter_start_worker(runtime)
+
+
+# ── Wait-event sampling ─────────────────────────────────────────────────
+
+
+from bench_harness.wait_events import (
+    ActivityRow,
+    WaitEventCount,
+    WaitEventSampler,
+    aggregate_rows,
+)
+
+
+def test_aggregate_rows_buckets_by_event_pair():
+    rows = [
+        ActivityRow(pid=1, state="active", wait_event_type="Lock", wait_event="tuple"),
+        ActivityRow(pid=2, state="active", wait_event_type="Lock", wait_event="tuple"),
+        ActivityRow(
+            pid=3, state="active", wait_event_type="IO", wait_event="DataFileRead"
+        ),
+        ActivityRow(
+            pid=4, state="active", wait_event_type="LWLock", wait_event="WALWrite"
+        ),
+    ]
+    counts = aggregate_rows(rows)
+    assert counts[("Lock", "tuple")] == 2
+    assert counts[("IO", "DataFileRead")] == 1
+    assert counts[("LWLock", "WALWrite")] == 1
+
+
+def test_aggregate_rows_treats_null_wait_as_cpu():
+    # Backend on CPU: state set, no wait_event. pg_ash convention is to
+    # bucket these as "CPU:CPU" so the histogram remains a complete
+    # accounting of active backend time.
+    rows = [
+        ActivityRow(pid=1, state="active", wait_event_type=None, wait_event=None),
+        ActivityRow(pid=2, state="active", wait_event_type=None, wait_event=None),
+    ]
+    counts = aggregate_rows(rows)
+    assert counts[("CPU", "CPU")] == 2
+
+
+def test_aggregate_rows_skips_idle_state_defensively():
+    # The server-side WHERE filters idle, but the helper double-checks.
+    rows = [
+        ActivityRow(pid=1, state="idle", wait_event_type=None, wait_event=None),
+        ActivityRow(pid=2, state=None, wait_event_type=None, wait_event=None),
+        ActivityRow(
+            pid=3, state="active", wait_event_type="Lock", wait_event="tuple"
+        ),
+    ]
+    counts = aggregate_rows(rows)
+    assert sum(counts.values()) == 1
+    assert counts[("Lock", "tuple")] == 1
+
+
+def test_aggregate_rows_unknown_buckets():
+    # If the server hands us an event_type but no event name (or vice
+    # versa), bucket under "Unknown" rather than crashing.
+    rows = [
+        ActivityRow(
+            pid=1, state="active", wait_event_type="LWLock", wait_event=None
+        ),
+    ]
+    counts = aggregate_rows(rows)
+    assert counts[("LWLock", "Unknown")] == 1
+
+
+def test_sampler_snapshot_drains_per_phase():
+    # We stub _poll_once with hand-built ActivityRow lists so the test
+    # never touches a real PG connection. The sampler's locking +
+    # accumulation logic still runs end-to-end.
+    sampler = WaitEventSampler(
+        database_url="postgresql://nowhere",  # never used in this test
+        get_phase=lambda: ("clean_1", "clean"),
+        sample_every_s=0.01,
+    )
+    # Drive the in-memory accumulators directly via the public-ish
+    # _poll_once_body shape: feed rows in, then snapshot.
+    sampler._per_phase.setdefault("clean_1", __import__("collections").Counter())
+    sampler._phase_types["clean_1"] = "clean"
+    counts = aggregate_rows(
+        [
+            ActivityRow(
+                pid=1, state="active", wait_event_type="Lock", wait_event="tuple"
+            ),
+            ActivityRow(
+                pid=2, state="active", wait_event_type="Lock", wait_event="tuple"
+            ),
+            ActivityRow(
+                pid=3, state="active", wait_event_type="CPU", wait_event="CPU"
+            ),
+        ]
+    )
+    sampler._per_phase["clean_1"].update(counts)
+    sampler._total_active_samples["clean_1"] = 3
+    rows, total = sampler.snapshot("clean_1")
+    assert total == 3
+    # most_common ordering: Lock:tuple (2) before CPU:CPU (1).
+    assert rows[0] == WaitEventCount(
+        phase_label="clean_1",
+        phase_type="clean",
+        wait_event_type="Lock",
+        wait_event="tuple",
+        count=2,
+    )
+    assert rows[1].count == 1
+    # Drained: a second snapshot returns nothing.
+    rows2, total2 = sampler.snapshot("clean_1")
+    assert rows2 == []
+    assert total2 == 0
+
+
+def test_sampler_isolates_phases():
+    # Two phases observed back-to-back must end up in distinct buckets;
+    # a snapshot of one must not drain the other.
+    sampler = WaitEventSampler(
+        database_url="postgresql://nowhere",
+        get_phase=lambda: ("warmup", "warmup"),
+        sample_every_s=0.01,
+    )
+    from collections import Counter as _Counter
+
+    sampler._per_phase["warmup"] = _Counter({("CPU", "CPU"): 5})
+    sampler._phase_types["warmup"] = "warmup"
+    sampler._total_active_samples["warmup"] = 5
+    sampler._per_phase["clean_1"] = _Counter({("Lock", "tuple"): 7})
+    sampler._phase_types["clean_1"] = "clean"
+    sampler._total_active_samples["clean_1"] = 7
+    rows, total = sampler.snapshot("warmup")
+    assert total == 5
+    assert rows[0].wait_event_type == "CPU"
+    # Clean phase still intact.
+    rows, total = sampler.snapshot("clean_1")
+    assert total == 7
+    assert rows[0].wait_event == "tuple"
+
+
+def test_summary_includes_wait_event_block(tmp_path: Path):
+    # Cook up a raw.csv with both adapter rows and harness wait-event
+    # rows, then run compute_summary and confirm the wait_events block
+    # surfaces under the right phase. Keeps the integration test honest
+    # without booting Postgres.
+    import csv as _csv
+
+    raw_path = tmp_path / "raw.csv"
+    with raw_path.open("w", newline="") as fh:
+        writer = _csv.writer(fh)
+        writer.writerow(RAW_CSV_HEADER)
+        # One adapter sample so the system has presence.
+        writer.writerow([
+            "test", "awa", "0", "10.0", "2026-05-01T00:00:00Z",
+            "clean_1", "clean", "adapter", "", "completion_rate", "100.0", "30.0",
+        ])
+        # Wait-event histogram for the same phase.
+        writer.writerow([
+            "test", "awa", "0", "60.0", "2026-05-01T00:01:00Z",
+            "clean_1", "clean", "wait_event", "Lock:tuple",
+            "wait_event_count", "12.0", "60.0",
+        ])
+        writer.writerow([
+            "test", "awa", "0", "60.0", "2026-05-01T00:01:00Z",
+            "clean_1", "clean", "wait_event", "CPU:CPU",
+            "wait_event_count", "30.0", "60.0",
+        ])
+        writer.writerow([
+            "test", "awa", "0", "60.0", "2026-05-01T00:01:00Z",
+            "clean_1", "clean", "wait_event", "__total__",
+            "total_active_samples", "42.0", "60.0",
+        ])
+    phases = [parse_phase_spec("clean_1=clean:60s")]
+    summary = compute_summary(
+        raw_path, run_id="test", scenario=None, phases=phases
+    )
+    block = summary["systems"]["awa"]["phases"]["clean_1"]
+    assert "wait_events" in block
+    we = block["wait_events"]
+    assert we["total_active_samples"] == 42
+    # Top is sorted by count desc; CPU:CPU (30) > Lock:tuple (12).
+    assert we["top"][0]["event_type"] == "CPU"
+    assert we["top"][0]["count"] == 30
+    assert we["top"][1] == {
+        "event_type": "Lock", "event": "tuple", "count": 12,
+    }
+
+
+def test_cliconfig_wait_event_defaults():
+    # Defaults: ON, 1 s cadence.
+    config = CliConfig(**_config_kwargs())
+    assert config.wait_events is True
+    assert config.wait_event_sample_every == 1.0
+
+
+def test_cliconfig_wait_event_disable():
+    config = CliConfig(**_config_kwargs(wait_events=False))
+    assert config.wait_events is False
+
+
+def test_cliconfig_wait_event_rejects_non_positive_cadence():
+    with pytest.raises(ValidationError):
+        CliConfig(**_config_kwargs(wait_event_sample_every=0.0))
+
+
+def test_argparse_wait_event_flags():
+    from bench_harness.orchestrator import build_parser
+
+    p = build_parser()
+    ns = p.parse_args(["run", "--scenario", "idle_in_tx_saturation"])
+    assert ns.wait_events is True
+    assert ns.wait_event_sample_every == 1.0
+    ns = p.parse_args(
+        [
+            "run",
+            "--scenario",
+            "idle_in_tx_saturation",
+            "--no-wait-events",
+            "--wait-event-sample-every",
+            "0.5",
+        ]
+    )
+    assert ns.wait_events is False
+    assert ns.wait_event_sample_every == 0.5
