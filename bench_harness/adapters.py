@@ -225,6 +225,15 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         # allocator-contention impact at our thread counts.
         "MALLOC_ARENA_MAX": "2",
     }
+    # Producer-tuning env vars are read by every adapter that supports
+    # bulk producer paths (pgque, pgboss, procrastinate, river, oban,
+    # pgmq, awa). They live on os.environ so the harness wrapper script
+    # can set them once for all adapters; without this allowlist they
+    # don't reach docker-based adapters because _docker_launch only
+    # forwards keys present in this dict.
+    for key in ("PRODUCER_BATCH_MAX", "PRODUCER_BATCH_MS"):
+        if key in os.environ:
+            env[key] = os.environ[key]
     env.update(
         {
             key: value
