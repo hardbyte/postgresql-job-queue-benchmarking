@@ -45,7 +45,7 @@ Two-tier picture from the previous SUMMARY mostly unchanged in
 direction. Notable shifts vs the previous bulk-everywhere matrix:
 
 - **pgque now 21,790 (was 22,886)** — within run-to-run noise (~5%).
-- **pg-boss now 4,541 (was 5,768)** — −21%, larger than run-to-run noise. Worth re-running to confirm; if real this is a regression in pg-boss between runs (different image build? upstream version moved? bench-scenario interaction?). Flagged as a follow-up; not investigated mid-run.
+- **pg-boss now 4,541 (was 5,768)** — initially flagged as a regression but a third re-run at 128 workers landed at 4,971 jobs/s. Three reads on identical code give 4,051 / 4,971 / 5,768, a ~30 % spread. **It's run-to-run variance, not a regression** — same envelope we see on awa-128 between runs. The 64-worker number (4,541) is more stable.
 - **awa now 4,431 (was 4,566)** — −3%. The COPY-vs-INSERT A/B at 64+128 workers showed COPY winning by ~9% on a single-cell measurement, but that lift gets washed out by matrix-level run-to-run variance (typically 10-30% at this scale on the same code). Treat awa as "unchanged at the matrix level"; the +9% lift is real on direct A/B but isn't a matrix-shifting change.
 - **oban still hangs on shutdown at 64+ workers** (54 / 76 jobs/s) — same anomaly as the previous run. 4-16 worker rows are clean.
 
