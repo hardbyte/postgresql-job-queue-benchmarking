@@ -289,7 +289,9 @@ defmodule ObanBench.LongHorizon do
       # work on a multi-replica run.
       depth_idle_loop()
     else
-      Process.sleep(1000)
+      # Fast poll so the producer's depth-target backoff sees fresh
+      # values; matches awa-bench / pgmq-bench / pgboss cadence.
+      Process.sleep(200)
 
       depth =
         try do

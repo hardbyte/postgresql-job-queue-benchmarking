@@ -546,7 +546,10 @@ async def scenario_long_horizon() -> None:
                     queue_depth = int(row["pending_events"]) if row else 0
             except Exception:
                 pass
-            await asyncio.sleep(1.0)
+            # Fast poll so the producer's depth-target backoff sees
+            # fresh values; matches awa-bench / pgmq-bench / pgboss
+            # cadence. The single get_consumer_info call is cheap.
+            await asyncio.sleep(0.2)
 
     async def sampler() -> None:
         now_epoch = int(time.time())

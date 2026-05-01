@@ -699,7 +699,10 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 			<-shutdown
 			return
 		}
-		tick := time.NewTicker(1 * time.Second)
+		// Fast poll so the producer's depth-target backoff sees
+		// fresh values; matches awa-bench / pgmq-bench / pgboss
+		// cadence.
+		tick := time.NewTicker(200 * time.Millisecond)
 		defer tick.Stop()
 		for {
 			select {

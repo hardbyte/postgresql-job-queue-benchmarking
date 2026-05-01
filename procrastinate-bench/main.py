@@ -451,7 +451,9 @@ async def scenario_long_horizon() -> None:
                             queue_depth = int(row["cnt"]) if row else 0
                 except Exception:
                     pass
-                await asyncio.sleep(1.0)
+                # Fast poll so the producer's depth-target backoff
+                # sees fresh values.
+                await asyncio.sleep(0.2)
 
         async def sampler() -> None:
             now_epoch = int(time.time())
