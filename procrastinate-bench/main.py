@@ -278,6 +278,12 @@ async def scenario_long_horizon() -> None:
     target_depth = env_int("TARGET_DEPTH", 1000)
     worker_count = env_int("WORKER_COUNT", 32)
     work_ms = env_int("JOB_WORK_MS", 1)
+    # Batch size for procrastinate's documented bulk-defer API
+    # (`Task.batch_defer_async(*task_kwargs)` →
+    # `JobManager.batch_defer_jobs_async`, which builds a single
+    # multi-row INSERT). Default 1 keeps existing row-by-row behaviour.
+    producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 1))
+    producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
     queue = "procrastinate_longhorizon_bench"
     # Parse the URL path so query params like ?sslmode=disable don't leak
@@ -360,10 +366,14 @@ async def scenario_long_horizon() -> None:
             seq = 0
             deferrer = long_horizon_task.configure(queue=queue)
             next_t = loop.time()
+            rate_credit = 0.0
+            last_credit_tick = loop.time()
             while not shutdown.is_set():
                 if producer_mode == "depth-target":
                     current_producer_target_rate = 0.0
-                    if queue_depth >= target_depth:
+                    remaining = max(0, target_depth - queue_depth)
+                    batch_count = min(producer_batch_max, remaining)
+                    if batch_count <= 0:
                         await asyncio.sleep(0.05)
                         continue
                     next_t = loop.time()
@@ -372,19 +382,46 @@ async def scenario_long_horizon() -> None:
                     current_producer_target_rate = float(effective_rate)
                     if effective_rate <= 0:
                         next_t = loop.time()
+                        rate_credit = 0.0
+                        last_credit_tick = loop.time()
                         await asyncio.sleep(0.1)
                         continue
-                    next_t = max(next_t + (1.0 / effective_rate), loop.time())
-                    sleep_for = next_t - loop.time()
-                    if sleep_for > 0:
-                        await asyncio.sleep(sleep_for)
+                    if producer_batch_max <= 1:
+                        next_t = max(next_t + (1.0 / effective_rate), loop.time())
+                        sleep_for = next_t - loop.time()
+                        if sleep_for > 0:
+                            await asyncio.sleep(sleep_for)
+                        batch_count = 1
+                    else:
+                        period_s = producer_batch_ms / 1000.0
+                        sleep_for = max(0.0, period_s - (loop.time() - last_credit_tick))
+                        if sleep_for > 0:
+                            await asyncio.sleep(sleep_for)
+                        now = loop.time()
+                        rate_credit += effective_rate * (now - last_credit_tick)
+                        last_credit_tick = now
+                        if rate_credit < 1.0:
+                            continue
+                        batch_count = min(producer_batch_max, int(rate_credit))
+                        rate_credit -= batch_count
                 try:
-                    await deferrer.defer_async(
-                        seq=seq,
-                        created_at_iso=_now_iso(),
-                    )
-                    enqueued += 1
-                    seq += 1
+                    if batch_count == 1:
+                        await deferrer.defer_async(
+                            seq=seq,
+                            created_at_iso=_now_iso(),
+                        )
+                    else:
+                        # Documented bulk path: `Task.batch_defer_async`
+                        # (procrastinate.tasks.Task line 143). Issues a single
+                        # multi-row INSERT via JobManager.batch_defer_jobs_async.
+                        # Docs: https://procrastinate.readthedocs.io/en/stable/howto/advanced/batch.html
+                        kwargs_list = [
+                            {"seq": seq + i, "created_at_iso": _now_iso()}
+                            for i in range(batch_count)
+                        ]
+                        await deferrer.batch_defer_async(*kwargs_list)
+                    enqueued += batch_count
+                    seq += batch_count
                 except Exception as exc:
                     print(
                         f"[procrastinate] producer insert failed: {exc}",
