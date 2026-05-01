@@ -46,22 +46,29 @@ maintainers of any of the systems listed.
 
 These are from the
 [2026-05-01 bulk-everywhere matrix](results/2026-05-01-bulk-everywhere/SUMMARY.md):
-each system measured at 4 / 16 / 64 / 128 workers, routed through its
-documented bulk producer path (`Oban.insert_all`, river `InsertManyFast`,
-`pgque.send_batch`, `Task.batch_defer_async`, `boss.insert(jobs[])`,
-`pgmq.send_batch`, awa `enqueue_params_batch`). Per-system architectural
-notes and "when does this make sense" reads are in
-[`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md).
+six systems measured at 4 / 16 / 64 / 128 workers, each routed through
+its documented bulk producer path (`Oban.insert_all`, river
+`InsertManyFast`, `pgque.send_batch`, `Task.batch_defer_async`,
+`boss.insert(jobs[])`, awa `enqueue_params_copy`). Headline peaks:
 
-Earlier reference runs:
-- [2026-04-28 long-horizon comparison](results/2026-04-28/SUMMARY.md) —
-  six systems at 200 jobs/s offered for 115 minutes; per-system
-  dead-tuple shape under modest sustained load
-- [2026-05-01 awa long-tx with wait-event sampling](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md) —
-  awa under a 10-minute held writing transaction, postgres-side
-  wait-event mix per phase
-- [2026-05-01 awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md) —
-  awa pushed to 256/512/1024 workers
+| | sustained throughput @ best worker count |
+|---|---:|
+| pgque | 21,790 jobs/s |
+| pg-boss | 4,541 jobs/s |
+| awa | 4,431 jobs/s |
+| river | 2,509 jobs/s |
+| oban | 1,144 jobs/s |
+| procrastinate | 267 jobs/s |
+
+Per-system architectural notes and "when does this make sense" reads
+are in [`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md).
+
+Other reference runs:
+- [awa under a 10-minute held writing transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md)
+  with postgres-side wait-event sampling — what actually limits awa
+  at 4 k jobs/s (spoiler: WAL fsync, not lock contention)
+- [awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md)
+  — awa pushed to 256 / 512 / 1024 workers
 
 **Author bias:** this repo is owned by the author of
 [awa](https://github.com/hardbyte/awa), one of the systems benchmarked.
@@ -76,20 +83,15 @@ Coming. The harness already supports `chaos.py` scenarios
 chaos comparison hasn't landed yet. Tracked at
 [#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12).
 
-## Status
+## Adapters
 
-Bootstrapping. Currently includes adapters for:
-
+- [awa](https://github.com/hardbyte/awa) (Rust + Python) — tracking 0.6.0-alpha.1
 - [Oban](https://github.com/oban-bg/oban) (Elixir)
 - [pg-boss](https://github.com/timgit/pg-boss) (Node.js)
-- [pgmq](https://github.com/tembo-io/pgmq) (Postgres extension; Python adapter)
+- [pgmq](https://github.com/tembo-io/pgmq) (Postgres extension; Python adapter; needs an extension-bearing image, run separately from the shared-image matrix)
 - [PgQ](https://github.com/pgq/pgq) (Postgres extension; Python adapter)
 - [Procrastinate](https://github.com/procrastinate-org/procrastinate) (Python)
 - [River](https://github.com/riverqueue/river) (Go)
-
-The [awa](https://github.com/hardbyte/awa) adapter (Rust + Python) is
-pending — see [issue tracker](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues)
-for the public-API refactor.
 
 ## Design principles
 

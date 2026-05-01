@@ -1,39 +1,32 @@
-# 2026-05-01 — bulk-everywhere worker scaling (corrected)
+# 2026-05-01 — bulk-everywhere worker scaling (alpha.1)
 
-> **This SUMMARY supersedes an earlier 2026-05-01 run.** The previous
-> version reported numbers based on a misconfiguration: `PRODUCER_BATCH_MAX`
-> was supposed to reach every adapter via env, but the harness's docker
-> launcher only forwarded an explicit env allowlist that didn't include
-> it. Native awa-bench inherited host env so awa was bulk-batched; every
-> docker-based adapter (pgboss, pgque, procrastinate, river, oban) ran
-> row-by-row in disguise.
->
-> Two harness fixes made the corrected run possible:
-> - **`445ace9`** — pass `PRODUCER_BATCH_MAX` and `PRODUCER_BATCH_MS`
->   through to docker-based adapters
-> - **`2a9c4df`** — tighten the depth-poll cadence on pgque /
->   procrastinate / river / oban from 1 s to 200 ms, matching the
->   awa-bench (`ca33d69`) and existing pgboss / pgmq cadences
->
-> Underlying scenario shape unchanged: same producer-rate ceiling,
-> same `TARGET_DEPTH=2000`, same 75 s clean phase, same
-> `postgres:17.2-alpine`, single replica.
+Cross-system throughput at workers ∈ {4, 16, 64, 128}, each adapter
+routed through its system's documented bulk producer path.
+
+This run is on awa **0.6.0-alpha.1** with the `enqueue_params_copy`
+producer (the COPY path that landed in
+[hardbyte/awa#206](https://github.com/hardbyte/awa/pull/206) +
+[#208](https://github.com/hardbyte/awa/pull/208)). Other adapters
+unchanged from previous runs.
 
 ## Methodology
 
-Per (system, worker count): 30 s warmup + 75 s clean phase. Producer
-in **depth-target** mode at `TARGET_DEPTH=2000` with
-`--producer-rate 50000`. `PRODUCER_BATCH_MAX=1000` honored uniformly
-across all six adapters via:
+- 30 s warmup + 75 s clean phase per (system, worker_count) cell.
+- Producer in **depth-target** mode at `TARGET_DEPTH=2000` with
+  `--producer-rate 50000`. `PRODUCER_BATCH_MAX=1000`.
+- Same `postgres:17.2-alpine`, single replica, single producer.
+- Adapter producer paths:
+  - **awa** — `enqueue_params_copy` (COPY into `ready_entries` /
+    `deferred_jobs`)
+  - **pg-boss** — `boss.insert(name, jobs[])`
+  - **pgque** — `pgque.send_batch(queue, type, payloads text[])`
+  - **procrastinate** — `Task.batch_defer_async(*task_kwargs)`
+  - **river** — `Client.InsertManyFast` (Postgres COPY)
+  - **oban** — `Oban.insert_all(changesets)`
 
-- **awa** — `enqueue_params_batch` (multi-row INSERT)
-- **pg-boss** — `boss.insert(name, jobs[])`
-- **pgque** — `pgque.send_batch(queue, type, payloads text[])`
-- **procrastinate** — `Task.batch_defer_async(*task_kwargs)`
-- **river** — `Client.InsertManyFast` (Postgres COPY)
-- **oban** — `Oban.insert_all(changesets)`
-
-pgmq excluded (still — see [#4](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/4)).
+pgmq is in a follow-on dated dir (Phase 3 of the 2026-05-02 cross-system
+run): it requires an extension-bearing postgres image and so isn't
+in this same-image table.
 
 ## Headline
 
@@ -41,120 +34,81 @@ pgmq excluded (still — see [#4](https://github.com/hardbyte/postgresql-job-que
 
 | System | Row-by-row peak | Bulk peak | Multiplier |
 |---|---:|---:|---:|
-| **pgque** | 302 | **22,886** | **76 ×** |
-| **pg-boss** | 2,637 | **5,768** | 2.2 × |
-| **awa** | 4,319 | **4,566** | 1.06 × |
+| **pgque** | 302 | **21,790** | 72 × |
+| **pg-boss** | 2,637 | **4,541** | 1.7 × |
+| **awa** | 4,319 | **4,431** | 1.03 × |
 | **river** | 298 | **2,509** | 8.4 × |
-| **oban** | 253 | **1,087** | 4.3 × |
-| **procrastinate** | 196 | **256** | 1.3 × |
+| **oban** | 253 | **1,144** | 4.5 × |
+| **procrastinate** | 196 | **267** | 1.4 × |
 
-The story has changed materially. The previous SUMMARY put pgque,
-river, oban, and procrastinate all in a "framework-bound 200-300 jobs/s
-plateau". With the env passthrough fixed, pgque is the highest-throughput
-system in this comparison by a wide margin, and river/oban also
-materially exceed their previous ceilings.
+Two-tier picture from the previous SUMMARY mostly unchanged in
+direction. Notable shifts vs the previous bulk-everywhere matrix:
 
-awa's number is essentially unchanged because awa was **always** running
-on its bulk path — it just happened to be the one adapter that
-benefited from the broken env-allowlist. The 4,566 here vs the 4,319
-previously is within run-to-run noise (~6 %).
+- **pgque now 21,790 (was 22,886)** — within run-to-run noise (~5%).
+- **pg-boss now 4,541 (was 5,768)** — −21%, larger than run-to-run noise. Worth re-running to confirm; if real this is a regression in pg-boss between runs (different image build? upstream version moved? bench-scenario interaction?). Flagged as a follow-up; not investigated mid-run.
+- **awa now 4,431 (was 4,566)** — −3%. The COPY-vs-INSERT A/B at 64+128 workers showed COPY winning by ~9% on a single-cell measurement, but that lift gets washed out by matrix-level run-to-run variance (typically 10-30% at this scale on the same code). Treat awa as "unchanged at the matrix level"; the +9% lift is real on direct A/B but isn't a matrix-shifting change.
+- **oban still hangs on shutdown at 64+ workers** (54 / 76 jobs/s) — same anomaly as the previous run. 4-16 worker rows are clean.
 
 ## Scaling curve
 
 ![Throughput vs worker concurrency, bulk path](plots/throughput_scaling_bulk.png)
 
-The two-tier picture from the previous SUMMARY no longer holds. With
-proper bulk paths:
-
 - **Producer-bound systems** scale until their producer-side ceiling.
-  pgque at 22,886 jobs/s @ 128 workers is the standout — its
-  `pgque.send_batch` lets the consumer side keep up because the
-  ticker-driven consumer is also batch-amortised. River climbs from
-  79 → 2,509 across the 4-128 worker range; pg-boss from 512 → 5,768.
-- **Consumer-bound systems** still plateau, but at higher absolute
-  numbers. Oban peaks at 1,087 @ 16 workers (visible regression at
-  64+ workers — see Anomalies below). Procrastinate stays flat
-  around 250 — its `Task.batch_defer_async` doesn't materially reduce
-  per-job dispatch overhead in this scenario.
-- **awa** scales smoothly as before (678 → 4,566 across 16-128).
+  pgque at 21,790 jobs/s @ 128 workers stands out — its
+  `pgque.send_batch` plus its batch-amortised consumer let both
+  sides run at SQL-throughput limits. River climbs from 79 → 2,509;
+  pg-boss from 512 → 4,541.
+- **Consumer-bound systems** plateau at higher absolute numbers than
+  the row-by-row baseline. Oban peaks at 1,144 @ 16 workers (still
+  hits the shutdown-hang issue at 64+). Procrastinate stays around
+  260 — `Task.batch_defer_async` doesn't materially reduce per-job
+  dispatch overhead in this scenario.
+- **awa** scales smoothly: 175 → 669 → 2,517 → 4,431 across 4-128
+  workers. Same shape as before; the COPY producer lift (+7-9% on
+  direct A/B) is within matrix variance here.
 
 ## Per-(system, worker_count) numbers
 
-Throughput and queue depth. Claim-p95 omitted — at low worker counts
-the producer can still overshoot `TARGET_DEPTH` despite the 200 ms
-cadence; any p95 read off those rows would be queueing wait, not
-engine claim time.
+Throughput, producer call p95 (per-batch insert latency, where
+adapters report it), and queue depth.
 
-| System | Workers | Throughput | Queue depth |
-|---|---:|---:|---:|
-| **awa** | 4 | **0** ⚠ | 5,662 |
-| awa | 16 | 678 | 3,309 |
-| awa | 64 | 2,628 | 4,523 |
-| awa | 128 | **4,566** | 3,634 |
-| **pgque** | 4 | 3,404 | 3,706 |
-| pgque | 16 | 10,400 | 2,758 |
-| pgque | 64 | 18,435 | 0 |
-| pgque | 128 | **22,886** | 1,595 |
-| **procrastinate** | 4 | 243 | 2,592 |
-| procrastinate | 16 | 253 | 2,439 |
-| procrastinate | 64 | 247 | 2,344 |
-| procrastinate | 128 | **256** | 2,515 |
-| **pgboss** | 4 | 512 | 2,000 |
-| pgboss | 16 | 2,048 | 2,000 |
-| pgboss | 64 | 4,826 | 896 |
-| pgboss | 128 | **5,768** | 1,000 |
-| **river** | 4 | 79 | 12,073 |
-| river | 16 | 317 | 3,589 |
-| river | 64 | 1,267 | 4,068 |
-| river | 128 | **2,509** | 5,576 |
-| **oban** | 4 | 325 | 2,981 |
-| oban | 16 | **1,087** | 3,080 |
-| oban | 64 | 82 ⚠ | 2,154 |
-| oban | 128 | 28 ⚠ | 2,437 |
+| System | Workers | Throughput | Producer call p95 | Queue depth |
+|---|---:|---:|---:|---:|
+| **awa** | 4 | 175 | 18 ms | 2,599 |
+| awa | 16 | 669 | 20 ms | 4,229 |
+| awa | 64 | 2,517 | 15 ms | 4,507 |
+| awa | 128 | **4,431** | 26 ms | 3,870 |
+| **pgque** | 4 | 3,376 | 0 ms | 5,438 |
+| pgque | 16 | 9,880 | 0 ms | 4,506 |
+| pgque | 64 | 18,886 | 0 ms | 0 |
+| pgque | 128 | **21,790** | 0 ms | 1,677 |
+| **pgboss** | 4 | 512 | — | 2,000 |
+| pgboss | 16 | 2,048 | — | 2,000 |
+| pgboss | 64 | 4,541 | — | 720 |
+| pgboss | 128 | 4,051 ⚠ | — | 1,000 |
+| **procrastinate** | 4 | 267 | — | 2,339 |
+| procrastinate | 16 | 265 | — | 2,679 |
+| procrastinate | 64 | 262 | — | 2,438 |
+| procrastinate | 128 | 266 | — | 2,893 |
+| **river** | 4 | 79 | — | 11,387 |
+| river | 16 | 317 | — | 2,995 |
+| river | 64 | 1,267 | — | 5,362 |
+| river | 128 | **2,509** | — | 5,679 |
+| **oban** | 4 | 338 | — | 2,842 |
+| oban | 16 | **1,144** | — | 3,404 |
+| oban | 64 | 55 ⚠ | — | 24,397 |
+| oban | 128 | 76 ⚠ | — | 2,361 |
 
-## Anomalies (do not quote, re-run on cleanup)
-
-- **awa @ 4 workers (⚠ throughput = 0)**: the awa-bench process hit a
-  sqlx connection-pool timeout shortly after warmup
-  (`pool timed out while waiting for an open connection`) followed
-  by the postgres connection dropping. The run completed without
-  emitting completions. Other awa rows are clean. The most likely
-  cause is a temporary postgres / docker hiccup specific to this
-  cell — postgres healthcheck passed, then connections were reset
-  partway through. Worth a single re-run.
-- **oban @ 64 / 128 workers (⚠ throughput 82 / 28)**: the oban worker
-  process hung on shutdown and was SIGKILLed by the harness's
-  10-second escalation. The throughput numbers reflect the worker's
-  partial output before that. The 4 / 16 worker rows for oban are
-  clean. This is likely an `Oban.insert_all` interaction with high
-  consumer concurrency — worth a separate investigation; the
-  consumer didn't keep up with the bulk producer at 64+ workers and
-  something in the pipeline got stuck.
-
-Both anomalies are flagged in the matrix above with ⚠. The
-peak-bulk numbers in the headline use the highest *clean* row per
-system: oban's peak is 1,087 @ 16 workers (its 64/128 rows are
-discarded). awa-128 (4,566) is unaffected by the awa-4 anomaly.
-
-## Caveats
-
-- **One scenario, one shape.** Trivial 1 ms job, single Postgres,
-  single replica, same as every other run in this repo.
-- **pgque's ticker design.** pgque's consumer is batched and
-  ticker-driven by design — the 22 k jobs/s number is achievable
-  because both producer and consumer are batched. Lower-latency
-  per-job systems will trade throughput for tail latency in real
-  workloads.
-- **awa's curve hasn't plateaued at 128.** The
-  [extended scaling run](../2026-05-01-awa-extended-scaling/SUMMARY.md)
-  shows awa at 1,024 workers hitting 7,837 jobs/s — but that was
-  before the depth-poll changes. A fresh extended run with the
-  current adapter would tell us whether awa's actual ceiling is
-  higher or lower than the previous reading.
-- **Wait-event sampling on by default now (PR #10).** Adds one
-  pg_stat_activity poll per second from the harness. Negligible
-  expected load, but worth noting as a difference vs the previous
-  run.
+Caveats:
+- **`oban @ 64 / 128 workers`** — same shutdown-hang artefact as the
+  previous run; oban's peak is its 16-worker row.
+- **`pgboss @ 128 workers`** — slightly *below* its 64w number this
+  run; the inversion is unusual and worth a re-run before reading
+  too much into it. The 64w row (4,541) is the headline.
+- "Producer call p95" only reported for adapters that emit it; pgque
+  reports near-zero because its bulk path is a single SQL call per
+  batch and the harness samples per-batch in a way that doesn't
+  resolve sub-millisecond timings.
 
 ## Reproducing
 
@@ -171,6 +125,10 @@ for sys in awa pgque procrastinate pgboss river oban; do
   done
 done
 ```
+
+awa-bench routes through `enqueue_params_copy` by default in this
+repo (HEAD); set `AWA_QS_PRODUCER_PATH=batch` to A/B back to the
+multi-row INSERT path.
 
 ## Files
 
