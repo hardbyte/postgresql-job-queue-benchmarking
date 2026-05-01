@@ -8,42 +8,13 @@ different queue libraries behave when you push them past warm-up — focusing
 on the things that show up in production: latency tail, throughput stability,
 table bloat, and recovery from chaos.
 
-![Sustained throughput vs offered load](results/2026-04-28/plots/throughput_tracking.png)
-
-![Total dead tuples on queue tables](results/2026-04-28/plots/dead_tuples_total.png)
-
-![End-to-end latency p95](results/2026-04-28/plots/latency_p95.png)
-
-![Sustained throughput vs worker concurrency](results/2026-05-01-bulk-everywhere/plots/throughput_scaling_bulk.png)
-
-![Peak: baseline vs documented bulk path](results/2026-05-01-bulk-everywhere/plots/peak_baseline_vs_bulk.png)
-
-The first three plots are the headline view of the
-[2026-04-28 long-horizon comparison](results/2026-04-28/SUMMARY.md):
-six systems, 200 jobs/s offered load, 8 workers, 115 minutes of clean
-steady-state. The fourth and fifth are from the
-[2026-05-01 bulk-everywhere matrix](results/2026-05-01-bulk-everywhere/SUMMARY.md):
-each system measured at 4 / 16 / 64 / 128 workers, with each adapter
-routed through its system's documented bulk producer path
-(`Oban.insert_all`, river `InsertManyFast`, `pgque.send_batch`,
-`Task.batch_defer_async`, `boss.insert(jobs[])`, `pgmq.send_batch`,
-awa `enqueue_params_batch`). The original
-[row-by-row baseline](results/2026-05-01-worker-scaling/SUMMARY.md)
-is preserved alongside for the comparison.
-
-Per-system architectural notes and "when does this make sense" reads
-are in [`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md). **Author bias: this
-repo is owned by the author of [awa](https://github.com/hardbyte/awa),
-one of the systems benchmarked. Numbers are reproducible — re-run on
-your hardware and check.**
-
 ## Feature comparison
 
-Throughput numbers above are one shape of the question. The other
-shape is **what each system actually gives you**. This table captures
-the documented feature surface — things you'd reach for in real
-applications. Cells reflect what's available out of the box on the
-default open-source distribution.
+Throughput is one shape of the question. The other shape is **what
+each system actually gives you**. This table captures the documented
+feature surface — things you'd reach for in real applications. Cells
+reflect what's available out of the box on the default open-source
+distribution.
 
 | | awa | pg-boss | pgmq | pgque | Oban | Procrastinate | River |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -61,13 +32,48 @@ default open-source distribution.
 | **Mixed-runtime workers** | ✓ (Rust + Python) | — | (DIY worker) | (DIY worker) | — | — | — |
 | **Web UI for ops** | ✓ (`awa serve`) | (3rd party: pgboss-dashboard) | — | — | ✓ (Oban Web, Pro) | (3rd party) | ✓ |
 
-Notes on the "—" entries: dashes indicate "not provided as a
-documented feature out of the box", not "impossible". pgmq / pgque
-in particular are intentionally minimal — you build the worker, you
-choose the lifecycle. Procrastinate has a singleton/dedupe pattern
-via primary key and there are community recipes; "(concurrency
-limit)" reflects what's directly documented. Inaccuracies are
-welcome as PRs.
+Dashes indicate "not provided as a documented feature out of the box",
+not "impossible". pgmq / pgque in particular are intentionally minimal
+— you build the worker, you choose the lifecycle. Inaccuracies welcome
+as PRs.
+
+## Throughput
+
+![Sustained throughput vs worker concurrency](results/2026-05-01-bulk-everywhere/plots/throughput_scaling_bulk.png)
+
+![Peak: row-by-row vs documented bulk path](results/2026-05-01-bulk-everywhere/plots/peak_baseline_vs_bulk.png)
+
+These are from the
+[2026-05-01 bulk-everywhere matrix](results/2026-05-01-bulk-everywhere/SUMMARY.md):
+each system measured at 4 / 16 / 64 / 128 workers, routed through its
+documented bulk producer path (`Oban.insert_all`, river `InsertManyFast`,
+`pgque.send_batch`, `Task.batch_defer_async`, `boss.insert(jobs[])`,
+`pgmq.send_batch`, awa `enqueue_params_batch`). Per-system architectural
+notes and "when does this make sense" reads are in
+[`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md).
+
+Earlier reference runs:
+- [2026-04-28 long-horizon comparison](results/2026-04-28/SUMMARY.md) —
+  six systems at 200 jobs/s offered for 115 minutes; per-system
+  dead-tuple shape under modest sustained load
+- [2026-05-01 awa long-tx with wait-event sampling](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md) —
+  awa under a 10-minute held writing transaction, postgres-side
+  wait-event mix per phase
+- [2026-05-01 awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md) —
+  awa pushed to 256/512/1024 workers
+
+**Author bias:** this repo is owned by the author of
+[awa](https://github.com/hardbyte/awa), one of the systems benchmarked.
+Numbers are reproducible — re-run on your hardware and check.
+
+## Chaos / correctness
+
+Coming. The harness already supports `chaos.py` scenarios
+(`crash_recovery`, `postgres_restart`, `repeated_kills`,
+`pg_backend_kill`, `leader_failover`, `pool_exhaustion`,
+`retry_storm`, `priority_starvation`) but a published cross-system
+chaos comparison hasn't landed yet. Tracked at
+[#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12).
 
 ## Status
 
