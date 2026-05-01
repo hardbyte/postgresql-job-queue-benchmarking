@@ -39,6 +39,12 @@ defmodule ObanBench.LongHorizon do
     worker_count = env_int("WORKER_COUNT", 32)
     work_ms = env_int("JOB_WORK_MS", 1)
     payload_bytes = env_int("JOB_PAYLOAD_BYTES", 256)
+    # Batch size for Oban's documented bulk-insert API
+    # (`Oban.insert_all/2`: https://hexdocs.pm/oban/Oban.html#insert_all/2 —
+    # accepts a list of changesets, issues a single multi-row INSERT).
+    # Default 1 keeps existing row-by-row behaviour.
+    producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 1))
+    producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
     db_name =
       System.get_env("DATABASE_URL", "")
@@ -75,8 +81,17 @@ defmodule ObanBench.LongHorizon do
 
     _producer =
       spawn(fn ->
-        producer_loop(producer_mode, producer_rate, target_depth, padding, producer_rate_control_file)
+        producer_loop(
+          producer_mode,
+          producer_rate,
+          target_depth,
+          padding,
+          producer_rate_control_file,
+          producer_batch_max,
+          producer_batch_ms
+        )
       end)
+
     _sampler = spawn(fn -> sampler_loop(sample_every_s) end)
     _depth = spawn(fn -> depth_loop() end)
 
@@ -84,64 +99,186 @@ defmodule ObanBench.LongHorizon do
     Process.sleep(:infinity)
   end
 
-  defp producer_loop("fixed", rate, _target_depth, _padding, _control_file) when rate <= 0, do: :ok
+  defp producer_loop("fixed", rate, _target_depth, _padding, _control_file, _batch_max, _batch_ms)
+       when rate <= 0,
+       do: :ok
 
-  defp producer_loop(mode, rate, target_depth, padding, control_file) do
-    producer_step(0, mode, rate, target_depth, padding, control_file)
+  defp producer_loop(mode, rate, target_depth, padding, control_file, batch_max, batch_ms) do
+    producer_step(
+      0,
+      mode,
+      rate,
+      target_depth,
+      padding,
+      control_file,
+      batch_max,
+      batch_ms,
+      0.0,
+      System.monotonic_time(:millisecond)
+    )
   end
 
-  defp producer_step(seq, mode, base_rate, target_depth, padding, control_file) do
-    should_insert =
+  # `rate_credit` accumulates fractional rate*dt while we wait for the
+  # next batch boundary; we dispatch up to `batch_max` jobs per
+  # `Oban.insert_all/2` call when the credit ≥ 1.
+  defp producer_step(
+         seq,
+         mode,
+         base_rate,
+         target_depth,
+         padding,
+         control_file,
+         batch_max,
+         batch_ms,
+         rate_credit,
+         last_credit_tick_ms
+       ) do
+    {batch_count, new_credit, new_tick_ms} =
       case mode do
         "depth-target" ->
           :ets.insert(:long_horizon_state, {:producer_target_rate, 0.0})
 
-          case :ets.lookup(:long_horizon_state, :queue_depth) do
-            [{:queue_depth, depth}] when depth >= target_depth ->
-              Process.sleep(50)
-              false
+          remaining =
+            case :ets.lookup(:long_horizon_state, :queue_depth) do
+              [{:queue_depth, depth}] -> max(0, target_depth - depth)
+              _ -> target_depth
+            end
 
-            _ ->
-              true
+          if remaining <= 0 do
+            Process.sleep(50)
+            {0, rate_credit, last_credit_tick_ms}
+          else
+            count = min(batch_max, remaining)
+            {count, rate_credit, last_credit_tick_ms}
           end
 
         _ ->
           current_rate = read_producer_rate(base_rate, control_file)
           :ets.insert(:long_horizon_state, {:producer_target_rate, current_rate * 1.0})
 
-          if current_rate <= 0 do
-            Process.sleep(100)
-            false
-          else
-            Process.sleep(max(1, div(1000, current_rate)))
-            true
+          cond do
+            current_rate <= 0 ->
+              Process.sleep(100)
+              {0, 0.0, System.monotonic_time(:millisecond)}
+
+            batch_max <= 1 ->
+              # Original single-row pacing.
+              Process.sleep(max(1, div(1000, current_rate)))
+              {1, rate_credit, last_credit_tick_ms}
+
+            true ->
+              # Sleep for batch_ms, accumulate rate*dt jobs of credit,
+              # dispatch up to batch_max.
+              now_ms = System.monotonic_time(:millisecond)
+              elapsed_ms = now_ms - last_credit_tick_ms
+              sleep_for = batch_ms - elapsed_ms
+              if sleep_for > 0, do: Process.sleep(sleep_for)
+              now_ms2 = System.monotonic_time(:millisecond)
+              dt_s = (now_ms2 - last_credit_tick_ms) / 1000.0
+              credit = rate_credit + current_rate * dt_s
+
+              if credit < 1.0 do
+                {0, credit, now_ms2}
+              else
+                whole = trunc(credit)
+                count = min(batch_max, whole)
+                {count, credit - count, now_ms2}
+              end
           end
       end
 
-    if not should_insert do
-      producer_step(seq, mode, base_rate, target_depth, padding, control_file)
-    else
-      result =
-        try do
-          Oban.insert(LongHorizonWorker.new(%{seq: seq, padding: padding}))
-        rescue
-          ArgumentError -> :stopping
-          RuntimeError -> :stopping
-        catch
-          :exit, _reason -> :stopping
+    case batch_count do
+      0 ->
+        producer_step(
+          seq,
+          mode,
+          base_rate,
+          target_depth,
+          padding,
+          control_file,
+          batch_max,
+          batch_ms,
+          new_credit,
+          new_tick_ms
+        )
+
+      _ ->
+        result = insert_batch(seq, batch_count, padding, batch_max)
+
+        case result do
+          :ok ->
+            :ets.update_counter(:long_horizon_state, :enqueued, batch_count)
+
+            producer_step(
+              seq + batch_count,
+              mode,
+              base_rate,
+              target_depth,
+              padding,
+              control_file,
+              batch_max,
+              batch_ms,
+              new_credit,
+              new_tick_ms
+            )
+
+          :stopping ->
+            :ok
+
+          :error ->
+            # Skip this attempt to avoid a tight retry loop, then continue
+            # with the same seq budget so we don't drop sequence ids.
+            producer_step(
+              seq + batch_count,
+              mode,
+              base_rate,
+              target_depth,
+              padding,
+              control_file,
+              batch_max,
+              batch_ms,
+              new_credit,
+              new_tick_ms
+            )
         end
+    end
+  end
 
-      case result do
-        {:ok, _} ->
-          :ets.update_counter(:long_horizon_state, :enqueued, 1)
-          producer_step(seq + 1, mode, base_rate, target_depth, padding, control_file)
-
-        :stopping ->
-          :ok
-
-        _ ->
-          producer_step(seq + 1, mode, base_rate, target_depth, padding, control_file)
+  # batch_max == 1 → preserve the original Oban.insert/1 wire path.
+  # batch_max > 1 → Oban.insert_all/2 (documented bulk path).
+  defp insert_batch(seq, 1, padding, batch_max) when batch_max <= 1 do
+    try do
+      case Oban.insert(LongHorizonWorker.new(%{seq: seq, padding: padding})) do
+        {:ok, _} -> :ok
+        _ -> :error
       end
+    rescue
+      ArgumentError -> :stopping
+      RuntimeError -> :stopping
+    catch
+      :exit, _reason -> :stopping
+    end
+  end
+
+  defp insert_batch(seq, batch_count, padding, _batch_max) do
+    changesets =
+      for i <- 0..(batch_count - 1) do
+        LongHorizonWorker.new(%{seq: seq + i, padding: padding})
+      end
+
+    try do
+      # Documented bulk path: `Oban.insert_all/2`
+      # https://hexdocs.pm/oban/Oban.html#insert_all/2 — issues a single
+      # multi-row INSERT for the supplied changesets.
+      case Oban.insert_all(changesets) do
+        jobs when is_list(jobs) -> :ok
+        _ -> :error
+      end
+    rescue
+      ArgumentError -> :stopping
+      RuntimeError -> :stopping
+    catch
+      :exit, _reason -> :stopping
     end
   end
 
@@ -170,7 +307,9 @@ defmodule ObanBench.LongHorizon do
         end
 
       case depth do
-        :stopping -> :ok
+        :stopping ->
+          :ok
+
         value ->
           :ets.insert(:long_horizon_state, {:queue_depth, value})
           depth_loop()
@@ -197,6 +336,7 @@ defmodule ObanBench.LongHorizon do
     [{:enqueued, enq}] = :ets.lookup(:long_horizon_state, :enqueued)
     [{:completed, cmp}] = :ets.lookup(:long_horizon_state, :completed)
     [{:queue_depth, depth}] = :ets.lookup(:long_horizon_state, :queue_depth)
+
     [{:producer_target_rate, producer_target_rate}] =
       :ets.lookup(:long_horizon_state, :producer_target_rate)
 
@@ -270,7 +410,9 @@ defmodule ObanBench.LongHorizon do
   # right replica without per-subprocess state.
   defp instance_id do
     case System.get_env("BENCH_INSTANCE_ID") do
-      nil -> 0
+      nil ->
+        0
+
       raw ->
         case Integer.parse(raw) do
           {n, ""} -> n
