@@ -748,6 +748,102 @@ def test_crash_recovery_scenario_resolves():
     )
 
 
+def test_chaos_postgres_restart_scenario_resolves():
+    phases = resolve_scenario("chaos_postgres_restart", None)
+    types = [p.type for p in phases]
+    assert types[0] is PhaseType.WARMUP
+    assert PhaseType.POSTGRES_RESTART in types
+    # Recovery clean phase comes after the chaos.
+    chaos_idx = types.index(PhaseType.POSTGRES_RESTART)
+    assert types[chaos_idx + 1] is PhaseType.CLEAN
+
+
+def test_chaos_pg_backend_kill_scenario_resolves():
+    phases = resolve_scenario("chaos_pg_backend_kill", None)
+    types = [p.type for p in phases]
+    assert PhaseType.PG_BACKEND_KILL in types
+    # rate parameter parsed through correctly.
+    chaos = next(p for p in phases if p.type is PhaseType.PG_BACKEND_KILL)
+    assert chaos.param("rate") == "2"
+
+
+def test_chaos_pool_exhaustion_scenario_carries_idle_conns_param():
+    phases = resolve_scenario("chaos_pool_exhaustion", None)
+    chaos = next(p for p in phases if p.type is PhaseType.POOL_EXHAUSTION)
+    assert chaos.int_param("idle_conns", 0) == 300
+
+
+def test_chaos_repeated_kills_scenario_carries_period_param():
+    phases = resolve_scenario("chaos_repeated_kills", None)
+    chaos = next(p for p in phases if p.type is PhaseType.REPEATED_KILL)
+    assert chaos.int_param("instance", 99) == 0
+    assert chaos.param("period") == "20s"
+
+
+def test_chaos_aggregates_in_summary(tmp_path: Path):
+    """jobs_lost / chaos_recovery_time_s land on the recovery phase."""
+    import csv as _csv
+
+    raw_path = tmp_path / "raw.csv"
+    with raw_path.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(RAW_CSV_HEADER)
+        # Baseline: enqueue and complete at 100/s for two ticks (window 10s each).
+        for elapsed in (10.0, 20.0):
+            w.writerow([
+                "test", "awa", "0", str(elapsed), "2026-05-01T00:00:00Z",
+                "baseline", "clean", "adapter", "", "enqueue_rate", "100.0", "10.0",
+            ])
+            w.writerow([
+                "test", "awa", "0", str(elapsed), "2026-05-01T00:00:00Z",
+                "baseline", "clean", "adapter", "", "completion_rate", "100.0", "10.0",
+            ])
+        # Chaos: kill phase, enqueue continues, completion drops to 0.
+        for elapsed in (30.0, 40.0):
+            w.writerow([
+                "test", "awa", "0", str(elapsed), "2026-05-01T00:00:00Z",
+                "kill", "kill-worker", "adapter", "", "enqueue_rate", "100.0", "10.0",
+            ])
+            w.writerow([
+                "test", "awa", "0", str(elapsed), "2026-05-01T00:00:00Z",
+                "kill", "kill-worker", "adapter", "", "completion_rate", "0.0", "10.0",
+            ])
+        # Recovery: completion comes back to baseline by t=60.
+        w.writerow([
+            "test", "awa", "0", "50.0", "2026-05-01T00:00:00Z",
+            "recovery", "clean", "adapter", "", "enqueue_rate", "100.0", "10.0",
+        ])
+        w.writerow([
+            "test", "awa", "0", "50.0", "2026-05-01T00:00:00Z",
+            "recovery", "clean", "adapter", "", "completion_rate", "50.0", "10.0",
+        ])
+        w.writerow([
+            "test", "awa", "0", "60.0", "2026-05-01T00:00:00Z",
+            "recovery", "clean", "adapter", "", "enqueue_rate", "100.0", "10.0",
+        ])
+        w.writerow([
+            "test", "awa", "0", "60.0", "2026-05-01T00:00:00Z",
+            "recovery", "clean", "adapter", "", "completion_rate", "100.0", "10.0",
+        ])
+    phases = [
+        parse_phase_spec("warmup=warmup:10s"),
+        parse_phase_spec("baseline=clean:20s"),
+        parse_phase_spec("kill=kill-worker(instance=0):20s"),
+        parse_phase_spec("recovery=clean:20s"),
+    ]
+    summary = compute_summary(
+        raw_path, run_id="test", scenario="chaos_crash_recovery", phases=phases
+    )
+    rec_block = summary["systems"]["awa"]["phases"]["recovery"]
+    assert rec_block["jobs_lost"] is not None
+    # Span = chaos(30,40) + recovery(50,60). Enqueued = 100*10*4 = 4000.
+    # Completed = 0 + 0 + 50*10 + 100*10 = 1500. Lost ≈ 2500.
+    assert abs(rec_block["jobs_lost"] - 2500.0) < 1.0
+    # Recovery to ≥90% of baseline (100): t=60 is first ≥90; chaos ended at t=40.
+    assert rec_block["chaos_recovery_time_s"] == 20.0
+    assert rec_block["baseline_completion_rate_median"] == 100.0
+
+
 def test_event_delivery_matrix_scenario_resolves_expected_shape():
     phases = resolve_scenario("event_delivery_matrix", None)
     assert [p.type for p in phases] == [

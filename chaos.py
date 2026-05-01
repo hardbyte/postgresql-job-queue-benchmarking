@@ -1,5 +1,30 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: chaos.py is superseded by long_horizon.py phase types.
+
+The chaos scenarios have moved into the long_horizon harness as
+phase compositions (issue #13):
+
+    chaos_crash_recovery     →  kill-worker + start-worker phases
+    chaos_postgres_restart   →  postgres-restart phase
+    chaos_repeated_kills     →  repeated-kill phase
+    chaos_pg_backend_kill    →  pg-backend-kill phase
+    chaos_pool_exhaustion    →  pool-exhaustion phase
+
+Run them via:
+
+    uv run python long_horizon.py run --scenario chaos_crash_recovery \\
+        --systems awa --replicas 2 ...
+
+This file is kept as a reference for `leader_failover`,
+`retry_storm`, and `priority_starvation` — those scenarios are
+more system-specific and are tracked as a follow-up. The
+implementation here was written for awa 0.5.x's canonical engine
+and is broken against 0.6 queue-storage tables; do not use it for
+new measurements.
+
+Original docstring follows.
+
 Chaos comparison: correctness under adverse conditions.
 
 Tests SIGKILL recovery, Postgres restart, and no-job-loss guarantees
@@ -9,6 +34,16 @@ Usage:
     python chaos.py [--scenario crash_recovery|postgres_restart|repeated_kills]
                     [--systems awa,awa-docker,awa-python,procrastinate,river,oban]
 """
+
+import warnings as _warnings
+
+_warnings.warn(
+    "chaos.py is deprecated. Use long_horizon.py with --scenario "
+    "chaos_crash_recovery / chaos_postgres_restart / chaos_repeated_kills / "
+    "chaos_pg_backend_kill / chaos_pool_exhaustion. See README.md.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import argparse
 import json

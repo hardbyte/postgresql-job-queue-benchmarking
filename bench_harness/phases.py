@@ -24,6 +24,11 @@ class PhaseType(str, Enum):
     # Destructive / lifecycle phases. See UNIFIED_DRIVER_DESIGN.md §2.
     KILL_WORKER = "kill-worker"
     START_WORKER = "start-worker"
+    # Chaos phase types (folded in from chaos.py — see issue #13).
+    POSTGRES_RESTART = "postgres-restart"
+    PG_BACKEND_KILL = "pg-backend-kill"
+    POOL_EXHAUSTION = "pool-exhaustion"
+    REPEATED_KILL = "repeated-kill"
 
 
 # Matplotlib-compatible colour tints. Tuned for the dark "neutral gray" base
@@ -38,6 +43,11 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     # Destructive: kill is scream-red, start is calm-green.
     PhaseType.KILL_WORKER:     ("#C04A4A", 0.35),
     PhaseType.START_WORKER:    ("#6CAF6C", 0.25),
+    # Chaos: shades of red/orange to flag stress phases visually.
+    PhaseType.POSTGRES_RESTART: ("#A03030", 0.40),
+    PhaseType.PG_BACKEND_KILL:  ("#D86A3A", 0.30),
+    PhaseType.POOL_EXHAUSTION:  ("#C8884A", 0.30),
+    PhaseType.REPEATED_KILL:    ("#B04040", 0.35),
 }
 
 # Whether samples in this phase type feed into summary.json (warmup excluded).
@@ -52,6 +62,10 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.HIGH_LOAD:       True,
     PhaseType.KILL_WORKER:     True,
     PhaseType.START_WORKER:    True,
+    PhaseType.POSTGRES_RESTART: True,
+    PhaseType.PG_BACKEND_KILL:  True,
+    PhaseType.POOL_EXHAUSTION:  True,
+    PhaseType.REPEATED_KILL:    True,
 }
 
 
@@ -263,6 +277,42 @@ SCENARIOS: dict[str, list[str]] = {
         "restart=start-worker(instance=0):60s",
         "recovery_1=clean:120s",
     ],
+    # ── Chaos scenarios (folded in from chaos.py — see issue #13) ──────
+    # Each scenario follows the same warmup→baseline→stress→recovery
+    # shape, so the per-phase aggregator can diff enqueue/completion
+    # cumulatives across the stress + recovery span to surface
+    # jobs_lost / recovery_time in summary.json.
+    "chaos_crash_recovery": [
+        "warmup=warmup:30s",
+        "baseline=clean:60s",
+        "kill=kill-worker(instance=0):60s",
+        "restart=start-worker(instance=0):60s",
+        "recovery=clean:60s",
+    ],
+    "chaos_postgres_restart": [
+        "warmup=warmup:30s",
+        "baseline=clean:60s",
+        "restart=postgres-restart:60s",
+        "recovery=clean:60s",
+    ],
+    "chaos_repeated_kills": [
+        "warmup=warmup:30s",
+        "baseline=clean:60s",
+        "repeated=repeated-kill(instance=0,period=20s):120s",
+        "recovery=clean:60s",
+    ],
+    "chaos_pg_backend_kill": [
+        "warmup=warmup:30s",
+        "baseline=clean:60s",
+        "kills=pg-backend-kill(rate=2):60s",
+        "recovery=clean:60s",
+    ],
+    "chaos_pool_exhaustion": [
+        "warmup=warmup:30s",
+        "baseline=clean:60s",
+        "exhaustion=pool-exhaustion(idle_conns=300):60s",
+        "recovery=clean:60s",
+    ],
 }
 
 
@@ -371,6 +421,19 @@ def default_registry() -> HookRegistry:
                       enter=hooks.enter_kill_worker)
     registry.register(PhaseType.START_WORKER,
                       enter=hooks.enter_start_worker)
+    # Chaos phase types — folded in from chaos.py. See hooks.py.
+    registry.register(PhaseType.POSTGRES_RESTART,
+                      enter=hooks.enter_postgres_restart,
+                      exit=hooks.exit_postgres_restart)
+    registry.register(PhaseType.PG_BACKEND_KILL,
+                      enter=hooks.enter_pg_backend_kill,
+                      exit=hooks.exit_pg_backend_kill)
+    registry.register(PhaseType.POOL_EXHAUSTION,
+                      enter=hooks.enter_pool_exhaustion,
+                      exit=hooks.exit_pool_exhaustion)
+    registry.register(PhaseType.REPEATED_KILL,
+                      enter=hooks.enter_repeated_kill,
+                      exit=hooks.exit_repeated_kill)
     # warmup, clean, recovery — no extra runtime action; the adapter's
     # steady workload carries the load.
     return registry

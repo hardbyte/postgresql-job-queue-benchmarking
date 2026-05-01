@@ -405,6 +405,61 @@ def compute_summary(
                 )
                 target.update(rec)
 
+    # Chaos aggregates: jobs_lost + chaos_recovery_time_s for every
+    # scenario that contains a destructive / chaos phase. Computed once,
+    # attached to the recovery phase block so the metric lives next to
+    # the data the operator actually reads ("how long did it take to come
+    # back to baseline?"). See docstring on _chaos_aggregates for the
+    # exact definitions.
+    chaos_phase_types = {
+        PhaseType.KILL_WORKER,
+        PhaseType.START_WORKER,  # lifecycle pair phase that bridges kill→recovery
+        PhaseType.POSTGRES_RESTART,
+        PhaseType.PG_BACKEND_KILL,
+        PhaseType.POOL_EXHAUSTION,
+        PhaseType.REPEATED_KILL,
+    }
+    for i, phase in enumerate(ordered_phases):
+        # Find a chaos span: 1+ chaos phases followed by a clean / recovery
+        # phase. The aggregates attach to that trailing clean / recovery.
+        if phase.type in chaos_phase_types:
+            continue
+        if phase.type not in (PhaseType.CLEAN, PhaseType.RECOVERY):
+            continue
+        # Walk back to find the chaos phase(s) that immediately preceded.
+        chaos_labels: list[str] = []
+        for prev in reversed(ordered_phases[:i]):
+            if prev.type in chaos_phase_types:
+                chaos_labels.append(prev.label)
+                continue
+            break
+        if not chaos_labels:
+            continue
+        chaos_labels.reverse()
+        # Find the most recent clean baseline before the chaos run so we
+        # can derive a "≥90% of baseline" recovery threshold.
+        baseline_label: str | None = None
+        chaos_start_idx = i - len(chaos_labels)
+        for prev in reversed(ordered_phases[:chaos_start_idx]):
+            if prev.type is PhaseType.CLEAN:
+                baseline_label = prev.label
+                break
+        for system in list(out_systems):
+            agg = _chaos_aggregates(
+                rows,
+                system=system,
+                chaos_labels=chaos_labels,
+                recovery_label=phase.label,
+                baseline_label=baseline_label,
+            )
+            if not agg:
+                continue
+            target = out_systems[system]["phases"].setdefault(
+                phase.label,
+                {"phase_type": phase.type.value, "metrics": {}},
+            )
+            target.update(agg)
+
     for system, system_block in out_systems.items():
         for phase_label, phase_block in system_block["phases"].items():
             dead_tup = _phase_summed_values(
@@ -466,6 +521,116 @@ def compute_summary(
             for p in phases
         ],
         "systems": out_systems,
+    }
+
+
+def _chaos_aggregates(
+    rows: list[dict],
+    *,
+    system: str,
+    chaos_labels: list[str],
+    recovery_label: str,
+    baseline_label: str | None,
+) -> dict | None:
+    """Per-system chaos-recovery metrics derived from raw.csv.
+
+    Returns a dict with:
+    - ``jobs_lost``: best-effort estimate of jobs enqueued during the
+      chaos+recovery span that did not complete by the end of recovery.
+      Computed as ``sum(enqueue_rate * window_s) − sum(completion_rate *
+      window_s)`` over the chaos and recovery phases. Will be ``None`` if
+      neither rate stream is present (some adapters skip rates during
+      severe disruption — e.g. while PG is down).
+    - ``chaos_recovery_time_s``: time (in elapsed_s) from the last sample
+      of the chaos span until completion_rate first re-attains 90% of the
+      baseline median. ``None`` if no baseline phase is available or the
+      threshold isn't reached within the recovery phase.
+    - ``baseline_completion_rate_median``: the median completion_rate
+      from ``baseline_label`` used to derive the recovery threshold.
+      Surfaced so a reader can sanity-check the threshold.
+    """
+
+    def _rate_samples(
+        labels: list[str], metric: str
+    ) -> list[tuple[float, float, float]]:
+        """Return (elapsed_s, value, window_s) tuples summed across
+        replicas per timestamp. Rates are summed (system-level offered
+        load), so we collapse the per-replica streams the same way
+        `aggregate_replica_metric_series` does for the summary."""
+        per_elapsed: dict[float, dict[str, float]] = {}
+        for r in rows:
+            if (
+                r["system"] != system
+                or r["phase_label"] not in labels
+                or r["metric"] != metric
+                or r.get("subject_kind") != "adapter"
+            ):
+                continue
+            try:
+                t = float(r["elapsed_s"])
+                v = float(r["value"])
+                w = float(r.get("window_s") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            slot = per_elapsed.setdefault(t, {"v": 0.0, "w": 0.0})
+            slot["v"] += v
+            # The window is per-replica but identical across replicas at
+            # the same elapsed_s, so take max to avoid double-counting.
+            slot["w"] = max(slot["w"], w)
+        return [
+            (t, slot["v"], slot["w"]) for t, slot in sorted(per_elapsed.items())
+        ]
+
+    span_labels = list(chaos_labels) + [recovery_label]
+    enq = _rate_samples(span_labels, "enqueue_rate")
+    comp = _rate_samples(span_labels, "completion_rate")
+    if not enq and not comp:
+        return None
+
+    def _integrate(samples: list[tuple[float, float, float]]) -> float:
+        # rate * window approximates the count of events in the sample
+        # window; sum across the span gives a cumulative.
+        total = 0.0
+        for _, v, w in samples:
+            if w > 0:
+                total += v * w
+        return total
+
+    jobs_enqueued = _integrate(enq) if enq else None
+    jobs_completed = _integrate(comp) if comp else None
+    jobs_lost: float | None = None
+    if jobs_enqueued is not None and jobs_completed is not None:
+        jobs_lost = max(0.0, jobs_enqueued - jobs_completed)
+
+    # Recovery-time-to-baseline-90%.
+    baseline_median: float | None = None
+    if baseline_label:
+        baseline_series = _rate_samples([baseline_label], "completion_rate")
+        if baseline_series:
+            baseline_median = _median([v for _, v, _ in baseline_series])
+
+    chaos_recovery_time_s: float | None = None
+    if baseline_median is not None and baseline_median > 0:
+        threshold = baseline_median * 0.9
+        # Find the elapsed_s of the last chaos sample.
+        chaos_samples = _rate_samples(chaos_labels, "completion_rate")
+        chaos_end_t: float | None = None
+        if chaos_samples:
+            chaos_end_t = chaos_samples[-1][0]
+        # Recovery samples (post-chaos) — first time we're back to ≥90%.
+        recovery_samples = _rate_samples([recovery_label], "completion_rate")
+        if chaos_end_t is not None and recovery_samples:
+            for t, v, _ in recovery_samples:
+                if v >= threshold:
+                    chaos_recovery_time_s = t - chaos_end_t
+                    break
+
+    return {
+        "jobs_enqueued": jobs_enqueued,
+        "jobs_completed": jobs_completed,
+        "jobs_lost": jobs_lost,
+        "chaos_recovery_time_s": chaos_recovery_time_s,
+        "baseline_completion_rate_median": baseline_median,
     }
 
 
