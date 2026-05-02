@@ -367,7 +367,7 @@ def test_versions_known_systems_return_dicts():
     # Every registered adapter must get *some* dict back — the harness is
     # the authoritative source on what was compared, so silently returning
     # nothing would be a reporting regression.
-    for system in ("awa", "awa-canonical", "awa-docker", "awa-python", "procrastinate", "river", "oban", "pgque", "pgmq", "pgboss"):
+    for system in ("awa", "awa-canonical", "awa-docker", "awa-python", "procrastinate", "river", "oban", "pgque", "pgmq", "pgboss", "absurd"):
         rev = capture_adapter_revision(system)
         assert isinstance(rev, dict)
         assert "source" in rev
@@ -393,6 +393,7 @@ def test_versions_upstream_pins_resolve():
     assert capture_adapter_revision("oban").get("pinned_version_constraint")
     assert capture_adapter_revision("pgmq").get("pinned_version")
     assert capture_adapter_revision("pgboss").get("pinned_version")
+    assert capture_adapter_revision("absurd").get("pinned_version")
 
 
 def test_readme_includes_versions_table(tmp_path: Path):

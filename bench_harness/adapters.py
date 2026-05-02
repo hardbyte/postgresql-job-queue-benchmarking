@@ -199,6 +199,15 @@ def build_pgmq(skip: bool) -> None:
     )
 
 
+def build_absurd(skip: bool) -> None:
+    _docker_build(
+        "absurd-bench",
+        SCRIPT_DIR / "absurd-bench" / "Dockerfile",
+        REPO_ROOT,
+        skip,
+    )
+
+
 # ─── Launch specs ────────────────────────────────────────────────────────
 
 
@@ -317,6 +326,10 @@ def launch_pgmq(manifest, overrides):
     return _docker_launch("pgmq-bench", manifest, overrides)
 
 
+def launch_absurd(manifest, overrides):
+    return _docker_launch("absurd-bench", manifest, overrides)
+
+
 # ─── Registry ────────────────────────────────────────────────────────────
 
 
@@ -378,9 +391,14 @@ ADAPTERS: dict[str, AdapterEntry] = {
         builder=build_pgboss,
         launcher=launch_pgboss,
     ),
+    "absurd": AdapterEntry(
+        bench_dir=SCRIPT_DIR / "absurd-bench",
+        builder=build_absurd,
+        launcher=launch_absurd,
+    ),
 }
 
 # Default --systems list for long-horizon. awa adapters require the
 # awa-bench / awa-python-bench source trees to be present; they're added
 # back in a follow-up after the public-API refactor.
-DEFAULT_SYSTEMS = ["procrastinate", "river", "oban", "pgque", "pgboss", "pgmq"]
+DEFAULT_SYSTEMS = ["procrastinate", "river", "oban", "pgque", "pgboss", "pgmq", "absurd"]

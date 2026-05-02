@@ -89,6 +89,7 @@ _RIVER_RE = re.compile(r"github\.com/riverqueue/river\s+v(\S+)")
 _OBAN_RE = re.compile(r":oban,\s*\"~>\s*(\S+?)\"")
 _PGMQ_IMAGE_RE = re.compile(r'^PGMQ_PG_IMAGE = "([^"]+)"$', re.MULTILINE)
 _PGMQ_VERSION_RE = re.compile(r'^PGMQ_UPSTREAM_VERSION = "([^"]+)"$', re.MULTILINE)
+_ABSURD_RE = re.compile(r'"absurd-sdk==([^"]+)"')
 
 
 def _read(path: Path) -> str:
@@ -155,6 +156,16 @@ def _pgmq_revision() -> dict[str, Any]:
     }
 
 
+def _absurd_revision() -> dict[str, Any]:
+    text = _read(SCRIPT_DIR / "absurd-bench" / "pyproject.toml")
+    m = _ABSURD_RE.search(text)
+    return {
+        "source": "absurd-bench/pyproject.toml",
+        "library": "absurd-sdk",
+        "pinned_version": m.group(1) if m else None,
+    }
+
+
 _CAPTURE: dict[str, Any] = {
     "awa": _awa_repo_revision,
     "awa-canonical": _awa_repo_revision,
@@ -163,6 +174,7 @@ _CAPTURE: dict[str, Any] = {
     "pgque": _pgque_submodule_revision,
     "pgmq": _pgmq_revision,
     "pgboss": _pgboss_revision,
+    "absurd": _absurd_revision,
     "procrastinate": _procrastinate_revision,
     "river": _river_revision,
     "oban": _oban_revision,
