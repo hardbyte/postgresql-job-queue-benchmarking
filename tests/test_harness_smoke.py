@@ -116,6 +116,71 @@ def test_summary_on_fixture_excludes_warmup_and_finds_recovery():
     assert phases_out["recovery_1"]["recovery_to_baseline_s"] is not None
 
 
+def test_summary_coalesces_offset_replica_adapter_samples(tmp_path: Path):
+    raw_path = tmp_path / "raw.csv"
+    with raw_path.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(RAW_CSV_HEADER)
+        # Two independently ticking adapter replicas. Exact elapsed_s and
+        # sampled_at equality would produce four system samples, not two.
+        for instance_id, offset, sampled_offset_ms, values in [
+            ("0", 0.0, 0, (100.0, 120.0)),
+            ("1", 0.35, 350, (80.0, 90.0)),
+        ]:
+            for idx, value in enumerate(values):
+                elapsed = 10.0 + idx + offset
+                sampled_at = f"2026-05-01T00:00:{10 + idx}.{sampled_offset_ms:03d}Z"
+                writer.writerow([
+                    "test",
+                    "awa",
+                    instance_id,
+                    f"{elapsed:.3f}",
+                    sampled_at,
+                    "clean_1",
+                    "clean",
+                    "adapter",
+                    "",
+                    "completion_rate",
+                    str(value),
+                    "1.0",
+                ])
+        # Worker-only replicas should not need fake zero producer metrics;
+        # this single producer stream should survive unchanged.
+        for idx, value in enumerate((200.0, 200.0)):
+            writer.writerow([
+                "test",
+                "awa",
+                "0",
+                f"{10.0 + idx:.3f}",
+                f"2026-05-01T00:00:{10 + idx}.000Z",
+                "clean_1",
+                "clean",
+                "adapter",
+                "",
+                "enqueue_rate",
+                str(value),
+                "1.0",
+            ])
+
+    summary = compute_summary(
+        raw_path,
+        run_id="test",
+        scenario=None,
+        phases=[parse_phase_spec("clean_1=clean:2s")],
+    )
+    block = summary["systems"]["awa"]["phases"]["clean_1"]
+    assert block["metrics"]["completion_rate"] == {
+        "median": 195.0,
+        "peak": 210.0,
+        "count": 2,
+    }
+    assert block["metrics"]["enqueue_rate"] == {
+        "median": 200.0,
+        "peak": 200.0,
+        "count": 2,
+    }
+
+
 # ─── Plots ──────────────────────────────────────────────────────────
 
 def test_lttb_preserves_endpoints():
@@ -204,6 +269,7 @@ def _config_kwargs(**overrides):
         target_depth=1000,
         worker_count=32,
         high_load_multiplier=1.5,
+        awa_completion_batch_size=None,
     )
     base.update(overrides)
     return base
@@ -267,6 +333,16 @@ def test_config_rejects_zero_worker_count():
 def test_config_producer_mode_literal():
     with pytest.raises(ValidationError):
         CliConfig(**_config_kwargs(producer_mode="nope"))
+
+
+def test_config_accepts_awa_completion_batch_size():
+    config = CliConfig(**_config_kwargs(awa_completion_batch_size=128))
+    assert config.awa_completion_batch_size == 128
+
+
+def test_config_rejects_non_positive_awa_completion_batch_size():
+    with pytest.raises(ValidationError):
+        CliConfig(**_config_kwargs(awa_completion_batch_size=0))
 
 
 def test_format_validation_error_is_readable():
@@ -471,6 +547,20 @@ def test_argparse_replicas_flag():
     # Default survives when flag is absent.
     ns = p.parse_args(["run", "--scenario", "idle_in_tx_saturation"])
     assert ns.replicas == 1
+
+
+def test_argparse_awa_completion_batch_size_flag():
+    from bench_harness.orchestrator import build_parser
+
+    p = build_parser()
+    ns = p.parse_args([
+        "run",
+        "--scenario",
+        "idle_in_tx_saturation",
+        "--awa-completion-batch-size",
+        "128",
+    ])
+    assert ns.awa_completion_batch_size == 128
 
 
 # ── ReplicaPool state machine ───────────────────────────────────────────

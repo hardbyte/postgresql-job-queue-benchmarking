@@ -609,9 +609,7 @@ pub async fn run() {
                     // AWA_QS_PRODUCER_PATH=batch to A/B back to the
                     // old path for diagnostic comparison.
                     match std::env::var("AWA_QS_PRODUCER_PATH").as_deref() {
-                        Ok("batch") => {
-                            store.enqueue_params_batch(&producer_pool, &params).await
-                        }
+                        Ok("batch") => store.enqueue_params_batch(&producer_pool, &params).await,
                         _ => store.enqueue_params_copy(&producer_pool, &params).await,
                     }
                 }
@@ -671,10 +669,7 @@ pub async fn run() {
                         // queue_lanes.available_count / done_entries /
                         // claim ring instead of scanning ready_entries.
                         // No staleness window needed.
-                        match depth_store
-                            .queue_counts(&depth_pool, queue_name)
-                            .await
-                        {
+                        match depth_store.queue_counts(&depth_pool, queue_name).await {
                             Ok(counts) => {
                                 queue_depth.store(counts.available as u64, Ordering::Relaxed);
                                 running_depth.store(counts.running as u64, Ordering::Relaxed);
@@ -761,8 +756,7 @@ pub async fn run() {
 
         let mut last_enqueued: u64 = sample_enqueued.load(Ordering::Relaxed);
         let mut last_completed: u64 = sample_completed.load(Ordering::Relaxed);
-        let mut last_retryable_failures: u64 =
-            sample_retryable_failures.load(Ordering::Relaxed);
+        let mut last_retryable_failures: u64 = sample_retryable_failures.load(Ordering::Relaxed);
         let mut last_completed_priority_1: u64 =
             sample_completed_priority_1.load(Ordering::Relaxed);
         let mut last_completed_priority_4: u64 =
@@ -771,14 +765,14 @@ pub async fn run() {
             sample_completed_original_priority_1.load(Ordering::Relaxed);
         let mut last_completed_original_priority_4: u64 =
             sample_completed_original_priority_4.load(Ordering::Relaxed);
-        let mut last_aged_completions: u64 =
-            sample_aged_completions.load(Ordering::Relaxed);
+        let mut last_aged_completions: u64 = sample_aged_completions.load(Ordering::Relaxed);
         let mut last_tick = Instant::now();
         let mut ticker = interval_at(
             tokio::time::Instant::now() + Duration::from_secs(sample_every_s),
             Duration::from_secs(sample_every_s),
         );
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let is_producer = producer_enabled();
 
         while !sample_shutdown.load(Ordering::Relaxed) {
             ticker.tick().await;
@@ -799,16 +793,13 @@ pub async fn run() {
             let enq_rate = (enq - last_enqueued) as f64 / dt;
             let cmp_rate = (cmp - last_completed) as f64 / dt;
             let retryable_rate = (retryable - last_retryable_failures) as f64 / dt;
-            let completed_p1_rate =
-                (completed_p1 - last_completed_priority_1) as f64 / dt;
-            let completed_p4_rate =
-                (completed_p4 - last_completed_priority_4) as f64 / dt;
+            let completed_p1_rate = (completed_p1 - last_completed_priority_1) as f64 / dt;
+            let completed_p4_rate = (completed_p4 - last_completed_priority_4) as f64 / dt;
             let completed_original_p1_rate =
                 (completed_original_p1 - last_completed_original_priority_1) as f64 / dt;
             let completed_original_p4_rate =
                 (completed_original_p4 - last_completed_original_priority_4) as f64 / dt;
-            let aged_completion_rate =
-                (aged_completions - last_aged_completions) as f64 / dt;
+            let aged_completion_rate = (aged_completions - last_aged_completions) as f64 / dt;
             last_enqueued = enq;
             last_completed = cmp;
             last_retryable_failures = retryable;
@@ -820,33 +811,21 @@ pub async fn run() {
 
             let window = latency_window;
             let latency_window_s = latency_window.as_secs_f64();
-            let (producer_call_p50, producer_call_p95, producer_call_p99) = {
+            let producer_call_latency = {
                 let mut guard = sample_producer_call_latencies.lock().await;
-                guard
-                    .snapshot(window)
-                    .map(|(a, b, c, _)| (a, b, c))
-                    .unwrap_or((0.0, 0.0, 0.0))
+                guard.snapshot(window).map(|(a, b, c, _)| (a, b, c))
             };
-            let (producer_p50, producer_p95, producer_p99) = {
+            let producer_latency = {
                 let mut guard = sample_producer_latencies.lock().await;
-                guard
-                    .snapshot(window)
-                    .map(|(a, b, c, _)| (a, b, c))
-                    .unwrap_or((0.0, 0.0, 0.0))
+                guard.snapshot(window).map(|(a, b, c, _)| (a, b, c))
             };
-            let (subscriber_p50, subscriber_p95, subscriber_p99) = {
+            let subscriber_latency = {
                 let mut guard = sample_subscriber_latencies.lock().await;
-                guard
-                    .snapshot(window)
-                    .map(|(a, b, c, _)| (a, b, c))
-                    .unwrap_or((0.0, 0.0, 0.0))
+                guard.snapshot(window).map(|(a, b, c, _)| (a, b, c))
             };
-            let (end_to_end_p50, end_to_end_p95, end_to_end_p99) = {
+            let end_to_end_latency = {
                 let mut guard = sample_end_to_end_latencies.lock().await;
-                guard
-                    .snapshot(window)
-                    .map(|(a, b, c, _)| (a, b, c))
-                    .unwrap_or((0.0, 0.0, 0.0))
+                guard.snapshot(window).map(|(a, b, c, _)| (a, b, c))
             };
             let depth = sample_depth.load(Ordering::Relaxed) as f64;
             let running_depth = sample_running_depth.load(Ordering::Relaxed) as f64;
@@ -856,27 +835,117 @@ pub async fn run() {
             let target_rate = sample_target_rate.load(Ordering::Relaxed) as f64;
             let ts = now_iso_ms();
 
+            if is_producer {
+                if let Some((p50, p95, p99)) = producer_call_latency {
+                    for (metric, value) in [
+                        ("producer_call_p50_ms", p50),
+                        ("producer_call_p95_ms", p95),
+                        ("producer_call_p99_ms", p99),
+                    ] {
+                        emit(json!({
+                            "t": ts,
+                            "system": system_name,
+                            "instance_id": instance_id(),
+                            "kind": "adapter",
+                            "subject_kind": "adapter",
+                            "subject": "",
+                            "metric": metric,
+                            "value": value,
+                            "window_s": latency_window_s,
+                        }));
+                    }
+                }
+                if let Some((p50, p95, p99)) = producer_latency {
+                    for (metric, value) in [
+                        ("producer_p50_ms", p50),
+                        ("producer_p95_ms", p95),
+                        ("producer_p99_ms", p99),
+                    ] {
+                        emit(json!({
+                            "t": ts,
+                            "system": system_name,
+                            "instance_id": instance_id(),
+                            "kind": "adapter",
+                            "subject_kind": "adapter",
+                            "subject": "",
+                            "metric": metric,
+                            "value": value,
+                            "window_s": latency_window_s,
+                        }));
+                    }
+                }
+                emit(json!({
+                    "t": ts,
+                    "system": system_name,
+                    "instance_id": instance_id(),
+                    "kind": "adapter",
+                    "subject_kind": "adapter",
+                    "subject": "",
+                    "metric": "enqueue_rate",
+                    "value": enq_rate,
+                    "window_s": sample_every_s as f64,
+                }));
+            }
+
+            if let Some((p50, p95, p99)) = subscriber_latency {
+                for (metric, value) in [
+                    ("subscriber_p50_ms", p50),
+                    ("subscriber_p95_ms", p95),
+                    ("subscriber_p99_ms", p99),
+                    ("claim_p50_ms", p50),
+                    ("claim_p95_ms", p95),
+                    ("claim_p99_ms", p99),
+                ] {
+                    emit(json!({
+                        "t": ts,
+                        "system": system_name,
+                        "instance_id": instance_id(),
+                        "kind": "adapter",
+                        "subject_kind": "adapter",
+                        "subject": "",
+                        "metric": metric,
+                        "value": value,
+                        "window_s": latency_window_s,
+                    }));
+                }
+            }
+            if let Some((p50, p95, p99)) = end_to_end_latency {
+                for (metric, value) in [
+                    ("end_to_end_p50_ms", p50),
+                    ("end_to_end_p95_ms", p95),
+                    ("end_to_end_p99_ms", p99),
+                ] {
+                    emit(json!({
+                        "t": ts,
+                        "system": system_name,
+                        "instance_id": instance_id(),
+                        "kind": "adapter",
+                        "subject_kind": "adapter",
+                        "subject": "",
+                        "metric": metric,
+                        "value": value,
+                        "window_s": latency_window_s,
+                    }));
+                }
+            }
+
             for (metric, value, window_s) in [
-                ("producer_call_p50_ms", producer_call_p50, latency_window_s),
-                ("producer_call_p95_ms", producer_call_p95, latency_window_s),
-                ("producer_call_p99_ms", producer_call_p99, latency_window_s),
-                ("producer_p50_ms", producer_p50, latency_window_s),
-                ("producer_p95_ms", producer_p95, latency_window_s),
-                ("producer_p99_ms", producer_p99, latency_window_s),
-                ("subscriber_p50_ms", subscriber_p50, latency_window_s),
-                ("subscriber_p95_ms", subscriber_p95, latency_window_s),
-                ("subscriber_p99_ms", subscriber_p99, latency_window_s),
-                ("end_to_end_p50_ms", end_to_end_p50, latency_window_s),
-                ("end_to_end_p95_ms", end_to_end_p95, latency_window_s),
-                ("end_to_end_p99_ms", end_to_end_p99, latency_window_s),
-                ("claim_p50_ms", subscriber_p50, latency_window_s),
-                ("claim_p95_ms", subscriber_p95, latency_window_s),
-                ("claim_p99_ms", subscriber_p99, latency_window_s),
-                ("enqueue_rate", enq_rate, sample_every_s as f64),
                 ("completion_rate", cmp_rate, sample_every_s as f64),
-                ("retryable_failure_rate", retryable_rate, sample_every_s as f64),
-                ("completed_priority_1_rate", completed_p1_rate, sample_every_s as f64),
-                ("completed_priority_4_rate", completed_p4_rate, sample_every_s as f64),
+                (
+                    "retryable_failure_rate",
+                    retryable_rate,
+                    sample_every_s as f64,
+                ),
+                (
+                    "completed_priority_1_rate",
+                    completed_p1_rate,
+                    sample_every_s as f64,
+                ),
+                (
+                    "completed_priority_4_rate",
+                    completed_p4_rate,
+                    sample_every_s as f64,
+                ),
                 (
                     "completed_original_priority_1_rate",
                     completed_original_p1_rate,
@@ -887,7 +956,11 @@ pub async fn run() {
                     completed_original_p4_rate,
                     sample_every_s as f64,
                 ),
-                ("aged_completion_rate", aged_completion_rate, sample_every_s as f64),
+                (
+                    "aged_completion_rate",
+                    aged_completion_rate,
+                    sample_every_s as f64,
+                ),
             ] {
                 emit(json!({
                     "t": ts,
