@@ -114,6 +114,24 @@ async def connect() -> AsyncConnection:
 
 
 def ensure_schema() -> None:
+    # Idempotent: skip apply if the absurd schema is already installed.
+    # absurd.sql is not safely re-runnable (functions without OR REPLACE),
+    # so a second invocation in the same DB — e.g. when the harness restarts
+    # this replica during a kill/start-worker phase — would otherwise fail.
+    check = subprocess.run(
+        [
+            "psql",
+            database_url(),
+            "-tAc",
+            "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'absurd'",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check.returncode == 0 and check.stdout.strip() == "1":
+        return
+
     result = subprocess.run(
         [
             "psql",

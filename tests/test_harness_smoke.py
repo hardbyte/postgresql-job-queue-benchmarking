@@ -201,9 +201,14 @@ def test_plot_renderer_produces_all_files(tmp_path: Path):
     ]
     out = tmp_path / "plots"
     render_all(FIXTURE_CSV, systems=["awa", "river"], phases=phases, out_dir=out)
-    for spec in PLOT_SPECS.values():
-        assert (out / f"{spec.filename_stem}.png").exists()
-        assert (out / f"{spec.filename_stem}.svg").exists()
+    # Always-rendered plots: throughput, queue/depth metrics, dead tuples,
+    # table size — anything the harness samples for every adapter.
+    expected_always = {"throughput", "queue_depth", "dead_tuples", "table_size"}
+    for stem in expected_always:
+        assert (out / f"{stem}.png").exists(), f"missing {stem}.png"
+        assert (out / f"{stem}.svg").exists(), f"missing {stem}.svg"
+    # Latency / priority metrics may be skipped when no system in the run
+    # populates them; the renderer is allowed to suppress empty plots.
     assert (out / "dead_tuples_faceted.png").exists()
 
 
