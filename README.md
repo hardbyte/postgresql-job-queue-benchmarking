@@ -16,21 +16,21 @@ feature surface — things you'd reach for in real applications. Cells
 reflect what's available out of the box on the default open-source
 distribution.
 
-| | awa | pg-boss | pgmq | pgque | Oban | Procrastinate | River |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| **Language / runtime** | Rust + Python | Node.js | Postgres extension (Rust core) | Postgres extension (PL/pgSQL) | Elixir | Python | Go |
-| **Postgres extension required** | no | no | yes (`pgmq`) | yes (`pgque`) | no | no | no |
-| **Producer surface — bulk insert** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (COPY) |
-| **Storage shape on hot path** | append-only + receipt ring | row-mutating | partitioned archive | append-only + ticker | row-mutating | row-mutating | row-mutating |
-| **Priorities** | ✓ (with aging) | ✓ | — | — | ✓ | ✓ | ✓ |
-| **Retries with backoff** | ✓ | ✓ | (visibility timeout) | ✓ | ✓ | ✓ | ✓ |
-| **Cron / scheduled jobs** | ✓ | ✓ | — | (delayed) | ✓ | ✓ | ✓ |
-| **Dead-letter queue** | ✓ | (failed-archive) | (archive table) | ✓ | (discarded) | (discarded) | ✓ |
-| **Unique jobs / dedup** | ✓ | ✓ (singleton key) | — | — | ✓ | ✓ | ✓ |
-| **Rate limiting per queue** | ✓ | ✓ (throttling) | — | — | ✓ (Pro for global) | (concurrency limit) | ✓ |
-| **Callbacks / external waits** | ✓ | (event subscription) | — | — | — | — | — |
-| **Mixed-runtime workers** | ✓ (Rust + Python) | — | (DIY worker) | (DIY worker) | — | — | — |
-| **Web UI for ops** | ✓ (`awa serve`) | (3rd party: pgboss-dashboard) | — | — | ✓ (Oban Web, Pro) | (3rd party) | ✓ |
+| | awa | Absurd | pg-boss | pgmq | pgque | Oban | Procrastinate | River |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| **Language / runtime** | Rust + Python | Python | Node.js | Postgres extension (Rust core) | Postgres extension (PL/pgSQL) | Elixir | Python | Go |
+| **Postgres extension required** | no | no | no | yes (`pgmq`) | yes (`pgque`) | no | no | no |
+| **Producer surface — bulk insert** | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (COPY) |
+| **Storage shape on hot path** | append-only + receipt ring | row-mutating | row-mutating | partitioned archive | append-only + ticker | row-mutating | row-mutating | row-mutating |
+| **Priorities** | ✓ (with aging) | — | ✓ | — | — | ✓ | ✓ | ✓ |
+| **Retries with backoff** | ✓ | ✓ | ✓ | (visibility timeout) | ✓ | ✓ | ✓ | ✓ |
+| **Cron / scheduled jobs** | ✓ | — | ✓ | — | (delayed) | ✓ | ✓ | ✓ |
+| **Dead-letter queue** | ✓ | — | (failed-archive) | (archive table) | ✓ | (discarded) | (discarded) | ✓ |
+| **Unique jobs / dedup** | ✓ | — | ✓ (singleton key) | — | — | ✓ | ✓ | ✓ |
+| **Rate limiting per queue** | ✓ | — | ✓ (throttling) | — | — | ✓ (Pro for global) | (concurrency limit) | ✓ |
+| **Callbacks / external waits** | ✓ | (workflow steps) | (event subscription) | — | — | — | — | — |
+| **Mixed-runtime workers** | ✓ (Rust + Python) | — | — | (DIY worker) | (DIY worker) | — | — | — |
+| **Web UI for ops** | ✓ (`awa serve`) | — | (3rd party: pgboss-dashboard) | — | — | ✓ (Oban Web, Pro) | (3rd party) | ✓ |
 
 Dashes indicate "not provided as a documented feature out of the box",
 not "impossible". pgmq / pgque in particular are intentionally minimal
@@ -117,6 +117,7 @@ the runner consolidation lands in
 ## Adapters
 
 - [awa](https://github.com/hardbyte/awa) (Rust + Python) — tracking 0.6.0-alpha.1
+- [Absurd](https://github.com/earendil-works/absurd) (Python)
 - [Oban](https://github.com/oban-bg/oban) (Elixir)
 - [pg-boss](https://github.com/timgit/pg-boss) (Node.js)
 - [pgmq](https://github.com/tembo-io/pgmq) (Postgres extension; Python adapter; needs an extension-bearing image, run separately from the shared-image matrix)
