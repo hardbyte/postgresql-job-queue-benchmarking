@@ -73,6 +73,12 @@ def observer_enabled() -> bool:
     return instance_id() == 0
 
 
+def producer_enabled() -> bool:
+    if int(os.environ.get("PRODUCER_ONLY_INSTANCE_ZERO", "0") or "0") == 0:
+        return True
+    return instance_id() == 0
+
+
 def now_iso() -> str:
     return (
         dt.datetime.now(dt.timezone.utc)
@@ -265,6 +271,10 @@ async def scenario_long_horizon() -> None:
 
     async def producer() -> None:
         nonlocal enqueued, current_producer_target_rate, current_queue_depth
+        if not producer_enabled():
+            while not shutdown.is_set():
+                await asyncio.sleep(0.25)
+            return
         seq = 0
         next_t = loop.time()
         while not shutdown.is_set():
@@ -277,6 +287,9 @@ async def scenario_long_horizon() -> None:
                     await asyncio.sleep(producer_batch_ms / 1000.0)
                     continue
             else:
+                if target_rate <= 0:
+                    await asyncio.sleep(producer_batch_ms / 1000.0)
+                    continue
                 credit = max(0.0, (loop.time() - next_t) * target_rate + 1.0)
                 batch_count = max(1, min(producer_batch_max, int(credit)))
 
