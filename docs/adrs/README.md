@@ -10,9 +10,9 @@ short, dated, status-tagged, focused on the *why*.
 
 ## Index
 
-- [001 — Unified phase-driven driver](001-unified-phase-driver.md)
-  — fold standalone `chaos.py` into the phase DSL so there is one
-  entry point and one adapter contract. *Implemented.*
+- [001 — Single phase-driven driver behind a public adapter contract](001-unified-phase-driver.md)
+  — one entry point, one language-agnostic adapter contract, one
+  output format; throughput and chaos as compositions of phases.
 
 ## Adding an ADR
 

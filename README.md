@@ -148,7 +148,7 @@ git submodule update --init --recursive
 docker compose up -d postgres
 
 # Run a 5-minute smoke against one system
-uv run python bench.py run \
+uv run bench run \
   --systems procrastinate \
   --producer-rate 200 \
   --worker-count 4 \
@@ -161,7 +161,7 @@ Outputs land under `results/<run-id>/<system>/` as `manifest.json` +
 `summary.json` + per-sample `samples.ndjson`. To compare runs:
 
 ```sh
-uv run python bench.py compare results/<run-id>
+uv run bench compare results/<run-id>
 ```
 
 ## Scenarios
