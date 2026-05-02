@@ -614,6 +614,7 @@ def run_one_system(
     target_depth: int,
     worker_count: int,
     high_load_multiplier: float,
+    awa_completion_batch_size: int | None = None,
     replicas: int = 1,
     wait_events_enabled: bool = True,
     wait_event_sample_every_s: float = 1.0,
@@ -645,6 +646,8 @@ def run_one_system(
         "TARGET_DEPTH": str(target_depth),
         "WORKER_COUNT": str(worker_count),
     }
+    if awa_completion_batch_size is not None:
+        overrides["AWA_COMPLETION_BATCH_SIZE"] = str(awa_completion_batch_size)
     control_dir = Path(tempfile.mkdtemp(prefix=f"bench-control-{system}-"))
     control_file = control_dir / "producer_rate.txt"
     control_file.write_text(str(producer_rate))
@@ -832,6 +835,7 @@ def drive(
     target_depth: int,
     worker_count: int,
     high_load_multiplier: float,
+    awa_completion_batch_size: int | None,
     replicas: int,
     cli_args: list[str],
     wait_events_enabled: bool = True,
@@ -928,6 +932,7 @@ def drive(
                 target_depth=target_depth,
                 worker_count=worker_count,
                 high_load_multiplier=high_load_multiplier,
+                awa_completion_batch_size=awa_completion_batch_size,
                 replicas=replicas,
                 wait_events_enabled=wait_events_enabled,
                 wait_event_sample_every_s=wait_event_sample_every_s,
@@ -1085,6 +1090,12 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         help="Producer-rate multiplier applied during high-load phases (default 1.5).",
     )
     parser.add_argument(
+        "--awa-completion-batch-size",
+        type=int,
+        default=None,
+        help="AWA completion batch size override. Maps to AWA_COMPLETION_BATCH_SIZE.",
+    )
+    parser.add_argument(
         "--replicas",
         type=int,
         default=1,
@@ -1197,6 +1208,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         target_depth=config.target_depth,
         worker_count=config.worker_count,
         high_load_multiplier=config.high_load_multiplier,
+        awa_completion_batch_size=config.awa_completion_batch_size,
         replicas=config.replicas,
         cli_args=list(sys.argv),
         wait_events_enabled=config.wait_events,

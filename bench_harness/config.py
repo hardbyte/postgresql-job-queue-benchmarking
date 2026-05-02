@@ -59,6 +59,7 @@ class CliConfig(BaseModel):
     target_depth: Annotated[int, Field(ge=1)] = 1000
     worker_count: Annotated[int, Field(ge=1)]
     high_load_multiplier: Annotated[float, Field(gt=0.0)] = 1.5
+    awa_completion_batch_size: Annotated[int | None, Field(ge=1)] = None
     # Replica count per system. 1 is the legacy single-replica mode and
     # the default. `producer_rate` and `worker_count` are per-replica, not
     # per-fleet: N replicas at producer_rate=800 offer 800*N jobs/s in
@@ -136,6 +137,7 @@ class CliConfig(BaseModel):
             target_depth=args.target_depth,
             worker_count=args.worker_count,
             high_load_multiplier=args.high_load_multiplier,
+            awa_completion_batch_size=getattr(args, "awa_completion_batch_size", None),
             replicas=args.replicas,
             wait_events=getattr(args, "wait_events", True),
             wait_event_sample_every=getattr(args, "wait_event_sample_every", 1.0),

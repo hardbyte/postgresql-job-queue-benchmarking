@@ -15,7 +15,6 @@ import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 
 from .phases import (
     PHASE_INCLUDED_IN_SUMMARY,
@@ -146,7 +145,7 @@ def aggregate_replica_metric_series(
             subject_kind=subject_kind,
         )
 
-    per_elapsed: dict[float, list[float]] = {}
+    matched_rows: list[tuple[dict, float]] = []
     for row in rows:
         if (
             row["system"] != system
@@ -157,15 +156,32 @@ def aggregate_replica_metric_series(
         if subject_kind and row["subject_kind"] != subject_kind:
             continue
         try:
-            elapsed_s = float(row["elapsed_s"])
             value = float(row["value"])
         except (TypeError, ValueError):
             continue
-        per_elapsed.setdefault(elapsed_s, []).append(value)
+        matched_rows.append((row, value))
+
+    per_instance: dict[str, list[tuple[float, str, float]]] = {}
+    for row, value in matched_rows:
+        try:
+            elapsed_s = float(row["elapsed_s"])
+        except (TypeError, ValueError):
+            continue
+        instance_id = str(row.get("instance_id") or "")
+        sampled_at = str(row.get("sampled_at") or "")
+        per_instance.setdefault(instance_id, []).append((elapsed_s, sampled_at, value))
+
+    # Adapter processes sample independently, so exact timestamp equality
+    # is too strict across replicas. Coalesce by sample ordinal within each
+    # replica stream, ordered by adapter timestamp then harness elapsed time.
+    per_sample: dict[int, list[float]] = {}
+    for samples in per_instance.values():
+        for idx, (_, _, value) in enumerate(sorted(samples, key=lambda x: (x[1], x[0]))):
+            per_sample.setdefault(idx, []).append(value)
 
     out: list[float] = []
-    for elapsed_s in sorted(per_elapsed):
-        values = per_elapsed[elapsed_s]
+    for sample_idx in sorted(per_sample):
+        values = per_sample[sample_idx]
         if metric in RATE_METRICS:
             out.append(float(sum(values)))
         else:
@@ -554,10 +570,10 @@ def _chaos_aggregates(
         labels: list[str], metric: str
     ) -> list[tuple[float, float, float]]:
         """Return (elapsed_s, value, window_s) tuples summed across
-        replicas per timestamp. Rates are summed (system-level offered
-        load), so we collapse the per-replica streams the same way
-        `aggregate_replica_metric_series` does for the summary."""
-        per_elapsed: dict[float, dict[str, float]] = {}
+        replicas per sample timestamp. Rates are summed (system-level
+        offered load), so we collapse the per-replica streams the same
+        way `aggregate_replica_metric_series` does for the summary."""
+        matched_rows: list[tuple[dict, float, float, float]] = []
         for r in rows:
             if (
                 r["system"] != system
@@ -572,13 +588,31 @@ def _chaos_aggregates(
                 w = float(r.get("window_s") or 0.0)
             except (TypeError, ValueError):
                 continue
-            slot = per_elapsed.setdefault(t, {"v": 0.0, "w": 0.0})
-            slot["v"] += v
-            # The window is per-replica but identical across replicas at
-            # the same elapsed_s, so take max to avoid double-counting.
-            slot["w"] = max(slot["w"], w)
+            matched_rows.append((r, t, v, w))
+
+        per_instance: dict[str, list[tuple[float, str, float, float]]] = {}
+        for r, t, v, w in matched_rows:
+            instance_id = str(r.get("instance_id") or "")
+            sampled_at = str(r.get("sampled_at") or "")
+            per_instance.setdefault(instance_id, []).append((t, sampled_at, v, w))
+
+        per_sample: dict[int, dict[str, float]] = {}
+        for samples in per_instance.values():
+            for idx, (t, _, v, w) in enumerate(
+                sorted(samples, key=lambda x: (x[1], x[0]))
+            ):
+                slot = per_sample.setdefault(idx, {"t": t, "v": 0.0, "w": 0.0})
+                # Keep the earliest harness elapsed time for recovery timing
+                # while coalescing independently ticking adapter replicas by
+                # their sample ordinal.
+                slot["t"] = min(slot["t"], t)
+                slot["v"] += v
+                # The window is per-replica but identical across replicas at
+                # the same sample ordinal, so take max to avoid double-counting.
+                slot["w"] = max(slot["w"], w)
         return [
-            (t, slot["v"], slot["w"]) for t, slot in sorted(per_elapsed.items())
+            (slot["t"], slot["v"], slot["w"])
+            for _, slot in sorted(per_sample.items())
         ]
 
     span_labels = list(chaos_labels) + [recovery_label]
