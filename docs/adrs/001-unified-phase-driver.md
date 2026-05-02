@@ -1,15 +1,18 @@
-# Unified phase-driven driver — design notes
+# ADR 001 — Unified phase-driven driver
 
-Tracking #174. This document is the plan for folding `chaos.py` into
-`long_horizon.py`'s phase-driven harness. It lives in-tree so reviewers
-can react to direction before implementation commits land, and so the
-final design stays discoverable after the refactor.
+**Status:** Implemented (PR #14 — `feat: fold chaos scenarios into long_horizon phase types`).
 
-The target is deletion of `chaos.py` as a standalone driver: one
-entry point, one adapter contract, one output format. Scenario types
-that today live in `chaos.py` (SIGKILL-and-respawn, Postgres restart,
-pool exhaustion, etc.) become phase types on the existing DSL alongside
-`warmup`, `clean`, `idle-in-tx`, `active-readers`, and `high-load`.
+**Context.** Tracking #174. This document was the design plan for
+folding the standalone `chaos.py` driver into the phase-driven harness
+(then `long_horizon.py`, since renamed to `bench.py`). Kept in-tree as
+an ADR so the design intent stays discoverable after the refactor.
+
+**Decision.** Delete `chaos.py` as a standalone driver: one entry
+point (`bench.py`), one adapter contract, one output format. Scenario
+types that lived in `chaos.py` (SIGKILL-and-respawn, Postgres restart,
+pool exhaustion, etc.) become phase types on the existing DSL
+alongside `warmup`, `clean`, `idle-in-tx`, `active-readers`, and
+`high-load`.
 
 ## 1. Current state summary
 

@@ -111,7 +111,7 @@ samples during the clean phase. Quick interpretation guide:
 ## Disabling
 
 ```
-uv run python long_horizon.py run --no-wait-events ...
+uv run python bench.py run --no-wait-events ...
 ```
 
 Default cadence is 1 s; tune with `--wait-event-sample-every 0.5` etc.

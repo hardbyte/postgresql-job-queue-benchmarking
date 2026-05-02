@@ -153,14 +153,14 @@ The harness, adapters, postgres config, and raw samples are all in this repo. To
 
 ```sh
 docker compose up -d postgres
-uv run python long_horizon.py run \
+uv run python bench.py run \
   --systems procrastinate,river,oban,pgque,pgboss,pgmq \
   --replicas 1 \
   --worker-count 8 \
   --producer-rate 200 \
   --phase warmup=warmup:5m \
   --phase clean_1=clean:115m
-uv run python long_horizon.py compare results/<run-id>
+uv run python bench.py compare results/<run-id>
 ```
 
 To add a new system to the comparison, see [`CONTRIBUTING_ADAPTERS.md`](CONTRIBUTING_ADAPTERS.md). Adapters are small (~200 lines) and live alongside their bench harness in `<system>-bench/`. The harness is intentionally adapter-agnostic — anything that can produce, consume, and report basic latency / throughput samples can participate.
