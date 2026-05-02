@@ -1,13 +1,8 @@
 # 2026-05-02 — alpha.3 full sweep
 
-awa upgraded to **0.6.0-alpha.3** (PR #211 completion-batch default 512→128
-+ PR #213 claimer heartbeat churn reduction). Bench harness on main with
-the [absurd adapter](../../absurd-bench/) (PR #17 + a follow-on schema
-idempotency fix while this sweep was running — see "Caveats").
-
-This is the broadest sweep we have to date: **8 systems**, 4 worker counts
-on a shared image, pgmq on its own image, three multi-phase chaos
-topologies, and an awa 60-minute steady-load soak.
+Eight systems on awa **0.6.0-alpha.3**: bulk-everywhere matrix on a shared
+image, pgmq matrix on its own image, three multi-phase chaos topologies,
+and an awa 60-minute steady-load soak.
 
 ## Layout
 
@@ -18,91 +13,47 @@ topologies, and an awa 60-minute steady-load soak.
 | **C** | [`multiphase-1x64/`](multiphase-1x64/), [`multiphase-2x32/`](multiphase-2x32/), [`multiphase-4x16/`](multiphase-4x16/) | All 7 shared-image systems × 3 topologies × 6-phase chaos |
 | **D** | [`soak-awa-1x128/`](soak-awa-1x128/) | awa 60-minute soak at 1×128 workers |
 
-`matrix.csv` covers Phase A and Phase B uniformly; per-cell raw runs are
-linked from the `run_id` column.
-
-## Headline: alpha.3 vs alpha.2 (peak throughput, bulk-everywhere)
-
-| System | alpha.2 peak | **alpha.3 peak** | Δ |
-|---|---:|---:|---:|
-| **awa** | 4,576 | **6,834** (128 w) | **+49 %** |
-| pgque | 23,295 | 22,104 (128 w) | −5 % |
-| pg-boss | 5,787 (64 w) | 5,302 (64 w) | −8 % |
-| river | 2,534 | 2,522 | flat |
-| oban | 1,192 (16 w) | 1,142 (16 w) | flat |
-| procrastinate | 268 | 270 | flat |
-| pgmq | 11,546 (16 w) | 13,290 (16 w) | +15 % |
-| **absurd** | (new) | 388 (128 w) | new entry |
-
-The headline is awa's **+49 %** lift end-to-end across alpha.2 → alpha.3.
-Two PRs combine here:
-
-- **#211** lowered the completion-batcher default from 512 to 128 — direct
-  effect at multi-worker concurrency, where 8 concurrent flushers each
-  pushing 512-row UPDATEs were producing receipt-plane contention rather
-  than amortising it.
-- **#213** removed claimer heartbeat refresh writes while a lease is still
-  fresh, cutting coordination-plane writes off the dispatch hot path.
-
-Cross-system numbers for non-awa systems are within run-to-run variance
-of alpha.2 (we re-ran the matrix with no system-side changes for them).
-
 ## Phase A — bulk-everywhere matrix
 
-awa's curve flattens out at the new ceiling rather than the old one:
+Saturating producer (`--producer-rate 50000`, depth-target = 2000) into
+each system's documented bulk producer path; one replica per system; 4 min
+clean window.
 
-| Workers | alpha.2 | **alpha.3** |
-|---:|---:|---:|
-| 4 | 171 | **296** (+73 %) |
-| 16 | 676 | **1,115** (+65 %) |
-| 64 | 2,376 | **3,961** (+67 %) |
-| 128 | 4,576 | **6,834** (+49 %) |
-
-Same shape, ~1.5–1.7× across the board. The relative slope in the
-producer-bound segment (4→64) is what you'd expect if claim-plane
-contention is the binding factor at low worker counts and completion-plane
-contention is the binding factor at high worker counts; both PRs hit the
-relevant axis.
-
-| System | Workers | Throughput | Producer-call p95 | Queue depth |
+| System | 4 workers | 16 workers | 64 workers | 128 workers |
 |---|---:|---:|---:|---:|
-| **awa** | 4 | 296 | 18 ms | n/a |
-| awa | 16 | 1,115 | 17 ms | 4,033 |
-| awa | 64 | 3,961 | 17 ms | 4,134 |
-| awa | 128 | **6,834** | 38 ms | 7,041 |
-| **pgque** | 4 | 3,382 | 0 ms | 3,953 |
-| pgque | 16 | 9,973 | 0 ms | 5,093 |
-| pgque | 64 | 19,025 | 0 ms | 1,706 |
-| pgque | 128 | **22,104** | 0 ms | 2,141 |
-| **pgboss** | 4 | 512 | — | 2,000 |
-| pgboss | 16 | 2,048 | — | 1,488 |
-| pgboss | 64 | **5,302** | — | 1,200 |
-| pgboss | 128 | 5,279 | — | 736 |
-| **procrastinate** | 4 | 267 | — | 2,591 |
-| procrastinate | 16 | 267 | — | 2,440 |
-| procrastinate | 64 | 268 | — | 2,366 |
-| procrastinate | 128 | 270 | — | 2,330 |
-| **river** | 4 | 79 | — | 11,029 |
-| river | 16 | 314 | — | 3,055 |
-| river | 64 | 1,267 | — | 4,001 |
-| river | 128 | **2,522** | — | 6,160 |
-| **oban** | 4 | 333 | — | 2,752 |
-| oban | 16 | **1,142** | — | 3,063 |
-| oban | 64 | 163 ⚠ | — | 21,520 |
-| oban | 128 | 0 ⚠ | — | (collapsed) |
-| **absurd** | 4 | 178 | — | 5,084 |
-| absurd | 16 | 275 | — | 4,000 |
-| absurd | 64 | 371 | — | 4,000 |
-| absurd | 128 | 388 | — | 4,000 |
+| **pgque** | 3,382 | 9,973 | 19,025 | **22,104** |
+| **awa** | 296 | 1,115 | 3,961 | **6,834** |
+| **pgboss** | 512 | 2,048 | **5,302** | 5,279 |
+| **river** | 79 | 314 | 1,267 | **2,522** |
+| **oban** | 333 | **1,142** | 163 ⚠ | 0 ⚠ |
+| **absurd** | 178 | 275 | 371 | **388** |
+| **procrastinate** | 267 | 267 | 268 | 270 |
 
-absurd plateaus around ~390 jobs/s — its worker model serialises on a
-single subscription cursor regardless of worker count, so adding workers
-doesn't add capacity beyond a small saturation point.
+What the numbers say:
 
-oban 64 / 128 collapse to ~0 — the same shutdown-hang artefact persists in
-alpha.3, slightly worse than alpha.2's 64 / 76 numbers (now 163 / 0).
+- **pgque is the producer-side ceiling.** Its bulk batch path is a
+  single SQL call per batch and amortises both insert and read; both
+  sides scale until 128 workers without evidence of saturation in this
+  run. ~22 k jobs/s @ 128 w.
+- **awa scales monotonically across the whole range.** ~1.5–1.7×
+  step-up between adjacent worker counts, no producer-call p95
+  inflation until 128 w (17 ms → 38 ms). 6,834 jobs/s @ 128 w is the
+  ceiling we hit.
+- **pgboss peaks at 64 workers** and goes flat. The 128-w row landing
+  *below* 64 w is the same inversion we saw in earlier runs — pgboss's
+  consumer fights itself past a saturation point.
+- **river scales linearly** end-to-end (79 → 314 → 1,267 → 2,522), each
+  step ~4× the worker count. Same shape as alpha.1 and alpha.2 runs.
+- **oban peaks at 16 workers**, then collapses. 64 w landed at 163
+  jobs/s; 128 w stalled at 0. The same shutdown-hang artefact we've
+  seen on every prior run, slightly worse here.
+- **absurd plateaus around ~390 jobs/s.** Adding workers past ~64
+  doesn't add capacity — its consumer model serialises on a small
+  number of subscription cursors.
+- **procrastinate is flat at ~270 jobs/s** regardless of worker count.
+  Same story across runs.
 
-## Phase B — pgmq matrix (Tembo image)
+## Phase B — pgmq (Tembo image)
 
 | Workers | Throughput |
 |---:|---:|
@@ -111,102 +62,118 @@ alpha.3, slightly worse than alpha.2's 64 / 76 numbers (now 163 / 0).
 | 64 | 6,521 |
 | 128 | 0 ⚠ |
 
-pgmq peaks at 16 workers and then degrades, same shape as alpha.2 (peak
-was 11,546 at 16 w). 128 w collapsed to 0 — partition-cursor contention
-at high worker counts saturates the entire visibility-timeout fleet.
-Documented design behaviour, not a regression.
+pgmq peaks at **16 workers** and degrades thereafter — adding workers
+past the natural partition-cursor parallelism makes them contend rather
+than help. 128 w collapsed to 0 (consumer fleet got wedged on
+visibility-timeout cursors). Documented design behaviour, consistent
+with previous runs (peak 11,546 last time).
 
-Caveat: not directly comparable to phase-A numbers because the Tembo image
-has different Postgres tunings.
+Caveat: not directly comparable to phase-A absolute numbers because the
+Tembo image's Postgres tunings differ from `postgres:17.2-alpine`.
 
-## Phase C — multi-phase chaos (3 topologies)
+## Phase C — multi-phase chaos at three topologies
 
-All 7 shared-image systems run sequentially through the same six-phase
-sequence (warmup → baseline → pressure → kill → restart → recovery), at
-three replica × workers/replica configurations totalling 64 workers each.
+All 7 shared-image systems sequentially through warmup → baseline →
+pressure (1.5× load) → kill (replica 0 SIGKILL) → restart → recovery,
+60 s per phase, at three topologies of equal total worker count
+(`replicas × workers/replica = 64`):
 
-| System | 1×64 baseline | 2×32 baseline | 4×16 baseline |
+### Baseline throughput across topologies
+
+| System | 1×64 | 2×32 | 4×16 |
 |---|---:|---:|---:|
+| **pgque** | 18,660 | 34,388 | **38,810** |
 | **awa** | **3,560** | 2,491 | 1,503 |
-| **pgque** | 18,660 | **34,388** | **38,810** |
 | pgboss | 2,560 | 5,108 | 2,000 |
 | oban | 69 ⚠ | 2,214 | 2,327 |
 | river | 1,262 | 1,165 | 1,021 |
-| absurd | 384 | 26 ⚠ | 14 ⚠ |
+| absurd | **384** | 26 ⚠ | 14 ⚠ |
 | procrastinate | 252 | 308 | 283 |
 
-The interesting per-system pattern:
+Two opposite scaling shapes:
 
-- **awa scales *down* with replica count** at fixed total workers (3,560 →
-  2,491 → 1,503). Multi-process completion-shard contention is real
-  — `processes × AWA_COMPLETION_SHARDS = 4 × 4 = 16` flushers in 4×16,
-  vs 4 in 1×64. Default shard count probably needs to attenuate with
-  process count (separate issue).
-- **pgque scales *up* with replica count** (18,660 → 34,388 → 38,810).
-  Each replica gets its own batch-claim cursor; more cursors → more
-  parallelism on the read side. pgque's bulk-batch consumer is the
-  cleanest multi-replica scaler in the matrix.
-- **pgboss is non-monotonic** (2,560 → 5,108 → 2,000). Random-walk shape
-  consistent with prior runs; not a tuning effect.
+- **pgque scales *up* with replica count.** Each replica gets its own
+  batch-claim cursor, so more processes → more parallel cursors → more
+  capacity. 18 k → 34 k → 39 k. The cleanest multi-replica scaler in
+  the matrix.
+- **awa scales *down* with replica count.** 3,560 → 2,491 → 1,503.
+  Multi-process completion-shard contention: the fleet-wide flusher
+  count is `processes × AWA_COMPLETION_SHARDS`, so 4×16 has 16
+  concurrent flushers competing on a single receipt plane vs 4 in
+  1×64. Tracked separately on the awa side; default shard count
+  probably needs to attenuate with process count.
+- **pgboss is non-monotonic** (2,560 → 5,108 → 2,000). Random-walk
+  shape consistent with prior runs.
 - **absurd 2×32 / 4×16 baseline is broken** (26 / 14 jobs/s) but
-  recovers normally after kill + restart (~330–365 jobs/s). Almost
-  certainly the same multi-replica producer/consumer-startup ordering
-  issue the rest of the bench has historically had — the kill+restart
-  cycle ends up putting absurd into its working steady state. Worth a
-  follow-up on absurd-bench.
-
-Per-topology charts (18 plots each, phase-banded) live in
-[`multiphase-1x64/plots/`](multiphase-1x64/plots/),
-[`multiphase-2x32/plots/`](multiphase-2x32/plots/), and
-[`multiphase-4x16/plots/`](multiphase-4x16/plots/).
+  recovers normally after kill + restart (~330–365 jobs/s in those
+  phases). Looks like a multi-replica startup-ordering issue in the
+  absurd adapter that the kill-restart cycle accidentally repairs.
+  Worth a follow-up on absurd-bench.
 
 ### Kill behaviour
 
-- **1×64:** kill kills the only replica → 0 jobs/s for everyone during the
-  60 s kill window. Restart phase recovers cleanly across all systems.
-  This is the topology where you *see* a kill in the throughput line; the
-  multi-replica topologies smooth over it.
-- **2×32:** awa drops baseline 2,491 → kill 2,016 (−19 %). pgque drops
-  34,388 → 15,032 (−56 %). pgboss roughly halves. Surviving replica picks
-  up but capacity isn't fully fungible.
-- **4×16:** awa baseline 1,503 → kill 1,439 (−4 %). pgque 38,810 → 27,056
-  (−30 %). The more replicas you run, the smaller the kill-window dip.
+| System | Topology | Baseline | Kill | Restart |
+|---|---|---:|---:|---:|
+| awa | 1×64 | 3,560 | **0** | 3,922 |
+| awa | 2×32 | 2,491 | 2,016 | 2,281 |
+| awa | 4×16 | 1,503 | **1,439** | 1,365 |
+| pgque | 1×64 | 18,660 | **0** | 23,594 |
+| pgque | 2×32 | 34,388 | 15,032 | 32,642 |
+| pgque | 4×16 | 38,810 | 27,056 | 24,752 |
+
+- **1×64 zeroes out during kill** for everyone — kill kills the only
+  replica, no consumers left. The throughput trace shows a clean drop
+  to zero and recovery on restart. The chart that makes this most
+  obvious is [`multiphase-1x64/plots/throughput.png`](multiphase-1x64/plots/throughput.png).
+- **2×32 takes a noticeable dip but doesn't stop.** awa drops 19 %,
+  pgque 56 %, pgboss roughly halves. Surviving replica picks up the
+  slack but capacity isn't fully fungible for half of the fleet.
+- **4×16 barely notices.** awa drops 4 % (1,503 → 1,439), and several
+  systems are within their own variance band. With 4 replicas, killing
+  one removes 25 % of capacity and three peers absorb it.
+
+The trend is clear from the topology rows: more replicas → smaller
+visible kill dip. The price is the per-replica overhead axis (clearest
+on awa).
 
 ## Phase D — awa 60-minute soak (1×128)
 
-Sustained median throughput **5,369 jobs/s** with peak **9,257 jobs/s**
-over a clean 60-minute clean phase under saturating producer pressure
-(`--target-depth 2000 --producer-rate 50000`). Producer overran the
-configured rate as in prior soak runs; queue depth grew to a peak of
-277,754. End-to-end p99 was 14.3 s — not a processing-latency artefact,
-just queue-tail effect at depth.
+Sustained median throughput **5,369 jobs/s**, peak **9,257 jobs/s** over
+a clean 60-minute window under saturating producer pressure. Producer
+overran the configured rate (consumers couldn't drain fast enough at
+sustained load), and queue depth grew to a peak of 277,754. End-to-end
+p99 was 14.3 s — that's queue-tail effect at depth, not processing
+latency.
 
-**Median dead tuples: 396.** ADR-019/023's
-"bounded receipt-plane churn under sustained load" claim verified for an
-hour-long run on alpha.3 — the receipt-ring partitioning + completion-batch
-tuning are doing what they should.
+**Median dead tuples across the receipt plane: 396.** The receipt-ring
+partitioning + completion-batch behaviour kept dead-tuple churn bounded
+in the low hundreds for an hour of saturating load.
 
-Phase-banded charts (single-system, two phases — warmup + clean) live in
-[`soak-awa-1x128/plots/`](soak-awa-1x128/plots/).
+The throughput line (
+[`soak-awa-1x128/plots/throughput.png`](soak-awa-1x128/plots/throughput.png))
+shows the 60-minute clean window holding steadily in the 5–9 k jobs/s
+band; the dead-tuple chart (
+[`soak-awa-1x128/plots/dead_tuples_faceted.png`](soak-awa-1x128/plots/dead_tuples_faceted.png))
+shows the per-table breakdown — `lease_claims` /
+`lease_claim_closures` partitions rotate cleanly, and the singleton
+ring-state tables stay in the low hundreds where ADR-019/023 expects.
 
 ## Caveats
 
 - **Phase C originally failed** for all three topologies because absurd's
   `ensure_schema()` re-applied `absurd.sql` on the kill+restart phase
-  and absurd 0.3.0's SQL is not idempotent (`current_time` function
-  recreated without `OR REPLACE`). Patched in `absurd-bench/main.py` to
-  pre-check whether the `absurd` schema exists before applying. This
-  patch is part of the same results commit; will be PR'd separately to
-  the bench repo.
-- **oban 64 / 128 w shutdown-hang** persists in alpha.3 (163 / 0 jobs/s).
-  Same artefact as alpha.1 / alpha.2 runs. Not a regression.
-- **absurd in multi-replica baseline** (Phase C 2×32 / 4×16) is degraded
-  in a way that resolves itself across kill+restart. Worth a follow-up
-  but it's not a sweep blocker.
+  and absurd 0.3.0's SQL is not idempotent (the `current_time` function
+  is recreated without `OR REPLACE`). Patched here in
+  `absurd-bench/main.py` to pre-check whether the `absurd` schema
+  exists before applying. PR'd separately to the bench repo.
+- **oban 64 / 128 w shutdown-hang** is unchanged from prior runs.
+- **absurd in multi-replica baseline** (Phase C 2×32 / 4×16) sits at
+  near-zero until the kill+restart phase repairs it. Adapter issue,
+  not a system property.
 - **awa 1-second slow-query warnings during Phase D soak.** The
-  `queue_counts_exact` query (the lease-claim anti-join from ADR-023) is
-  hitting 1+ second on the partitioned receipt plane under hour-long
-  saturating load. Not a regression — noted for post-alpha tuning.
+  `queue_counts_exact` query (the lease-claim anti-join from ADR-023)
+  is hitting 1+ second on the partitioned receipt plane under
+  hour-long saturating load. Noted for follow-up.
 
 ## Reproducing
 

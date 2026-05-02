@@ -101,7 +101,7 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="Claim p99 latency",
         filename_stem="claim_p99",
         y_label="claim p99 latency (ms)",
-        log_scale=True,
+        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -110,7 +110,7 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="Producer p99 latency",
         filename_stem="producer_p99",
         y_label="producer p99 latency (ms)",
-        log_scale=True,
+        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -119,7 +119,7 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="Producer call p99 latency",
         filename_stem="producer_call_p99",
         y_label="producer call p99 latency (ms)",
-        log_scale=True,
+        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -128,7 +128,7 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="Subscriber p99 latency",
         filename_stem="subscriber_p99",
         y_label="subscriber p99 latency (ms)",
-        log_scale=True,
+        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -137,7 +137,7 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="End-to-end p99 latency",
         filename_stem="end_to_end_p99",
         y_label="end-to-end p99 latency (ms)",
-        log_scale=True,
+        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -443,8 +443,8 @@ def render_plot(
     )
 
     styles = _assign_styles(systems, system_meta)
+    series: list[tuple[str, np.ndarray, np.ndarray]] = []
     for system in systems:
-        color, linestyle, label = styles[system]
         xs, ys = _series_for(
             rows,
             system=system,
@@ -454,6 +454,17 @@ def render_plot(
         )
         if xs.size == 0:
             continue
+        series.append((system, xs, ys))
+
+    # Skip plots that have no signal — every series is empty or flat zero.
+    # Avoids shipping always-zero charts for metrics that no participating
+    # adapter populates (e.g. awa-only priority counters in a non-awa run).
+    if not series or not any(np.any(ys) for _, _, ys in series):
+        plt.close(fig)
+        return
+
+    for system, xs, ys in series:
+        color, linestyle, label = styles[system]
         if spec.use_raw_underlay and xs.size > lttb_target:
             ax.plot(
                 xs,
@@ -630,8 +641,11 @@ def render_faceted_dead_tuples(
         return
     cols = min(3, len(systems))
     rowsn = (len(systems) + cols - 1) // cols
+    # Match the standard plot width so a single-system facet isn't visibly
+    # smaller than the rest of the chart set.
+    panel_w = 11.0 if cols == 1 else 6.5
     fig, axes = plt.subplots(
-        rowsn, cols, figsize=(6.5 * cols, 4.5 * rowsn), sharex=True, squeeze=False
+        rowsn, cols, figsize=(panel_w * cols, 4.5 * rowsn), sharex=True, squeeze=False
     )
     meta = system_meta or {}
     for idx, system in enumerate(systems):
@@ -669,9 +683,6 @@ def render_faceted_dead_tuples(
             items.sort()
             if items:
                 subject_series.append((subj, items, max(v for _, v in items)))
-
-        if any(peak > 0 for _, _, peak in subject_series):
-            ax.set_yscale("symlog", linthresh=1.0)
 
         subject_series.sort(key=lambda item: item[2], reverse=True)
         label_limit = 5
