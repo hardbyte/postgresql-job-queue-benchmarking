@@ -1,6 +1,6 @@
 """Combine N single-system long-horizon runs into one consolidated report.
 
-Use this when several systems were run as separate `long_horizon.py`
+Use this when several systems were run as separate `bench.py`
 invocations (e.g. a wrapper script that loops one system per call) and
 the cross-system overlays in `index.html` are needed after the fact.
 The preferred path is still to pass `--systems a,b,c,...` to a single
@@ -9,7 +9,7 @@ invocation; this module exists for the case where that ship has sailed.
 Inputs must share the same phase shape (label, type, duration). Each
 system may appear in only one input run.
 
-CLI is wired in `long_horizon.py` as the `combine` subcommand, see
+CLI is wired in `bench.py` as the `combine` subcommand, see
 `benchmarks/portable/README.md`.
 """
 

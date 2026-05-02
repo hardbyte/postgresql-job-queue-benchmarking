@@ -160,7 +160,7 @@ def test_interactive_report_written(tmp_path: Path):
         "run_id": "fixture-run",
         "scenario": "idle_in_tx_saturation",
         "pg_image": "postgres:17.2-alpine",
-        "cli": ["long_horizon.py", "run", "--scenario", "idle_in_tx_saturation"],
+        "cli": ["bench.py", "run", "--scenario", "idle_in_tx_saturation"],
     }
     report = write_interactive_report(
         run_dir=out,

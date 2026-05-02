@@ -18,8 +18,15 @@ deps/
 # git; keep them locally and regenerate on demand.
 results/custom-*/
 results/*-combined/
+results/chaos_*/
 results/**/raw.csv
 *.log
+
+# Per-language lock files in adapter dirs that aren't part of the
+# tracked contract (Python uv, Elixir mix). Rust binaries do track
+# Cargo.lock; Node tracks package-lock.json — those stay.
+*-bench/uv.lock
+*-bench/mix.lock
 
 # Local env
 .env

@@ -1136,7 +1136,7 @@ def build_parser() -> argparse.ArgumentParser:
     from . import combine, compare
 
     parser = argparse.ArgumentParser(
-        prog="long_horizon.py",
+        prog="bench.py",
         description="Portable benchmarking harness: drive runs, combine reports, render comparisons.",
     )
     subparsers = parser.add_subparsers(

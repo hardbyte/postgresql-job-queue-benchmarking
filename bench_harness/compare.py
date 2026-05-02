@@ -5,7 +5,7 @@ with headline metric tables (throughput, end-to-end latency, claim
 latency, dead-tuple totals) plus methodology and caveats. Pure
 post-processing — safe to re-run, no docker, no Postgres.
 
-CLI is wired in `long_horizon.py` as the `compare` subcommand.
+CLI is wired in `bench.py` as the `compare` subcommand.
 """
 
 from __future__ import annotations

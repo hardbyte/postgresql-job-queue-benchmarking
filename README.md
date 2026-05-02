@@ -81,7 +81,7 @@ Numbers are reproducible — re-run on your hardware and check.
 
 ## Chaos / correctness
 
-Chaos scenarios run inside the same `long_horizon.py` harness as
+Chaos scenarios run inside the same `bench.py` harness as
 every other workload, as named compositions of phase types. The
 sample-stream metrics, wait-event histograms, and per-phase
 aggregates the steady-state runs produce all carry over; in
@@ -148,7 +148,7 @@ git submodule update --init --recursive
 docker compose up -d postgres
 
 # Run a 5-minute smoke against one system
-uv run python long_horizon.py run \
+uv run bench run \
   --systems procrastinate \
   --producer-rate 200 \
   --worker-count 4 \
@@ -161,16 +161,16 @@ Outputs land under `results/<run-id>/<system>/` as `manifest.json` +
 `summary.json` + per-sample `samples.ndjson`. To compare runs:
 
 ```sh
-uv run python long_horizon.py compare results/<run-id>
+uv run bench compare results/<run-id>
 ```
 
 ## Scenarios
 
 Each named scenario desugars to a phase sequence; pass `--scenario <name>`
-to `long_horizon.py run`, or compose your own with `--phase
+to `bench.py run`, or compose your own with `--phase
 <label>=<type>:<duration>`.
 
-### `long_horizon.py` scenarios
+### `bench.py` scenarios
 
 | Scenario | What it exercises |
 |---|---|
@@ -210,14 +210,14 @@ to `long_horizon.py run`, or compose your own with `--phase
 ### `chaos.py` (deprecated)
 
 `chaos.py` was the standalone chaos comparison runner. Its
-scenarios have been folded into `long_horizon.py` as named phase
+scenarios have been folded into `bench.py` as named phase
 compositions (see the `chaos_*` rows above and the `kill-worker`,
 `postgres-restart`, `pg-backend-kill`, `pool-exhaustion`, and
 `repeated-kill` phase types). The script is retained in the repo
 as a reference for `leader_failover`, `retry_storm`, and
 `priority_starvation` — those scenarios are system-specific and
 have not yet been migrated. New chaos measurements should go
-through `long_horizon.py run --scenario chaos_*`.
+through `bench.py run --scenario chaos_*`.
 
 ## Wait-event sampling
 
@@ -247,7 +247,7 @@ tests/                # pytest suite for the harness itself
                       # producing a binary that talks the JSON contract
 docker-compose.yml    # shared Postgres + sidecars
 postgres.conf         # shared tuning (work_mem, autovacuum, etc.)
-long_horizon.py       # main CLI: run | combine | compare
+bench.py              # main CLI: run | combine | compare
 ```
 
 ## Contributing a system

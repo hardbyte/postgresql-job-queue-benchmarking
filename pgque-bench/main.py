@@ -160,7 +160,7 @@ def install_pgque_sync() -> None:
             f"pgque vendor SQL not found at {PGQUE_SQL}. The pgque adapter "
             "uses a git submodule for the upstream vendor SQL; run "
             "`git submodule update --init --recursive` from the repo root "
-            "before launching `long_horizon.py run --systems pgque,...`."
+            "before launching `bench.py run --systems pgque,...`."
         )
     sql = PGQUE_SQL.read_text()
     with psycopg.connect(database_url(), autocommit=True) as conn:
