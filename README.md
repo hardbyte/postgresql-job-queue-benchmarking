@@ -19,7 +19,7 @@ distribution.
 | | awa | Absurd | pg-boss | pgmq | pgque | Oban | Procrastinate | River |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | **Language / runtime** | Rust + Python | Python | Node.js | Postgres extension (Rust core) | Postgres extension (PL/pgSQL) | Elixir | Python | Go |
-| **Postgres extension required** | no | no | no | yes (`pgmq`) | yes (`pgque`) | no | no | no |
+| **Postgres extension required** | no | no | no | yes (`pgmq`) | optional (`pg_cron` for `pgque.start()`) | no | no | no |
 | **Producer surface — bulk insert** | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (COPY) |
 | **Storage shape on hot path** | append-only + receipt ring | row-mutating | row-mutating | partitioned archive | append-only + ticker | row-mutating | row-mutating | row-mutating |
 | **Priorities** | ✓ (with aging) | — | ✓ | — | — | ✓ | ✓ | ✓ |
@@ -29,7 +29,6 @@ distribution.
 | **Unique jobs / dedup** | ✓ | — | ✓ (singleton key) | — | — | ✓ | ✓ | ✓ |
 | **Rate limiting per queue** | ✓ | — | ✓ (throttling) | — | — | ✓ (Pro for global) | (concurrency limit) | ✓ |
 | **Callbacks / external waits** | ✓ | (workflow steps) | (event subscription) | — | — | — | — | — |
-| **Mixed-runtime workers** | ✓ (Rust + Python) | — | — | (DIY worker) | (DIY worker) | — | — | — |
 | **Web UI for ops** | ✓ (`awa serve`) | — | (3rd party: pgboss-dashboard) | — | — | ✓ (Oban Web, Pro) | (3rd party) | ✓ |
 
 Dashes indicate "not provided as a documented feature out of the box",
@@ -40,40 +39,80 @@ maintainers of any of the systems listed.
 
 ## Throughput
 
-![Sustained throughput vs worker concurrency](results/2026-05-01-bulk-everywhere/plots/throughput_scaling_bulk.png)
+![Sustained throughput vs worker concurrency](results/2026-05-02-alpha3-sweep/throughput_scaling.png)
 
-![Peak: row-by-row vs documented bulk path](results/2026-05-01-bulk-everywhere/plots/peak_baseline_vs_bulk.png)
+From the
+[2026-05-02 alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md):
+eight systems measured at 4 / 16 / 64 / 128 workers, each routed
+through its documented bulk producer path. Linestyles distinguish
+categories — the three tables below are not a single ranked list.
 
-These are from the
-[2026-05-01 bulk-everywhere matrix](results/2026-05-01-bulk-everywhere/SUMMARY.md):
-six systems measured at 4 / 16 / 64 / 128 workers, each routed through
-its documented bulk producer path (`Oban.insert_all`, river
-`InsertManyFast`, `pgque.send_batch`, `Task.batch_defer_async`,
-`boss.insert(jobs[])`, awa `enqueue_params_copy`). Headline peaks:
+### Three shapes of system
 
-| | sustained throughput @ best worker count |
-|---|---:|
-| pgque | 21,790 jobs/s |
-| pg-boss | 4,541 jobs/s |
-| awa | 4,431 jobs/s |
-| river | 2,509 jobs/s |
-| oban | 1,144 jobs/s |
-| procrastinate | 267 jobs/s |
+The systems benchmarked here aren't all the same shape. Comparing peak
+jobs/s across categories is comparing different work, so the headline
+peaks split three ways:
 
-Per-system architectural notes and "when does this make sense" reads
-are in [`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md).
+**Job queues** — per-job lifecycle (claim → run → complete | retry |
+fail | DLQ), per-job retries with backoff, scheduled / priority jobs,
+DLQ. Throughput between members of this group means the same thing.
+
+| System | Peak (jobs/s) | At |
+|---|---:|---|
+| **awa** | **6,834** | 1×128 w |
+| **pg-boss** | 5,302 | 1×64 w |
+| **river** | 2,522 | 1×128 w |
+| **oban** | 1,142 | 1×16 w |
+| **absurd** | 388 | 1×128 w |
+| **procrastinate** | 270 | flat |
+
+**Visibility-timeout queue** — pgmq is SQS-shaped: send, read with
+timeout, ack-or-redeliver. No per-job retry counter, no scheduling,
+you bring the worker. Comparable to a job queue on raw throughput
+only if your real workload doesn't need framework features.
+
+| System | Peak (jobs/s) | At |
+|---|---:|---|
+| **pgmq** | 13,290 | 1×16 w |
+
+**Event-distribution bus** — pgque (PgQ lineage) appends events to a
+log; a coordinator builds *batches* on a ticker; consumer groups pull
+a whole batch at a time and ack the batch, not individual events.
+The throughput it shows is the SQL ceiling for batched ingest-and-ack
+on Postgres, not "queue speed" the way it means for a job queue.
+
+| System | Peak (jobs/s) | At |
+|---|---:|---|
+| **pgque** | 22,104 | 1×128 w |
+
+If you skim the plot and see pgque comfortably above everything else:
+yes, on its own metric, but the work it's doing per "job" is thinner.
+Pick the system whose category matches your actual problem first;
+*then* look at the number inside that category.
+
+A note on pgque's worker-count axis. pgque is a fan-out bus: every
+registered consumer reads its own copy of every event (consumer-group
+semantics like Kafka), so adding *more consumers* doesn't add
+processing throughput — it adds duplicate processing. Our pgque
+adapter runs a **single consumer** for the whole replica, and the
+harness's `--worker-count` flag controls **intra-batch handler
+concurrency** within that one consumer (how many events from a given
+batch we handle in flight before moving to `finish_batch` and the
+next batch). The scaling curve we plot is real — larger in-flight
+concurrency drains a batch faster and the consumer can call
+`next_batch` sooner — but it isn't measuring "more pgque workers" in
+the way the same axis does for awa, oban, river, etc. The honest
+read of pgque's number is "what a single consumer can ack a batched
+stream at, given enough in-flight handler slots."
 
 Other reference runs:
 - [awa under a 10-minute held writing transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md)
-  with postgres-side wait-event sampling — what actually limits awa
-  at 4 k jobs/s (spoiler: WAL fsync, not lock contention)
+  with postgres-side wait-event sampling — what limits awa
+  (spoiler: WAL fsync, not lock contention)
 - [awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md)
   — awa pushed to 256 / 512 / 1024 workers
 - [pgmq on `quay.io/tembo/pg17-pgmq`](results/2026-05-02-pgmq-extension-image/SUMMARY.md)
-  — pgmq's first published numbers in this repo (peak 11,546 jobs/s
-  at 16 workers; visibility-timeout consumer model contends past that)
-- [awa producer-path optimisations](results/2026-05-01-awa-producer-paths/SUMMARY.md)
-  — `enqueue_params_copy` (PR #206) and batched uniqueness sync (PR #208) shipped in 0.6.0-alpha.1
+  — pgmq's first published numbers in this repo
 
 **Author bias:** this repo is owned by the author of
 [awa](https://github.com/hardbyte/awa), one of the systems benchmarked.
@@ -91,10 +130,17 @@ phases) and `chaos_recovery_time_s` (time from end of chaos until
 completion rate re-attains 90% of baseline median) and writes them
 into `summary.json` for the recovery phase. Published so far:
 
+- [Cross-system multi-phase chaos (alpha.3 sweep)](results/2026-05-02-alpha3-sweep/SUMMARY.md#phase-c--multi-phase-chaos-at-three-topologies)
+  — all 8 systems run sequentially through warmup → baseline →
+  pressure → kill (replica 0 SIGKILL) → restart → recovery, at three
+  topologies (1×64, 2×32, 4×16 replica×workers). The per-topology
+  throughput chart shows each system's behaviour across the kill +
+  restart events; the trend across topologies is "more replicas →
+  smaller visible kill dip", as you'd expect.
 - [awa under crash_recovery](results/2026-05-02-awa-crash-recovery/SUMMARY.md)
-  — replica 0 SIGKILLed mid-run; throughput stays in the 400-480
-  jobs/s band across all five phases (baseline / pressure / kill /
-  restart / recovery), wait-event profile invariant.
+  — single-system focused run with postgres-side wait-event sampling.
+  Replica 0 SIGKILLed mid-run; throughput stays in the 400-480 jobs/s
+  band across all five phases, wait-event profile invariant.
 
 Available chaos scenarios:
 
@@ -106,22 +152,17 @@ Available chaos scenarios:
 | `chaos_pg_backend_kill` | `pg_terminate_backend` of the SUT's backends at fixed rate. |
 | `chaos_pool_exhaustion` | Hold N idle connections to verify SUT survives pool pressure. |
 
-The legacy `chaos.py` runner is deprecated and kept only as a
-reference for `leader_failover`, `retry_storm`, and
-`priority_starvation` — those are system-specific and not yet
-folded in. The full cross-system chaos picture is tracked under
-[#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12);
-the runner consolidation lands in
-[#13](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/13).
+The full cross-system chaos picture is tracked under
+[#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12).
 
 ## Adapters
 
-- [awa](https://github.com/hardbyte/awa) (Rust + Python) — tracking 0.6.0-alpha.1
+- [awa](https://github.com/hardbyte/awa) (Rust + Python) — tracking 0.6.0-alpha.3
 - [Absurd](https://github.com/earendil-works/absurd) (Python)
 - [Oban](https://github.com/oban-bg/oban) (Elixir)
 - [pg-boss](https://github.com/timgit/pg-boss) (Node.js)
 - [pgmq](https://github.com/tembo-io/pgmq) (Postgres extension; Python adapter; needs an extension-bearing image, run separately from the shared-image matrix)
-- [PgQ](https://github.com/pgq/pgq) (Postgres extension; Python adapter)
+- [PgQue](https://github.com/pgq/pgque) (plain SQL — no extension required; Python adapter; `pg_cron` optional, the harness runs the ticker + maint loops in-process instead)
 - [Procrastinate](https://github.com/procrastinate-org/procrastinate) (Python)
 - [River](https://github.com/riverqueue/river) (Go)
 
@@ -207,18 +248,6 @@ to `bench.py run`, or compose your own with `--phase
 | `pg-backend-kill(rate=N)` | Opens an admin connection that runs `pg_terminate_backend(pid)` against the SUT's database `N` times per second. |
 | `pool-exhaustion(idle_conns=N)` | Holds `N` idle connections against the SUT's database for the duration; releases them on phase end. |
 | `repeated-kill(instance=I,period=Ns)` | Periodic SIGKILL + auto-restart of replica `I` every `period`. Composes `kill-worker` / `start-worker`. |
-
-### `chaos.py` (deprecated)
-
-`chaos.py` was the standalone chaos comparison runner. Its
-scenarios have been folded into `bench.py` as named phase
-compositions (see the `chaos_*` rows above and the `kill-worker`,
-`postgres-restart`, `pg-backend-kill`, `pool-exhaustion`, and
-`repeated-kill` phase types). The script is retained in the repo
-as a reference for `leader_failover`, `retry_storm`, and
-`priority_starvation` — those scenarios are system-specific and
-have not yet been migrated. New chaos measurements should go
-through `bench.py run --scenario chaos_*`.
 
 ## Wait-event sampling
 
