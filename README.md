@@ -40,40 +40,75 @@ maintainers of any of the systems listed.
 
 ## Throughput
 
-![Sustained throughput vs worker concurrency](results/2026-05-01-bulk-everywhere/plots/throughput_scaling_bulk.png)
+![Sustained throughput vs worker concurrency](results/2026-05-02-alpha3-sweep/throughput_scaling.png)
 
-![Peak: row-by-row vs documented bulk path](results/2026-05-01-bulk-everywhere/plots/peak_baseline_vs_bulk.png)
+From the
+[2026-05-02 alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md):
+eight systems measured at 4 / 16 / 64 / 128 workers, each routed
+through its documented bulk producer path. The plot uses linestyles to
+group systems by category — the rows below are not a single ranked
+table.
 
-These are from the
-[2026-05-01 bulk-everywhere matrix](results/2026-05-01-bulk-everywhere/SUMMARY.md):
-six systems measured at 4 / 16 / 64 / 128 workers, each routed through
-its documented bulk producer path (`Oban.insert_all`, river
-`InsertManyFast`, `pgque.send_batch`, `Task.batch_defer_async`,
-`boss.insert(jobs[])`, awa `enqueue_params_copy`). Headline peaks:
+### Three shapes of system
 
-| | sustained throughput @ best worker count |
-|---|---:|
-| pgque | 21,790 jobs/s |
-| pg-boss | 4,541 jobs/s |
-| awa | 4,431 jobs/s |
-| river | 2,509 jobs/s |
-| oban | 1,144 jobs/s |
-| procrastinate | 267 jobs/s |
+The systems benchmarked here aren't all the same shape. Comparing peak
+jobs/s across categories is comparing different work, so the headline
+peaks split three ways:
 
-Per-system architectural notes and "when does this make sense" reads
+**Job queues** — per-job lifecycle (claim → run → complete | retry |
+fail | DLQ), per-job retries with backoff, scheduled / priority jobs,
+DLQ. Throughput between members of this group means the same thing.
+
+| System | Peak (jobs/s) | At |
+|---|---:|---|
+| **awa** | **6,834** | 1×128 w |
+| **pg-boss** | 5,302 | 1×64 w |
+| **river** | 2,522 | 1×128 w |
+| **oban** | 1,142 | 1×16 w |
+| **absurd** | 388 | 1×128 w |
+| **procrastinate** | 270 | flat |
+
+**Visibility-timeout queue** — pgmq is SQS-shaped: send, read with
+timeout, ack-or-redeliver. No per-job retry counter, no scheduling,
+you bring the worker. Comparable to a job queue on raw throughput
+only if your real workload doesn't need framework features.
+
+| System | Peak (jobs/s) | At |
+|---|---:|---|
+| **pgmq** | 13,290 | 1×16 w |
+
+**Event-distribution bus** — pgque (PgQ lineage) appends events to a
+log; a coordinator builds *batches* on a ticker; consumer groups pull
+a whole batch at a time and ack the batch, not individual events.
+The throughput it shows is the SQL ceiling for batched ingest-and-ack
+on Postgres, not "queue speed" the way it means for a job queue.
+
+| System | Peak (jobs/s) | At |
+|---|---:|---|
+| **pgque** | 22,104 | 1×128 w |
+
+So if you skim the plot and see pgque sitting comfortably above
+everything else: yes, on its own metric, but the work it's doing per
+"job" is thinner. Pick the system whose category matches your actual
+problem first; *then* look at the number inside that category.
+
+Architectural notes and "when does this make sense" per-system reads
 are in [`SYSTEM_COMPARISONS.md`](SYSTEM_COMPARISONS.md).
 
 Other reference runs:
+- [2026-05-02 alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md)
+  — the matrix plotted above plus a 60-min awa soak (sustained 5.4 k
+  jobs/s, dead-tuple median 396 across an hour) and three multi-replica
+  chaos topologies. Includes phase-banded charts of all 8 systems
+  going through warmup → baseline → pressure → kill → restart →
+  recovery.
 - [awa under a 10-minute held writing transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md)
   with postgres-side wait-event sampling — what actually limits awa
-  at 4 k jobs/s (spoiler: WAL fsync, not lock contention)
+  (spoiler: WAL fsync, not lock contention)
 - [awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md)
   — awa pushed to 256 / 512 / 1024 workers
 - [pgmq on `quay.io/tembo/pg17-pgmq`](results/2026-05-02-pgmq-extension-image/SUMMARY.md)
-  — pgmq's first published numbers in this repo (peak 11,546 jobs/s
-  at 16 workers; visibility-timeout consumer model contends past that)
-- [awa producer-path optimisations](results/2026-05-01-awa-producer-paths/SUMMARY.md)
-  — `enqueue_params_copy` (PR #206) and batched uniqueness sync (PR #208) shipped in 0.6.0-alpha.1
+  — pgmq's first published numbers in this repo
 
 **Author bias:** this repo is owned by the author of
 [awa](https://github.com/hardbyte/awa), one of the systems benchmarked.
@@ -116,7 +151,7 @@ the runner consolidation lands in
 
 ## Adapters
 
-- [awa](https://github.com/hardbyte/awa) (Rust + Python) — tracking 0.6.0-alpha.1
+- [awa](https://github.com/hardbyte/awa) (Rust + Python) — tracking 0.6.0-alpha.3
 - [Absurd](https://github.com/earendil-works/absurd) (Python)
 - [Oban](https://github.com/oban-bg/oban) (Elixir)
 - [pg-boss](https://github.com/timgit/pg-boss) (Node.js)
