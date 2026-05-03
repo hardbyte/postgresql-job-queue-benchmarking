@@ -4,6 +4,29 @@ Eight systems on awa **0.6.0-alpha.3**: bulk-everywhere matrix on a shared
 image, pgmq matrix on its own image, three multi-phase chaos topologies,
 and an awa 60-minute steady-load soak.
 
+## Headline peaks
+
+| System | Peak | At | Category |
+|---|---:|---|---|
+| pgque | **22,104** | 1×128 w | event-distribution bus |
+| pgmq | 13,290 | 1×16 w | visibility-timeout queue |
+| awa | **6,834** | 1×128 w | job queue |
+| pg-boss | 5,302 | 1×64 w | job queue |
+| river | 2,522 | 1×128 w | job queue |
+| oban | 1,142 | 1×16 w | job queue |
+| absurd | 388 | 1×128 w | job queue |
+| procrastinate | 270 | flat | job queue |
+
+Read it categorically, not as a single ranking. The systems in this
+sweep are three different shapes of thing: **job queues** (per-job
+lifecycle, retries, scheduling, DLQ), a **visibility-timeout queue**
+(pgmq — SQS-shaped, ack-or-redeliver), and an **event-distribution
+bus** (pgque — PgQ lineage, batches are the unit, no per-event
+state). See
+[`SYSTEM_COMPARISONS.md`](../../SYSTEM_COMPARISONS.md#three-shapes-of-system)
+for the longer framing. Within the job-queue tier **awa is the leader
+at 6,834 jobs/s**.
+
 ## Layout
 
 | Phase | Subdir | What |
