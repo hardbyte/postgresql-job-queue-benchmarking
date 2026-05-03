@@ -22,10 +22,10 @@ sweep are three different shapes of thing: **job queues** (per-job
 lifecycle, retries, scheduling, DLQ), a **visibility-timeout queue**
 (pgmq — SQS-shaped, ack-or-redeliver), and an **event-distribution
 bus** (pgque — PgQ lineage, batches are the unit, no per-event
-state). See
-[`SYSTEM_COMPARISONS.md`](../../SYSTEM_COMPARISONS.md#three-shapes-of-system)
-for the longer framing. Within the job-queue tier **awa is the leader
-at 6,834 jobs/s**.
+state). Within the job-queue tier **awa is the leader at 6,834
+jobs/s**. The pgque scaling axis here measures intra-batch handler
+concurrency within a single consumer, not parallel consumers — see
+the [README's note on pgque's worker-count axis](../../README.md#throughput).
 
 ## Layout
 
