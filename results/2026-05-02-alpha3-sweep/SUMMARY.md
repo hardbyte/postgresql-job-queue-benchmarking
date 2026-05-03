@@ -4,6 +4,48 @@ Eight systems on awa **0.6.0-alpha.3**: bulk-everywhere matrix on a shared
 image, pgmq matrix on its own image, three multi-phase chaos topologies,
 and an awa 60-minute steady-load soak.
 
+## Headline peaks
+
+| System | Peak | At | Category |
+|---|---:|---|---|
+| pgque | **22,104** | 1×128 w | event-distribution bus |
+| pgmq | 13,290 | 1×16 w | visibility-timeout queue |
+| awa | **6,834** | 1×128 w | job queue |
+| pg-boss | 5,302 | 1×64 w | job queue |
+| river | 2,522 | 1×128 w | job queue |
+| oban | 1,142 | 1×16 w | job queue |
+| absurd | 388 | 1×128 w | job queue |
+| procrastinate | 270 | flat | job queue |
+
+The peak column is "highest median throughput across any cell of Phase A".
+**Read it categorically, not as a single ranking.** The systems in this
+sweep are three different shapes of thing:
+
+- **Job queues** (awa, pg-boss, river, oban, absurd, procrastinate) —
+  per-job lifecycle, per-job retries with backoff, scheduled / priority
+  jobs, DLQ. Throughput between members of this group means the same
+  thing. **awa is the leader at 6,834 jobs/s.**
+- **Visibility-timeout queue** (pgmq) — SQS-shaped: send, read with
+  timeout, ack-or-redeliver. No per-job retry counter, no scheduling.
+  The throughput it shows is "what does Postgres top out at for a thin
+  ack/redeliver loop" — a useful ceiling reference but not "fastest
+  job queue".
+- **Event-distribution bus** (pgque) — PgQ lineage. Producer appends
+  events; a ticker builds *batches*; consumers pull a whole batch and
+  ack the batch, not individual events. No per-event retry counter, no
+  per-event state. The 22 k jobs/s number is the SQL ceiling for
+  batched ingest-and-ack on Postgres; comparing it 1:1 to a job queue
+  is comparing ingest+ack throughput to ingest+execute+complete+retry
+  throughput.
+
+If you read this table top-down and conclude "pgque > awa by 3×",
+that's the headline pgque deserves on *what it does*, but it's not
+saying awa is a slower job queue — pgque isn't a job queue. See
+[`SYSTEM_COMPARISONS.md`](../../SYSTEM_COMPARISONS.md#three-shapes-of-system)
+for the longer framing.
+
+
+
 ## Layout
 
 | Phase | Subdir | What |

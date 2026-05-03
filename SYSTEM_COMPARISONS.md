@@ -6,6 +6,37 @@ This document is a developer-to-developer rundown of seven PostgreSQL-backed job
 
 The rest of the doc tries hard not to dunk on anything. Each system in here has a real audience, real strengths, and a legitimate reason it exists. If a system loses on a particular metric, the section says what design choice bought that loss, because that choice usually pays back somewhere this bench doesn't measure.
 
+## Three shapes of system
+
+Before the headline numbers do anything to your intuition: the systems
+in this list are not all the same shape, and the throughput rankings
+reflect that more than they reflect "which queue is faster."
+
+- **Job queues** — awa, Oban, pg-boss, Procrastinate, River, absurd.
+  Per-job lifecycle (claim → run → complete | retry | fail | DLQ),
+  per-job retries with backoff, scheduled / cron jobs, priority
+  queues, optional rate limiting, deadlines. Throughput numbers
+  between members of this group mean roughly the same thing.
+- **Visibility-timeout queue** — pgmq. SQS-shaped: send, read with
+  timeout, ack-or-redeliver. No per-job retry counter, no scheduled
+  jobs, no priorities; you bring the worker. It's a queue, not a
+  framework. Comparable to awa on raw throughput only if your real
+  workload doesn't need framework features.
+- **Event-distribution bus** — pgque. PgQ lineage. Producer appends
+  to an event log; a coordinator builds *batches* on a ticker;
+  consumer groups pull a whole batch at a time and ack the batch,
+  not individual events. No per-event retry counter, no per-event
+  state; the batch is the unit. The throughput it shows in this
+  bench (~22 k jobs/s @ 1×128 w, ~39 k @ 4×16 in the alpha.3 run)
+  is the SQL ceiling for batched ingest-and-ack on Postgres, not a
+  measure of "queue speed" in a way that compares to the job-queue
+  tier.
+
+If you skim a results table and see pgque 3× awa, the right read is
+"pgque is doing different work, with thinner per-job semantics" —
+not "pgque is a faster job queue." It isn't a job queue at all in
+the sense the others are.
+
 ## How to read this
 
 The bench shape is narrow on purpose. One Postgres 17.2 container, shared across systems but never simultaneously. 200 jobs/s offered load, 8-worker concurrency, 1 replica per system, a 5-minute warmup followed by 115 minutes of clean steady-state. The job body is intentionally trivial (~1 ms of payload work) so the queue engine itself is the thing being measured rather than the user code around it.
