@@ -524,6 +524,10 @@ async def scenario_long_horizon() -> None:
                 await ticker_conn.reconnect()
             await asyncio.sleep(0.05)
 
+    # Match `pgque.start()`'s built-in scheduler cadence (~10 s) rather
+    # than the previous ~30 s. Tighter cadence reaps orphan batches and
+    # rotates tables sooner; the 2026-05-07 multi-replica chaos hang
+    # was bounded by this interval.
     async def maint_task() -> None:
         # Rotation step1, retry, vacuum. Step2 must be a separate transaction.
         while not shutdown.is_set():
@@ -533,7 +537,7 @@ async def scenario_long_horizon() -> None:
             except Exception as exc:
                 print(f"[pgque] maint failed: {exc}", file=sys.stderr)
                 await maint_conn.reconnect()
-            for _ in range(60):  # ~30s, but interruptible
+            for _ in range(20):  # ~10s, interruptible
                 if shutdown.is_set():
                     return
                 await asyncio.sleep(0.5)
@@ -546,7 +550,7 @@ async def scenario_long_horizon() -> None:
             except Exception as exc:
                 print(f"[pgque] maint_step2 failed: {exc}", file=sys.stderr)
                 await maint_step2_conn.reconnect()
-            for _ in range(60):
+            for _ in range(20):  # ~10s, interruptible
                 if shutdown.is_set():
                     return
                 await asyncio.sleep(0.5)
