@@ -510,13 +510,10 @@ pub async fn run() {
         .map(|(_, storage)| storage.lease_claim_receipts)
         .unwrap_or(false);
 
-    // BENCH_QUEUE_COUNT lets the bench measure mixed-queue
-    // throughput. Default 1 (single queue named exactly the same as
-    // the legacy bench, so existing scenarios reproduce). With N>1
-    // each replica's producer round-robins across N queues and the
-    // worker registration calls Client::queue() N times — so total
-    // active workers stays roughly worker_count by dividing the
-    // per-queue worker pool.
+    // BENCH_QUEUE_COUNT — N>1 round-robins inserts across N queues
+    // and registers N Client::queue() workers (with worker_count
+    // divided across them, min 1 each). Default 1 keeps the single
+    // legacy queue name "awa_longhorizon_bench".
     let queue_count: usize = std::env::var("BENCH_QUEUE_COUNT")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -565,13 +562,9 @@ pub async fn run() {
         aged_completion_counter: Arc::clone(&aged_completions),
     };
 
-    // LEASE_DEADLINE_MS controls the per-claim deadline-rescue window.
-    // Default = library default, i.e. deadline rescue ON (the safer
-    // bench shape — matches what a real awa user would see). Set
-    // LEASE_DEADLINE_MS=0 to disable rescue (the legacy bench shape
-    // when LEASE_CLAIM_RECEIPTS=true was set; the previous code did
-    // this unconditionally on the receipts path which silently
-    // disabled one of awa's reliability mechanisms in chaos cells).
+    // LEASE_DEADLINE_MS — per-claim deadline-rescue window in ms.
+    // Default = QueueConfig::default().deadline_duration (rescue ON).
+    // Set to 0 to disable rescue.
     let deadline_duration = match std::env::var("LEASE_DEADLINE_MS") {
         Ok(v) => match v.parse::<u64>() {
             Ok(0) => Duration::ZERO,
@@ -599,11 +592,18 @@ pub async fn run() {
             },
         );
     }
+    // awa only routes terminal-failed jobs to `awa.dlq_entries` when
+    // the queue's DLQ policy is enabled; the library default is off.
+    let dlq_enabled = std::env::var("BENCH_DLQ_ENABLED")
+        .ok()
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false);
     let client_builder = client_builder
         // The portable bench is measuring queue behavior, not the cost of
         // refreshing runtime/admin snapshots every few seconds.
         .queue_stats_interval(Duration::from_secs(300))
         .runtime_snapshot_interval(Duration::from_secs(300))
+        .dlq_enabled_by_default(dlq_enabled)
         .register_worker(worker);
     let client = match &queue_storage {
         Some((_, storage)) => client_builder

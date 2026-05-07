@@ -254,6 +254,7 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         "LEASE_DEADLINE_MS",
         "LEASE_CLAIM_RECEIPTS",
         "BENCH_QUEUE_COUNT",
+        "BENCH_DLQ_ENABLED",
     ):
         if key in os.environ:
             env[key] = os.environ[key]

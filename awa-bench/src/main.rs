@@ -334,9 +334,8 @@ async fn enqueue_batch(
     count: i64,
     _use_copy: bool,
 ) {
-    // Match long_horizon's PRODUCER_BATCH_MAX default so simple-scenario
-    // throughput numbers are comparable to long-horizon ones rather
-    // than artificially inflated by a 500-row batch.
+    // PRODUCER_BATCH_MAX — rows per bulk insert. Defaults match
+    // long_horizon (128) for cross-scenario comparability.
     let batch_size: i64 = std::env::var("PRODUCER_BATCH_MAX")
         .ok()
         .and_then(|v| v.parse::<i64>().ok())

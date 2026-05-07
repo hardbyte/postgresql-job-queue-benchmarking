@@ -364,17 +364,11 @@ def _launch_one_replica(
         bufsize=1,  # line-buffered
     )
     stop_event = threading.Event()
-    # Start the pacer thread *only* in fixed-rate mode and only when
-    # PRODUCER_PACING is harness (default in this branch). Depth-target
-    # mode keeps adapter-local pacing for now — depth is observer-side
-    # and the adapter already has the signal locally.
-    # Read pacer config from `instance_overrides` rather than `env`. For
-    # docker-launched adapters spec.env is empty (the env is baked into
-    # `docker run -e KEY=VAL ...` argv) and so `env.get("PRODUCER_RATE")`
-    # would return 0 even with --producer-rate set on the CLI. The
-    # orchestrator-side pacer needs the resolved rate, which lives in
-    # instance_overrides (or os.environ as a fallback for explicit
-    # PRODUCER_PACING overrides).
+    # Start the harness pacer thread for fixed-rate, harness-paced runs.
+    # Depth-target stays adapter-local — the depth signal is observer-side.
+    # Pacer settings are read from `instance_overrides` (or `os.environ`
+    # as a fallback): `spec.env` is empty for docker-launched adapters
+    # because the env is baked into the `docker run -e KEY=VAL` argv.
     def _pacer_setting(key: str, default: str) -> str:
         return instance_overrides.get(key) or os.environ.get(key) or default
 
