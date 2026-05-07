@@ -545,6 +545,38 @@ pub async fn run() {
     let producer_store = queue_storage.as_ref().map(|(_, storage)| {
         QueueStorage::new(storage.clone()).expect("Invalid QueueStorageConfig")
     });
+    // Harness-side pacing: when PRODUCER_PACING=harness (the default in
+    // this branch), the orchestrator emits "ENQUEUE <n>\n" tokens on
+    // this process's stdin. We spawn a blocking reader thread that
+    // forwards each n into a tokio mpsc; the producer loop awaits a
+    // token instead of running its own credit math. See
+    // bench_harness/pacer.py and CONTRIBUTING_ADAPTERS.md "Producer
+    // pacing (normative)".
+    let pacing_mode = std::env::var("PRODUCER_PACING").unwrap_or_else(|_| "adapter".into());
+    let harness_paced = pacing_mode == "harness" && producer_mode == "fixed";
+    let token_rx = if harness_paced {
+        let (tx, rx) = tokio::sync::mpsc::channel::<usize>(1024);
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            let lock = stdin.lock();
+            for line in lock.lines() {
+                let Ok(line) = line else { return; };
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix("ENQUEUE ") {
+                    if let Ok(n) = rest.parse::<usize>() {
+                        if n > 0 && tx.blocking_send(n).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        Some(rx)
+    } else {
+        None
+    };
+
     let producer_handle = tokio::spawn(async move {
         if !producer_enabled() {
             while !producer_shutdown.load(Ordering::Relaxed) {
@@ -552,9 +584,11 @@ pub async fn run() {
             }
             return;
         }
+        let mut token_rx = token_rx;
         let mut seq: i64 = 0;
         let mut fixed_rate_credit = 0.0_f64;
         let mut next_tick = tokio::time::Instant::now();
+        let mut last_credit_tick = tokio::time::Instant::now();
         while !producer_shutdown.load(Ordering::Relaxed) {
             let batch_size = if producer_mode == "depth-target" {
                 producer_target_rate_metric.store(0, Ordering::Relaxed);
@@ -564,20 +598,54 @@ pub async fn run() {
                     continue;
                 }
                 next_tick = tokio::time::Instant::now();
+                last_credit_tick = next_tick;
                 ((target_depth - depth) as usize).clamp(1, producer_batch_max)
+            } else if let Some(rx) = token_rx.as_mut() {
+                // Harness-paced fixed rate: block on next ENQUEUE token.
+                let current_rate = read_producer_rate(producer_rate);
+                producer_target_rate_metric.store(current_rate, Ordering::Relaxed);
+                let n = match tokio::time::timeout(
+                    Duration::from_millis(500),
+                    rx.recv(),
+                )
+                .await
+                {
+                    Ok(Some(n)) => n,
+                    Ok(None) => {
+                        // Pacer closed — drop to adapter-local fallback
+                        // for any remaining loop iterations.
+                        token_rx = None;
+                        continue;
+                    }
+                    Err(_) => continue, // timeout — re-check shutdown
+                };
+                n.min(producer_batch_max)
             } else {
                 let current_rate = read_producer_rate(producer_rate);
                 producer_target_rate_metric.store(current_rate, Ordering::Relaxed);
                 if current_rate == 0 {
                     fixed_rate_credit = 0.0;
                     next_tick = tokio::time::Instant::now();
+                    last_credit_tick = next_tick;
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 }
                 let period = Duration::from_millis(producer_batch_ms);
                 next_tick = std::cmp::max(next_tick + period, tokio::time::Instant::now());
                 tokio::time::sleep_until(next_tick).await;
-                fixed_rate_credit += current_rate as f64 * (producer_batch_ms as f64 / 1_000.0);
+                // Credit based on actual wall-clock elapsed, not the
+                // nominal period — otherwise any iteration that runs
+                // longer than `period` (COPY latency, sample-emission,
+                // scheduler stalls) silently under-meters the offered
+                // rate. Same shape as pgque-bench's producer credit
+                // loop. Pre-fix: a 25 ms period that took 30 ms to
+                // execute still credited only 25 ms of jobs, capping
+                // the achievable fixed-rate at ~83 % of target on a
+                // moderately-loaded host.
+                let now = tokio::time::Instant::now();
+                let dt_s = now.saturating_duration_since(last_credit_tick).as_secs_f64();
+                last_credit_tick = now;
+                fixed_rate_credit += current_rate as f64 * dt_s;
                 let whole = fixed_rate_credit.floor() as usize;
                 if whole == 0 {
                     continue;

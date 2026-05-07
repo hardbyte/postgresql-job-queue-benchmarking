@@ -220,10 +220,16 @@ async def scenario_long_horizon() -> None:
     work_ms = env_int("JOB_WORK_MS", 1)
     # Batch size for the documented bulk-insert API
     # (`pgque.send_batch(queue, type, payloads text[])`, vendored at
-    # vendor/pgque/sql/pgque-api/send.sql). Default 1 keeps existing
-    # row-by-row behaviour; the bench harness opts in to larger batches
-    # via the env var.
-    producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 1))
+    # vendor/pgque/sql/pgque-api/send.sql).
+    #
+    # Default 128 matches the other bulk-producer adapters (pgmq,
+    # pg-boss, absurd) so a stock cross-system run measures pgque on
+    # its documented bulk path rather than one row per `pgque.send()`
+    # — the row-by-row default underplayed pgque's ingest ceiling by
+    # ~50× in the 2026-05-07 shootout. Set to 1 to reproduce the older
+    # row-by-row behaviour; benchmarks targeting peak ingest typically
+    # push this to 1000+ via the env var.
+    producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 128))
     producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
     db_name = database_url().rsplit("/", 1)[-1]
@@ -285,12 +291,48 @@ async def scenario_long_horizon() -> None:
             signal.signal(sig, lambda *_a: shutdown.set())
 
     # Per-task connections (psycopg AsyncConnection isn't safe to share).
-    producer_conn = await aconnect()
-    consumer_conn = await aconnect()
-    ticker_conn = await aconnect()
-    maint_conn = await aconnect()
-    maint_step2_conn = await aconnect()
-    depth_conn = await aconnect()
+    # Wrap each in a tiny helper so the per-task loops can transparently
+    # reconnect when the underlying socket dies (chaos: `pg_terminate_backend`,
+    # postgres-restart). Without this, every task that hit a closed socket
+    # would log "connection is closed" forever.
+
+    class ReconnectingConn:
+        __slots__ = ("_conn",)
+
+        def __init__(self, conn: psycopg.AsyncConnection) -> None:
+            self._conn = conn
+
+        @property
+        def conn(self) -> psycopg.AsyncConnection:
+            return self._conn
+
+        def cursor(self):
+            return self._conn.cursor()
+
+        async def close(self) -> None:
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+
+        async def reconnect(self) -> None:
+            await self.close()
+            # Best-effort backoff loop; gives Postgres up to ~10s to come back.
+            for _ in range(50):
+                if shutdown.is_set():
+                    return
+                try:
+                    self._conn = await aconnect()
+                    return
+                except Exception:
+                    await asyncio.sleep(0.2)
+
+    producer_conn = ReconnectingConn(await aconnect())
+    consumer_conn = ReconnectingConn(await aconnect())
+    ticker_conn = ReconnectingConn(await aconnect())
+    maint_conn = ReconnectingConn(await aconnect())
+    maint_step2_conn = ReconnectingConn(await aconnect())
+    depth_conn = ReconnectingConn(await aconnect())
 
     work_sem = asyncio.Semaphore(worker_count)
 
@@ -298,12 +340,47 @@ async def scenario_long_horizon() -> None:
         nonlocal enqueued, current_producer_target_rate
         seq = 0
         next_t = loop.time()
-        # Fixed-rate accounting: instead of sleeping 1/rate per job (which
-        # caps single-row throughput by event-loop scheduling overhead),
-        # accumulate a fractional credit budget and dispatch up to
-        # producer_batch_max jobs per send_batch call.
+        # Fixed-rate accounting (used when PRODUCER_PACING=adapter — the
+        # back-compat fallback). When PRODUCER_PACING=harness (the default
+        # in this branch), the orchestrator emits `ENQUEUE <n>` tokens on
+        # this adapter's stdin and we honour those instead. Centralising
+        # pacing in the harness fixes a class of bugs where each adapter
+        # re-derived the credit math; see CONTRIBUTING_ADAPTERS.md
+        # "Producer pacing (normative)" for the contract.
         rate_credit = 0.0
         last_credit_tick = loop.time()
+        pacing_mode = os.environ.get("PRODUCER_PACING", "adapter")
+        # stdin reader queue for harness pacing tokens. Reading sync
+        # stdin from asyncio requires hand-rolled glue — we do it in a
+        # thread that pushes ints onto an asyncio.Queue.
+        token_q: asyncio.Queue[int] | None = None
+        if pacing_mode == "harness" and producer_mode == "fixed":
+            token_q = asyncio.Queue(maxsize=1024)
+            stdin_loop = loop
+
+            def _stdin_reader() -> None:
+                for raw in sys.stdin:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    if line.startswith("ENQUEUE "):
+                        try:
+                            n = int(line.split(" ", 1)[1])
+                        except (ValueError, IndexError):
+                            continue
+                        if n <= 0:
+                            continue
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                token_q.put(n), stdin_loop
+                            ).result(timeout=1.0)
+                        except Exception:
+                            return
+
+            import threading as _t
+            _t.Thread(target=_stdin_reader, name="pgque-pacer-stdin",
+                      daemon=True).start()
+
         while not shutdown.is_set():
             if producer_mode == "depth-target":
                 current_producer_target_rate = 0.0
@@ -313,6 +390,19 @@ async def scenario_long_horizon() -> None:
                     await asyncio.sleep(0.05)
                     continue
                 next_t = loop.time()
+            elif token_q is not None:
+                # Harness-paced fixed-rate. Block on the next token.
+                effective_rate = read_producer_rate(producer_rate)
+                current_producer_target_rate = float(effective_rate)
+                try:
+                    batch_count = await asyncio.wait_for(
+                        token_q.get(), timeout=0.5
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                # Cap to producer_batch_max in case the pacer was
+                # configured larger than the local cap.
+                batch_count = min(batch_count, producer_batch_max)
             else:
                 effective_rate = read_producer_rate(producer_rate)
                 current_producer_target_rate = float(effective_rate)
@@ -389,6 +479,11 @@ async def scenario_long_horizon() -> None:
                 enqueued += batch_count
             except Exception as exc:
                 print(f"[pgque] producer send failed: {exc}", file=sys.stderr)
+                # Connection is most likely dead (chaos:
+                # chaos_postgres_restart, chaos_pg_backend_kill). Reopen
+                # before the next iteration; ReconnectingConn waits up
+                # to ~10s for Postgres to come back.
+                await producer_conn.reconnect()
                 await asyncio.sleep(0.05)
 
     async def ticker_task() -> None:
@@ -400,6 +495,7 @@ async def scenario_long_horizon() -> None:
                     await cur.execute("SELECT pgque.ticker(%s)", (QUEUE_NAME,))
             except Exception as exc:
                 print(f"[pgque] ticker failed: {exc}", file=sys.stderr)
+                await ticker_conn.reconnect()
             await asyncio.sleep(0.05)
 
     async def maint_task() -> None:
@@ -410,6 +506,7 @@ async def scenario_long_horizon() -> None:
                     await cur.execute("SELECT pgque.maint()")
             except Exception as exc:
                 print(f"[pgque] maint failed: {exc}", file=sys.stderr)
+                await maint_conn.reconnect()
             for _ in range(60):  # ~30s, but interruptible
                 if shutdown.is_set():
                     return
@@ -422,6 +519,7 @@ async def scenario_long_horizon() -> None:
                     await cur.execute("SELECT pgque.maint_rotate_tables_step2()")
             except Exception as exc:
                 print(f"[pgque] maint_step2 failed: {exc}", file=sys.stderr)
+                await maint_step2_conn.reconnect()
             for _ in range(60):
                 if shutdown.is_set():
                     return
@@ -479,6 +577,7 @@ async def scenario_long_horizon() -> None:
                         batch_id = row["batch_id"] if row else None
                 except Exception as exc:
                     print(f"[pgque] next_batch failed: {exc}", file=sys.stderr)
+                    await consumer_conn.reconnect()
                     await asyncio.sleep(0.1)
                     continue
 
@@ -488,6 +587,23 @@ async def scenario_long_horizon() -> None:
                         await asyncio.wait_for(_drain_notifies(listen_conn), 0.1)
                     except asyncio.TimeoutError:
                         pass
+                    except Exception as exc:
+                        # listen_conn died (chaos restart). Re-establish.
+                        print(f"[pgque] listen reconnect: {exc}", file=sys.stderr)
+                        try:
+                            await listen_conn.close()
+                        except Exception:
+                            pass
+                        for _ in range(50):
+                            if shutdown.is_set():
+                                return
+                            try:
+                                listen_conn = await aconnect()
+                                async with listen_conn.cursor() as c2:
+                                    await c2.execute(f'LISTEN "pgque_{QUEUE_NAME}"')
+                                break
+                            except Exception:
+                                await asyncio.sleep(0.2)
                     continue
 
                 # Pull events (may be empty — still need to finish the batch).
@@ -500,6 +616,7 @@ async def scenario_long_horizon() -> None:
                         rows = await cur.fetchall()
                 except Exception as exc:
                     print(f"[pgque] get_batch_events failed: {exc}", file=sys.stderr)
+                    await consumer_conn.reconnect()
                     rows = []
 
                 if rows:
@@ -516,6 +633,7 @@ async def scenario_long_horizon() -> None:
                         await cur.execute("SELECT pgque.finish_batch(%s)", (batch_id,))
                 except Exception as exc:
                     print(f"[pgque] finish_batch failed: {exc}", file=sys.stderr)
+                    await consumer_conn.reconnect()
         finally:
             await listen_conn.close()
 
@@ -545,7 +663,7 @@ async def scenario_long_horizon() -> None:
                     row = await cur.fetchone()
                     queue_depth = int(row["pending_events"]) if row else 0
             except Exception:
-                pass
+                await depth_conn.reconnect()
             # Fast poll so the producer's depth-target backoff sees
             # fresh values; matches awa-bench / pgmq-bench / pgboss
             # cadence. The single get_consumer_info call is cheap.
