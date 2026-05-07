@@ -334,7 +334,14 @@ async fn enqueue_batch(
     count: i64,
     _use_copy: bool,
 ) {
-    let batch_size = 500;
+    // Match long_horizon's PRODUCER_BATCH_MAX default so simple-scenario
+    // throughput numbers are comparable to long-horizon ones rather
+    // than artificially inflated by a 500-row batch.
+    let batch_size: i64 = std::env::var("PRODUCER_BATCH_MAX")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(128);
     for batch_start in (0..count).step_by(batch_size as usize) {
         let batch_end = (batch_start + batch_size).min(count);
         let params: Vec<_> = (batch_start..batch_end)

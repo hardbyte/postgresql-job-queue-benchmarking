@@ -83,8 +83,38 @@ impl LatencyWindow {
     }
 }
 
+/// What the synthetic worker does on each invocation. Selected by the
+/// `WORKER_FAIL_MODE` env var; default = `Success`.
+#[derive(Copy, Clone, Debug, Default)]
+enum WorkerFailMode {
+    /// Always succeed (the historical default).
+    #[default]
+    Success,
+    /// Mirror the legacy `JOB_FAIL_FIRST_MOD` shape: fail attempt 1
+    /// with a retryable error, succeed on attempt 2+.
+    RetryableFirst,
+    /// Every attempt returns `JobError::Terminal`. With `max_attempts=1`
+    /// on the producer side, every job lands in `awa.dlq_entries`.
+    TerminalAlways,
+}
+
+impl WorkerFailMode {
+    fn from_env() -> Self {
+        match std::env::var("WORKER_FAIL_MODE")
+            .unwrap_or_else(|_| "success".into())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "retryable-first" | "retryable_first" => Self::RetryableFirst,
+            "terminal-always" | "terminal_always" => Self::TerminalAlways,
+            _ => Self::Success,
+        }
+    }
+}
+
 struct LongHorizonWorker {
     work_ms: u64,
+    fail_mode: WorkerFailMode,
     subscriber_latencies: Arc<Mutex<LatencyWindow>>,
     end_to_end_latencies: Arc<Mutex<LatencyWindow>>,
     completed_counter: Arc<AtomicU64>,
@@ -105,7 +135,31 @@ impl Worker for LongHorizonWorker {
     async fn perform(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
         let args: LongHorizonJob = serde_json::from_value(ctx.job.args.clone())
             .map_err(|err| JobError::Terminal(format!("failed to deserialize args: {err}")))?;
-        if args.fail_first_attempt && ctx.job.attempt == 1 {
+        match self.fail_mode {
+            WorkerFailMode::Success => {}
+            WorkerFailMode::RetryableFirst => {
+                if args.fail_first_attempt && ctx.job.attempt == 1 {
+                    self.retryable_failures_counter
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Err(JobError::retryable_msg(
+                        "synthetic first-attempt retryable failure",
+                    ));
+                }
+            }
+            WorkerFailMode::TerminalAlways => {
+                self.retryable_failures_counter
+                    .fetch_add(1, Ordering::Relaxed);
+                return Err(JobError::Terminal(
+                    "synthetic terminal failure (WORKER_FAIL_MODE=terminal-always)".into(),
+                ));
+            }
+        }
+        // Legacy fail-first-attempt path stays active when caller set
+        // JOB_FAIL_FIRST_MOD without picking a fail mode (back-compat).
+        if matches!(self.fail_mode, WorkerFailMode::Success)
+            && args.fail_first_attempt
+            && ctx.job.attempt == 1
+        {
             self.retryable_failures_counter
                 .fetch_add(1, Ordering::Relaxed);
             return Err(JobError::retryable_msg(
@@ -447,7 +501,7 @@ pub async fn run() {
             None
         }
     };
-    let use_lease_claim_receipts = queue_storage
+    let _use_lease_claim_receipts = queue_storage
         .as_ref()
         .map(|(_, storage)| storage.lease_claim_receipts)
         .unwrap_or(false);
@@ -477,6 +531,7 @@ pub async fn run() {
 
     let worker = LongHorizonWorker {
         work_ms,
+        fail_mode: WorkerFailMode::from_env(),
         subscriber_latencies: Arc::clone(&subscriber_latencies),
         end_to_end_latencies: Arc::clone(&end_to_end_latencies),
         completed_counter: Arc::clone(&completed),
@@ -488,6 +543,21 @@ pub async fn run() {
         aged_completion_counter: Arc::clone(&aged_completions),
     };
 
+    // LEASE_DEADLINE_MS controls the per-claim deadline-rescue window.
+    // Default = library default, i.e. deadline rescue ON (the safer
+    // bench shape — matches what a real awa user would see). Set
+    // LEASE_DEADLINE_MS=0 to disable rescue (the legacy bench shape
+    // when LEASE_CLAIM_RECEIPTS=true was set; the previous code did
+    // this unconditionally on the receipts path which silently
+    // disabled one of awa's reliability mechanisms in chaos cells).
+    let deadline_duration = match std::env::var("LEASE_DEADLINE_MS") {
+        Ok(v) => match v.parse::<u64>() {
+            Ok(0) => Duration::ZERO,
+            Ok(ms) => Duration::from_millis(ms),
+            Err(_) => QueueConfig::default().deadline_duration,
+        },
+        Err(_) => QueueConfig::default().deadline_duration,
+    };
     let client_builder = Client::builder(pool.clone())
         .priority_aging_interval(priority_aging_interval())
         .queue(
@@ -495,11 +565,7 @@ pub async fn run() {
             QueueConfig {
                 max_workers: worker_count,
                 poll_interval: Duration::from_millis(50),
-                deadline_duration: if use_lease_claim_receipts {
-                    Duration::ZERO
-                } else {
-                    QueueConfig::default().deadline_duration
-                },
+                deadline_duration,
                 priority_aging_interval: priority_aging_interval(),
                 ..QueueConfig::default()
             },
