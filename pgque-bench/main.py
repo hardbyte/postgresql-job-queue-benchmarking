@@ -42,6 +42,50 @@ QUEUE_NAME = "long_horizon_bench"
 CONSUMER_NAME = "bench_consumer"
 
 
+def _queue_count() -> int:
+    """BENCH_QUEUE_COUNT — number of parallel queues. Default 1."""
+    raw = os.environ.get("BENCH_QUEUE_COUNT")
+    if not raw:
+        return 1
+    try:
+        n = int(raw)
+    except ValueError:
+        return 1
+    return max(1, n)
+
+
+def _queue_names() -> list[str]:
+    """Queue names operated on by this replica. N=1 returns
+    [QUEUE_NAME]; N>1 returns [QUEUE_NAME_0, ..., QUEUE_NAME_{N-1}]."""
+    n = _queue_count()
+    if n == 1:
+        return [QUEUE_NAME]
+    return [f"{QUEUE_NAME}_{i}" for i in range(n)]
+
+
+def _pgque_consumer_mode() -> str:
+    """PGQUE_CONSUMER_MODE: `subconsumer` (default, per-replica
+    cooperative consumer) or `shared` (legacy single-name)."""
+    return os.environ.get("PGQUE_CONSUMER_MODE", "subconsumer").lower()
+
+
+def _subconsumer_name() -> str:
+    """One subconsumer name per replica, derived from BENCH_INSTANCE_ID."""
+    return f"sub_{os.environ.get('BENCH_INSTANCE_ID', '0')}"
+
+
+def _worker_fail_mode() -> str:
+    """WORKER_FAIL_MODE: `success` (default) or `nack-always`. Latter
+    sets queue_max_retries=0 at queue setup and routes every event
+    via pgque.nack so it lands in pgque.dead_letter on first call."""
+    return os.environ.get("WORKER_FAIL_MODE", "success").lower()
+
+# Strong references for long-lived background tasks. asyncio.create_task
+# only weakly references its return; tasks blocked on I/O without a
+# parked handle get GC'd ("Task was destroyed but it is pending").
+_PERSISTENT_TASKS: list = []
+
+
 # ─── env helpers ─────────────────────────────────────────────────────────
 
 
@@ -170,21 +214,44 @@ def install_pgque_sync() -> None:
 
 
 async def setup_queue(conn: psycopg.AsyncConnection) -> None:
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT pgque.create_queue(%s)", (QUEUE_NAME,))
-        await cur.execute("SELECT pgque.subscribe(%s, %s)", (QUEUE_NAME, CONSUMER_NAME))
+    queues = _queue_names()
+    sub_mode = _pgque_consumer_mode()
+    config = [
         # Tighten ticker so latency is comparable to other adapters. Defaults
         # are seconds-scale (3s lag, 60s idle) which would make this a wall-
         # clock test of the ticker, not the queue.
-        for param, value in (
-            ("ticker_max_count", "200"),
-            ("ticker_max_lag", "100 milliseconds"),
-            ("ticker_idle_period", "500 milliseconds"),
-        ):
-            await cur.execute(
-                "SELECT pgque.set_queue_config(%s, %s, %s)",
-                (QUEUE_NAME, param, value),
-            )
+        ("ticker_max_count", "200"),
+        ("ticker_max_lag", "100 milliseconds"),
+        ("ticker_idle_period", "500 milliseconds"),
+    ]
+    if _worker_fail_mode() == "nack-always":
+        # max_retries=0 → first nack lands the event in
+        # pgque.dead_letter. set_queue_config prepends "queue_" to the
+        # param name so the actual column written is queue_max_retries.
+        config.append(("max_retries", "0"))
+    async with conn.cursor() as cur:
+        for q in queues:
+            # create_queue is idempotent. subscribe is not — under
+            # multi-replica subconsumer mode the second replica's call
+            # to subscribe the parent consumer fires UniqueViolation,
+            # which is the expected shape; absorb it.
+            await cur.execute("SELECT pgque.create_queue(%s)", (q,))
+            try:
+                await cur.execute("SELECT pgque.subscribe(%s, %s)", (q, CONSUMER_NAME))
+            except psycopg.errors.UniqueViolation:
+                pass
+            if sub_mode == "subconsumer":
+                # i_convert_normal=true → idempotent on a parent that
+                # was previously used as a plain consumer.
+                await cur.execute(
+                    "SELECT pgque.register_subconsumer(%s, %s, %s, true)",
+                    (q, CONSUMER_NAME, _subconsumer_name()),
+                )
+            for param, value in config:
+                await cur.execute(
+                    "SELECT pgque.set_queue_config(%s, %s, %s)",
+                    (q, param, value),
+                )
 
 
 async def discover_event_tables(conn: psycopg.AsyncConnection) -> list[str]:
@@ -220,10 +287,15 @@ async def scenario_long_horizon() -> None:
     work_ms = env_int("JOB_WORK_MS", 1)
     # Batch size for the documented bulk-insert API
     # (`pgque.send_batch(queue, type, payloads text[])`, vendored at
-    # vendor/pgque/sql/pgque-api/send.sql). Default 1 keeps existing
-    # row-by-row behaviour; the bench harness opts in to larger batches
-    # via the env var.
-    producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 1))
+    # vendor/pgque/sql/pgque-api/send.sql).
+    #
+    # Default 128 matches the other bulk-producer adapters (pgmq,
+    # pg-boss, absurd) so a stock cross-system run measures pgque on
+    # its documented bulk path rather than one row per `pgque.send()`.
+    # Set to 1 for the row-by-row path; benchmarks targeting peak
+    # ingest typically
+    # push this to 1000+ via the env var.
+    producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 128))
     producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
     db_name = database_url().rsplit("/", 1)[-1]
@@ -285,12 +357,48 @@ async def scenario_long_horizon() -> None:
             signal.signal(sig, lambda *_a: shutdown.set())
 
     # Per-task connections (psycopg AsyncConnection isn't safe to share).
-    producer_conn = await aconnect()
-    consumer_conn = await aconnect()
-    ticker_conn = await aconnect()
-    maint_conn = await aconnect()
-    maint_step2_conn = await aconnect()
-    depth_conn = await aconnect()
+    # Wrap each in a tiny helper so the per-task loops can transparently
+    # reconnect when the underlying socket dies (chaos: `pg_terminate_backend`,
+    # postgres-restart). Without this, every task that hit a closed socket
+    # would log "connection is closed" forever.
+
+    class ReconnectingConn:
+        __slots__ = ("_conn",)
+
+        def __init__(self, conn: psycopg.AsyncConnection) -> None:
+            self._conn = conn
+
+        @property
+        def conn(self) -> psycopg.AsyncConnection:
+            return self._conn
+
+        def cursor(self):
+            return self._conn.cursor()
+
+        async def close(self) -> None:
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+
+        async def reconnect(self) -> None:
+            await self.close()
+            # Best-effort backoff loop; gives Postgres up to ~10s to come back.
+            for _ in range(50):
+                if shutdown.is_set():
+                    return
+                try:
+                    self._conn = await aconnect()
+                    return
+                except Exception:
+                    await asyncio.sleep(0.2)
+
+    producer_conn = ReconnectingConn(await aconnect())
+    consumer_conn = ReconnectingConn(await aconnect())
+    ticker_conn = ReconnectingConn(await aconnect())
+    maint_conn = ReconnectingConn(await aconnect())
+    maint_step2_conn = ReconnectingConn(await aconnect())
+    depth_conn = ReconnectingConn(await aconnect())
 
     work_sem = asyncio.Semaphore(worker_count)
 
@@ -298,12 +406,61 @@ async def scenario_long_horizon() -> None:
         nonlocal enqueued, current_producer_target_rate
         seq = 0
         next_t = loop.time()
-        # Fixed-rate accounting: instead of sleeping 1/rate per job (which
-        # caps single-row throughput by event-loop scheduling overhead),
-        # accumulate a fractional credit budget and dispatch up to
-        # producer_batch_max jobs per send_batch call.
+        # Fixed-rate accounting (used when PRODUCER_PACING=adapter — the
+        # back-compat fallback). When PRODUCER_PACING=harness (the default
+        # in this branch), the orchestrator emits `ENQUEUE <n>` tokens on
+        # this adapter's stdin and we honour those instead. Centralising
+        # pacing in the harness fixes a class of bugs where each adapter
+        # re-derived the credit math; see CONTRIBUTING_ADAPTERS.md
+        # "Producer pacing (normative)" for the contract.
         rate_credit = 0.0
         last_credit_tick = loop.time()
+        producer_queues = _queue_names()
+        producer_queue_idx = 0
+        pacing_mode = os.environ.get("PRODUCER_PACING", "adapter")
+        # stdin reader queue for harness pacing tokens. Reading sync
+        # stdin from asyncio requires hand-rolled glue — we do it in a
+        # thread that pushes ints onto an asyncio.Queue.
+        token_q: asyncio.Queue[int] | None = None
+        if pacing_mode == "harness" and producer_mode == "fixed":
+            token_q = asyncio.Queue(maxsize=1024)
+
+            # Read ENQUEUE tokens from stdin via asyncio's pipe
+            # reader. Sync `for raw in sys.stdin` in a daemon thread
+            # blocks indefinitely under `docker run -i`.
+
+            async def _stdin_reader() -> None:
+                stream_reader = asyncio.StreamReader()
+                proto = asyncio.StreamReaderProtocol(stream_reader)
+                await loop.connect_read_pipe(lambda: proto, sys.stdin)
+                while not shutdown.is_set():
+                    raw = await stream_reader.readline()
+                    if not raw:
+                        return  # EOF
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("ENQUEUE "):
+                        continue
+                    try:
+                        n = int(line.split(" ", 1)[1])
+                    except (ValueError, IndexError):
+                        continue
+                    if n <= 0:
+                        continue
+                    try:
+                        await token_q.put(n)
+                    except Exception as exc:
+                        print(
+                            f"[pgque] stdin reader put failed: {exc}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        return
+
+            # _PERSISTENT_TASKS holds the strong reference; see module-level docstring.
+            _PERSISTENT_TASKS.append(
+                asyncio.create_task(_stdin_reader(), name="pgque-pacer-stdin")
+            )
+
         while not shutdown.is_set():
             if producer_mode == "depth-target":
                 current_producer_target_rate = 0.0
@@ -313,6 +470,19 @@ async def scenario_long_horizon() -> None:
                     await asyncio.sleep(0.05)
                     continue
                 next_t = loop.time()
+            elif token_q is not None:
+                # Harness-paced fixed-rate. Block on the next token.
+                effective_rate = read_producer_rate(producer_rate)
+                current_producer_target_rate = float(effective_rate)
+                try:
+                    batch_count = await asyncio.wait_for(
+                        token_q.get(), timeout=0.5
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                # Cap to producer_batch_max in case the pacer was
+                # configured larger than the local cap.
+                batch_count = min(batch_count, producer_batch_max)
             else:
                 effective_rate = read_producer_rate(producer_rate)
                 current_producer_target_rate = float(effective_rate)
@@ -357,6 +527,14 @@ async def scenario_long_horizon() -> None:
                     )
                 )
                 seq += 1
+            # Round-robin across BENCH_QUEUE_COUNT queues. With N=1
+            # this collapses to the legacy single-queue path. The
+            # whole batch goes to one queue per dispatch (cheaper send_batch),
+            # but successive batches alternate.
+            target_queue = producer_queues[
+                producer_queue_idx % len(producer_queues)
+            ]
+            producer_queue_idx += 1
             insert_started = time.monotonic()
             try:
                 if batch_count == 1:
@@ -365,7 +543,7 @@ async def scenario_long_horizon() -> None:
                     async with producer_conn.cursor() as cur:
                         await cur.execute(
                             "SELECT pgque.send(%s, %s::text)",
-                            (QUEUE_NAME, payloads[0]),
+                            (target_queue, payloads[0]),
                         )
                 else:
                     # Documented bulk path:
@@ -376,7 +554,7 @@ async def scenario_long_horizon() -> None:
                     async with producer_conn.cursor() as cur:
                         await cur.execute(
                             "SELECT pgque.send_batch(%s, %s, %s::text[])",
-                            (QUEUE_NAME, "default", payloads),
+                            (target_queue, "default", payloads),
                         )
                 elapsed_ms = max(0.0, (time.monotonic() - insert_started) * 1000.0)
                 # Record per-message latency (call-cost / batch-count) so the
@@ -389,19 +567,31 @@ async def scenario_long_horizon() -> None:
                 enqueued += batch_count
             except Exception as exc:
                 print(f"[pgque] producer send failed: {exc}", file=sys.stderr)
+                # Connection is most likely dead (chaos:
+                # chaos_postgres_restart, chaos_pg_backend_kill). Reopen
+                # before the next iteration; ReconnectingConn waits up
+                # to ~10s for Postgres to come back.
+                await producer_conn.reconnect()
                 await asyncio.sleep(0.05)
 
     async def ticker_task() -> None:
         # No pg_cron in the bench env; we drive the ticker ourselves. 50ms is
         # well below queue_ticker_max_lag (100ms) so we never pace the ticker.
+        # Iterates over all configured queues each tick so multi-queue
+        # runs don't need extra ticker connections.
+        ticker_queues = _queue_names()
         while not shutdown.is_set():
             try:
                 async with ticker_conn.cursor() as cur:
-                    await cur.execute("SELECT pgque.ticker(%s)", (QUEUE_NAME,))
+                    for q in ticker_queues:
+                        await cur.execute("SELECT pgque.ticker(%s)", (q,))
             except Exception as exc:
                 print(f"[pgque] ticker failed: {exc}", file=sys.stderr)
+                await ticker_conn.reconnect()
             await asyncio.sleep(0.05)
 
+    # Maint cadence ~10 s, matching pgque.start()'s scheduler default.
+    # Reaps orphan batches and rotates tables on the same cadence.
     async def maint_task() -> None:
         # Rotation step1, retry, vacuum. Step2 must be a separate transaction.
         while not shutdown.is_set():
@@ -410,7 +600,8 @@ async def scenario_long_horizon() -> None:
                     await cur.execute("SELECT pgque.maint()")
             except Exception as exc:
                 print(f"[pgque] maint failed: {exc}", file=sys.stderr)
-            for _ in range(60):  # ~30s, but interruptible
+                await maint_conn.reconnect()
+            for _ in range(20):  # ~10s, interruptible
                 if shutdown.is_set():
                     return
                 await asyncio.sleep(0.5)
@@ -422,7 +613,8 @@ async def scenario_long_horizon() -> None:
                     await cur.execute("SELECT pgque.maint_rotate_tables_step2()")
             except Exception as exc:
                 print(f"[pgque] maint_step2 failed: {exc}", file=sys.stderr)
-            for _ in range(60):
+                await maint_step2_conn.reconnect()
+            for _ in range(20):  # ~10s, interruptible
                 if shutdown.is_set():
                     return
                 await asyncio.sleep(0.5)
@@ -453,32 +645,50 @@ async def scenario_long_horizon() -> None:
             end_to_end_latencies_ms.append((time.monotonic(), end_to_end_latency_ms))
             completed += 1
 
-    async def consumer_task() -> None:
-        # Single consumer name; one batch in flight at a time. Intra-batch
-        # parallelism is bounded by the semaphore. We LISTEN for ticker
-        # notifications but also poll on a short timer so we recover if a
-        # NOTIFY is missed (e.g. during reconnects).
+    async def consumer_task(queue_name: str = QUEUE_NAME) -> None:
+        # PGQUE_CONSUMER_MODE selects the path:
+        #   subconsumer (default): cooperative `next_batch_custom`
+        #     against a per-replica subconsumer.
+        #   shared: legacy single shared consumer name (multi-replica
+        #     contends on one batch pointer).
+        # Intra-batch concurrency is bounded by `work_sem`.
         #
-        # We drive next_batch + get_batch_events directly (rather than
-        # pgque.receive) so we always know the batch_id even for empty
-        # batches — PgQ opens a batch on next_batch regardless of event
-        # count, and we MUST finish_batch to advance the consumer cursor.
-        # Otherwise the consumer wedges on the first empty batch.
+        # We drive next_batch + get_batch_events explicitly rather
+        # than `pgque.receive` so we have the batch_id for empty
+        # batches — PgQ opens a batch unconditionally and the consumer
+        # must finish_batch to advance the cursor.
+        consumer_mode = _pgque_consumer_mode()
+        subconsumer = _subconsumer_name() if consumer_mode == "subconsumer" else None
+        fail_mode = _worker_fail_mode()
         listen_conn = await aconnect()
         try:
             async with listen_conn.cursor() as cur:
-                await cur.execute(f'LISTEN "pgque_{QUEUE_NAME}"')
+                await cur.execute(f'LISTEN "pgque_{queue_name}"')
             while not shutdown.is_set():
                 try:
                     async with consumer_conn.cursor() as cur:
-                        await cur.execute(
-                            "SELECT pgque.next_batch(%s, %s) AS batch_id",
-                            (QUEUE_NAME, CONSUMER_NAME),
-                        )
+                        if subconsumer is not None:
+                            # next_batch_custom returns (batch_id,
+                            # prev_tick_id, next_tick_id) — only
+                            # batch_id is needed. min_lag/min_count/
+                            # min_interval = 0 ms / 1 / 0 ms means
+                            # "deliver as soon as one event is ready."
+                            await cur.execute(
+                                "SELECT batch_id FROM pgque.next_batch_custom("
+                                "%s, %s, %s, '0 ms'::interval, 1, '0 ms'::interval"
+                                ")",
+                                (queue_name, CONSUMER_NAME, subconsumer),
+                            )
+                        else:
+                            await cur.execute(
+                                "SELECT pgque.next_batch(%s, %s) AS batch_id",
+                                (queue_name, CONSUMER_NAME),
+                            )
                         row = await cur.fetchone()
                         batch_id = row["batch_id"] if row else None
                 except Exception as exc:
                     print(f"[pgque] next_batch failed: {exc}", file=sys.stderr)
+                    await consumer_conn.reconnect()
                     await asyncio.sleep(0.1)
                     continue
 
@@ -488,34 +698,94 @@ async def scenario_long_horizon() -> None:
                         await asyncio.wait_for(_drain_notifies(listen_conn), 0.1)
                     except asyncio.TimeoutError:
                         pass
+                    except Exception as exc:
+                        # listen_conn died (chaos restart). Re-establish.
+                        print(f"[pgque] listen reconnect: {exc}", file=sys.stderr)
+                        try:
+                            await listen_conn.close()
+                        except Exception:
+                            pass
+                        for _ in range(50):
+                            if shutdown.is_set():
+                                return
+                            try:
+                                listen_conn = await aconnect()
+                                async with listen_conn.cursor() as c2:
+                                    await c2.execute(f'LISTEN "pgque_{queue_name}"')
+                                break
+                            except Exception:
+                                await asyncio.sleep(0.2)
                     continue
 
                 # Pull events (may be empty — still need to finish the batch).
                 try:
                     async with consumer_conn.cursor() as cur:
                         await cur.execute(
-                            "SELECT ev_data FROM pgque.get_batch_events(%s)",
+                            "SELECT ev_id, ev_data FROM pgque.get_batch_events(%s)",
                             (batch_id,),
                         )
                         rows = await cur.fetchall()
                 except Exception as exc:
                     print(f"[pgque] get_batch_events failed: {exc}", file=sys.stderr)
+                    await consumer_conn.reconnect()
                     rows = []
 
                 if rows:
-                    msgs = []
-                    for r in rows:
+                    if fail_mode == "nack-always":
+                        # Route every event to the DLQ. queue_max_retries=0
+                        # (set at queue setup) makes pgque.nack land the
+                        # event in pgque.dead_letter on the first call.
+                        # pgque.message is a 10-field composite; nack
+                        # only reads msg_id, so the rest is NULL.
+                        msgs = []
+                        for r in rows:
+                            try:
+                                msgs.append(json.loads(r["ev_data"]))
+                            except Exception:
+                                msgs.append({"created_at": _now_iso()})
+                        await asyncio.gather(*(process_one(m) for m in msgs))
                         try:
-                            msgs.append(json.loads(r["ev_data"]))
-                        except Exception:
-                            msgs.append({"created_at": _now_iso()})
-                    await asyncio.gather(*(process_one(m) for m in msgs))
+                            async with consumer_conn.cursor() as cur:
+                                for r in rows:
+                                    await cur.execute(
+                                        "SELECT pgque.nack(%s, ROW("
+                                        "%s::bigint, %s::bigint,"
+                                        " NULL::text, NULL::text,"
+                                        " NULL::int4, NULL::timestamptz,"
+                                        " NULL::text, NULL::text,"
+                                        " NULL::text, NULL::text"
+                                        ")::pgque.message,"
+                                        " '0 seconds'::interval,"
+                                        " 'WORKER_FAIL_MODE=nack-always') AS rc",
+                                        (batch_id, r["ev_id"], batch_id),
+                                    )
+                                    out = await cur.fetchone()
+                                    if out and out["rc"] != 1:
+                                        print(
+                                            f"[pgque] nack returned {out['rc']} for ev_id={r['ev_id']}",
+                                            file=sys.stderr,
+                                        )
+                        except Exception as exc:
+                            print(
+                                f"[pgque] nack failed: {exc}",
+                                file=sys.stderr,
+                            )
+                            await consumer_conn.reconnect()
+                    else:
+                        msgs = []
+                        for r in rows:
+                            try:
+                                msgs.append(json.loads(r["ev_data"]))
+                            except Exception:
+                                msgs.append({"created_at": _now_iso()})
+                        await asyncio.gather(*(process_one(m) for m in msgs))
 
                 try:
                     async with consumer_conn.cursor() as cur:
                         await cur.execute("SELECT pgque.finish_batch(%s)", (batch_id,))
                 except Exception as exc:
                     print(f"[pgque] finish_batch failed: {exc}", file=sys.stderr)
+                    await consumer_conn.reconnect()
         finally:
             await listen_conn.close()
 
@@ -535,20 +805,24 @@ async def scenario_long_horizon() -> None:
             while not shutdown.is_set():
                 await asyncio.sleep(0.25)
             return
+        depth_queues = _queue_names()
         while not shutdown.is_set():
+            total = 0
             try:
                 async with depth_conn.cursor() as cur:
-                    await cur.execute(
-                        "SELECT pending_events FROM pgque.get_consumer_info(%s, %s)",
-                        (QUEUE_NAME, CONSUMER_NAME),
-                    )
-                    row = await cur.fetchone()
-                    queue_depth = int(row["pending_events"]) if row else 0
+                    for q in depth_queues:
+                        await cur.execute(
+                            "SELECT pending_events FROM pgque.get_consumer_info(%s, %s)",
+                            (q, CONSUMER_NAME),
+                        )
+                        row = await cur.fetchone()
+                        total += int(row["pending_events"]) if row else 0
+                queue_depth = total
             except Exception:
-                pass
+                await depth_conn.reconnect()
             # Fast poll so the producer's depth-target backoff sees
             # fresh values; matches awa-bench / pgmq-bench / pgboss
-            # cadence. The single get_consumer_info call is cheap.
+            # cadence.
             await asyncio.sleep(0.2)
 
     async def sampler() -> None:
@@ -619,10 +893,15 @@ async def scenario_long_horizon() -> None:
         asyncio.create_task(ticker_task(), name="ticker"),
         asyncio.create_task(maint_task(), name="maint"),
         asyncio.create_task(maint_step2_task(), name="maint_step2"),
-        asyncio.create_task(consumer_task(), name="consumer"),
         asyncio.create_task(depth_poller(), name="depth"),
         asyncio.create_task(sampler(), name="sampler"),
     ]
+    # One consumer task per queue. Each polls next_batch_custom
+    # against its own subconsumer and runs independently.
+    for q in _queue_names():
+        tasks.append(
+            asyncio.create_task(consumer_task(q), name=f"consumer:{q}")
+        )
     try:
         await shutdown.wait()
     finally:
@@ -635,6 +914,24 @@ async def scenario_long_horizon() -> None:
             )
         except asyncio.TimeoutError:
             pass
+        # Release in-flight batches on shutdown via
+        # unregister_subconsumer(batch_handling=>1) — pgque routes any
+        # active events through retry/DLQ before removing the member
+        # row, so a replica restart doesn't wait for pgque.maint()
+        # to reap the orphan batch. Best-effort.
+        if _pgque_consumer_mode() == "subconsumer":
+            try:
+                async with consumer_conn.cursor() as cur:
+                    for q in _queue_names():
+                        await cur.execute(
+                            "SELECT pgque.unregister_subconsumer(%s, %s, %s, 1)",
+                            (q, CONSUMER_NAME, _subconsumer_name()),
+                        )
+            except Exception as exc:
+                print(
+                    f"[pgque] unregister_subconsumer on shutdown: {exc}",
+                    file=sys.stderr,
+                )
         for c in (
             producer_conn,
             consumer_conn,

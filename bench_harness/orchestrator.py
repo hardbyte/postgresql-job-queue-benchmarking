@@ -349,16 +349,58 @@ def _launch_one_replica(
         f"{' '.join(spec.argv[:2])}...",
         file=sys.stderr,
     )
+    # stdin is wired to a Popen pipe so the harness pacer can write
+    # ENQUEUE tokens to adapters that opt into harness-side pacing
+    # (PRODUCER_PACING=harness). Adapters that don't read stdin just
+    # leave the pipe full at the OS level — no harm.
     proc = subprocess.Popen(
         spec.argv,
         cwd=spec.cwd,
         env=env,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=sys.stderr,
         text=True,
         bufsize=1,  # line-buffered
     )
     stop_event = threading.Event()
+    # Start the harness pacer thread for fixed-rate, harness-paced runs.
+    # Depth-target stays adapter-local — the depth signal is observer-side.
+    # Pacer settings are read from `instance_overrides` (or `os.environ`
+    # as a fallback): `spec.env` is empty for docker-launched adapters
+    # because the env is baked into the `docker run -e KEY=VAL` argv.
+    def _pacer_setting(key: str, default: str) -> str:
+        return instance_overrides.get(key) or os.environ.get(key) or default
+
+    pacer = None
+    pacing_mode = _pacer_setting("PRODUCER_PACING", "harness")
+    producer_mode = _pacer_setting("PRODUCER_MODE", "fixed")
+    if pacing_mode == "harness" and producer_mode == "fixed":
+        from .pacer import FixedRatePacer, PacerConfig
+        try:
+            target_rate = int(_pacer_setting("PRODUCER_RATE", "0"))
+        except ValueError:
+            target_rate = 0
+        if target_rate > 0 and proc.stdin is not None:
+            try:
+                batch_max = int(_pacer_setting("PRODUCER_BATCH_MAX", "128"))
+            except ValueError:
+                batch_max = 128
+            try:
+                batch_ms = int(_pacer_setting("PRODUCER_BATCH_MS", "25"))
+            except ValueError:
+                batch_ms = 25
+            pacer = FixedRatePacer(
+                stdin=proc.stdin,
+                cfg=PacerConfig(
+                    target_rate=target_rate,
+                    batch_max=batch_max,
+                    batch_ms=batch_ms,
+                ),
+                stop_event=stop_event,
+                log_prefix=f"-{system}-{instance_id}",
+            )
+            pacer.start()
     descriptor_holder: dict = {}
     tailer = threading.Thread(
         target=_tail_stdout,

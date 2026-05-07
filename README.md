@@ -25,7 +25,7 @@ distribution.
 | **Priorities** | ✓ (with aging) | — | ✓ | — | — | ✓ | ✓ | ✓ |
 | **Retries with backoff** | ✓ | ✓ | ✓ | (visibility timeout) | ✓ | ✓ | ✓ | ✓ |
 | **Cron / scheduled jobs** | ✓ | — | ✓ | — | (delayed) | ✓ | ✓ | ✓ |
-| **Dead-letter queue** | ✓ | — | (failed-archive) | (archive table) | ✓ | (discarded) | (discarded) | ✓ |
+| **Dead-letter queue** | ✓ (opt-in) | — | (failed-archive) | (archive table) | ✓ | (discarded) | (discarded) | ✓ |
 | **Unique jobs / dedup** | ✓ | — | ✓ (singleton key) | — | — | ✓ | ✓ | ✓ |
 | **Rate limiting per queue** | ✓ | — | ✓ (throttling) | — | — | ✓ (Pro for global) | (concurrency limit) | ✓ |
 | **Callbacks / external waits** | ✓ | (workflow steps) | (event subscription) | — | — | — | — | — |
@@ -33,7 +33,9 @@ distribution.
 
 Dashes indicate "not provided as a documented feature out of the box",
 not "impossible". pgmq / pgque in particular are intentionally minimal
-— you build the worker, you choose the lifecycle. If you spot
+— you build the worker, you choose the lifecycle. "opt-in" on awa's
+DLQ row means jobs are routed there only when the queue's
+`dlq_enabled_by_default` (or per-queue override) is set. If you spot
 something wrong, please open a PR — corrections welcome from the
 maintainers of any of the systems listed.
 
@@ -113,6 +115,14 @@ Other reference runs:
   — awa pushed to 256 / 512 / 1024 workers
 - [pgmq on `quay.io/tembo/pg17-pgmq`](results/2026-05-02-pgmq-extension-image/SUMMARY.md)
   — pgmq's first published numbers in this repo
+- [awa 0.6.0-alpha.6 vs pgque v0.2.0-rc.1 deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md)
+  — focused two-system run with the harness's pacing and the
+  pgque adapter's subconsumer model in their corrected shapes.
+  Includes mixed-queue, mixed-priority, long-soak starvation, DLQ
+  ingest, and a 33 % cost attribution for awa's deadline rescue
+  on the claim hot path. Not a replacement for the all-eight
+  alpha.3 sweep — these two systems got more instrumentation
+  than the others did.
 
 **Author bias:** this repo is owned by the author of
 [awa](https://github.com/hardbyte/awa), one of the systems benchmarked.
@@ -157,7 +167,7 @@ The full cross-system chaos picture is tracked under
 
 ## Adapters
 
-- [awa](https://github.com/hardbyte/awa) (Rust + Python) — tracking 0.6.0-alpha.3
+- [awa](https://github.com/hardbyte/awa) (Rust + Python) — alpha.3 sweep on `0.6.0-alpha.3`; 2026-05-08 deep-dive on `0.6.0-alpha.6` (alpha.7 spotchecked).
 - [Absurd](https://github.com/earendil-works/absurd) (Python)
 - [Oban](https://github.com/oban-bg/oban) (Elixir)
 - [pg-boss](https://github.com/timgit/pg-boss) (Node.js)
@@ -231,6 +241,7 @@ to `bench.py run`, or compose your own with `--phase
 | `chaos_repeated_kills` | Periodic SIGKILL+restart of replica 0 across a sustained chaos phase. |
 | `chaos_pg_backend_kill` | Steady stream of `pg_terminate_backend` against the SUT's connections. |
 | `chaos_pool_exhaustion` | Hold 300 idle connections to pressure the SUT's pool sizing. |
+| `mixed_queue` | Multi-queue run; pair with `BENCH_QUEUE_COUNT=N` to spawn N parallel queues. Producer round-robins inserts; consumer side registers N queue subscriptions. Tests per-queue isolation and engine-side per-queue overhead. |
 
 ### Phase types (compose your own)
 

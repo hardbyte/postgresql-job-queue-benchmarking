@@ -240,9 +240,30 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
     # can set them once for all adapters; without this allowlist they
     # don't reach docker-based adapters because _docker_launch only
     # forwards keys present in this dict.
-    for key in ("PRODUCER_BATCH_MAX", "PRODUCER_BATCH_MS"):
+    for key in (
+        "PRODUCER_BATCH_MAX",
+        "PRODUCER_BATCH_MS",
+        "PRODUCER_PACING",
+        # Adapter-side knobs the bench harness forwards verbatim. Not
+        # all adapters honour all of these — undefined keys are no-ops.
+        "WORKER_FAIL_MODE",
+        "JOB_PRIORITY_PATTERN",
+        "JOB_FAIL_FIRST_MOD",
+        "JOB_MAX_ATTEMPTS",
+        "PGQUE_CONSUMER_MODE",
+        "LEASE_DEADLINE_MS",
+        "LEASE_CLAIM_RECEIPTS",
+        "BENCH_QUEUE_COUNT",
+        "BENCH_DLQ_ENABLED",
+    ):
         if key in os.environ:
             env[key] = os.environ[key]
+    # Default PRODUCER_PACING=harness — the orchestrator emits
+    # `ENQUEUE <n>` tokens on the adapter's stdin in fixed-rate mode.
+    # Adapters that haven't been ported to read stdin tokens fall back
+    # to their old local pacing loop and ignore the tokens (the OS
+    # buffer absorbs them harmlessly until shutdown).
+    env.setdefault("PRODUCER_PACING", "harness")
     env.update(
         {
             key: value
@@ -285,7 +306,11 @@ def _docker_launch(
         mounts.append((host_dir, container_dir))
         env["PRODUCER_RATE_CONTROL_FILE"] = container_control
     # Docker containers reach PG via host networking.
-    argv = ["docker", "run", "--rm", "--network", "host"]
+    # `-i` keeps stdin open so the harness pacer can write ENQUEUE tokens
+    # to the container's stdin (without it, `docker run` closes stdin
+    # immediately and the in-container adapter sees EOF on its first
+    # readline()).
+    argv = ["docker", "run", "--rm", "-i", "--network", "host"]
     for host_path, container_path in mounts:
         argv.extend(["-v", f"{host_path}:{container_path}"])
     for k, v in env.items():

@@ -88,6 +88,8 @@ The harness sets these before launch. Your adapter reads them:
 | `SCENARIO` | lifecycle mode; new adapters implement at least `long_horizon` |
 | `PRODUCER_MODE` | `fixed` (primary) or `depth-target` (diagnostic only) |
 | `PRODUCER_RATE` | target jobs/s when `PRODUCER_MODE=fixed` |
+| `PRODUCER_BATCH_MAX` | max rows per documented bulk-insert call (default 128 across bulk-producer adapters) |
+| `PRODUCER_BATCH_MS` | producer tick cadence in ms when batching (default 10–25) |
 | `TARGET_DEPTH` | target queue depth when `PRODUCER_MODE=depth-target` |
 | `WORKER_COUNT` | consumer concurrency |
 | `JOB_PAYLOAD_BYTES` | rough payload size (default 256) |
@@ -127,6 +129,36 @@ over multi-hour runs.
 Cadence is clock-aligned: align your first tick to the next wall-clock
 `SAMPLE_EVERY_S` boundary so cross-system samples line up on the plot
 timebase regardless of each adapter's start time within that second.
+
+### Producer pacing (normative)
+
+`PRODUCER_MODE=fixed` adapters MUST credit offered load on **real
+wall-clock elapsed time**, not on loop iteration count or nominal
+period. A common mistake is to assume each iteration of a producer
+loop takes exactly `PRODUCER_BATCH_MS` and to credit
+`rate × batch_ms / 1000` per iteration; if any iteration runs longer
+than `batch_ms` (COPY latency, sample emission, scheduler stalls)
+the offered rate silently under-meters by the elapsed/period ratio.
+The 2026-05-07 awa-vs-pgque comparison caught the awa-bench adapter
+under-metering 800 jobs/s offered load by 18–22 % this way.
+
+Reference shape (Rust; equivalent Python in `pgque-bench/main.py`
+around the `rate_credit += effective_rate * (now - last_credit_tick)`
+line):
+
+```rust
+let now = Instant::now();
+let dt_s = now.saturating_duration_since(last_credit_tick).as_secs_f64();
+last_credit_tick = now;
+rate_credit += target_rate as f64 * dt_s;        // ← real elapsed
+let whole = rate_credit.floor() as usize;        // dispatch up to `batch_max`
+rate_credit -= whole as f64;
+```
+
+The harness orchestrator is the long-term home for fixed-rate
+pacing — emitting dispatch tokens to adapters over stdin so the
+math lives in one place — but until that lands, every adapter is
+responsible for getting this loop right.
 
 ### Shutdown
 

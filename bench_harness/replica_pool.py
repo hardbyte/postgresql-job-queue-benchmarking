@@ -185,18 +185,31 @@ class ReplicaPool:
         if slot.state is not ReplicaState.RUNNING:
             # Idempotent: stopping an already-stopped slot is a no-op.
             return
-        self._terminate_slot(slot, signal_type=_signal.SIGTERM, timeout_s=timeout_s)
+        # Pre-flip the state so the orchestrator's _sleep_or_abort
+        # watch loop doesn't race the SIGTERM window — same shape as
+        # kill_worker; see comment there.
         slot.state = ReplicaState.STOPPED
+        self._terminate_slot(slot, signal_type=_signal.SIGTERM, timeout_s=timeout_s)
 
     def kill_worker(
         self, instance_id: int, *, timeout_s: float = 2.0
     ) -> None:
-        """Immediate hard kill (SIGKILL). No graceful window."""
+        """Immediate hard kill (SIGKILL). No graceful window.
+
+        Flip state to KILLED *before* SIGKILL so the
+        `_sleep_or_abort` watch loop in the orchestrator (which polls
+        slot state to decide whether an exit is expected) doesn't
+        race the kill window: between sending SIGKILL and the proc's
+        wait() completing, the process exit code is already -9 but
+        slot.state was still RUNNING — the watch loop saw "state
+        RUNNING + rc=-9" and aborted as if it were a crash. Pre-flip
+        closes that window.
+        """
         slot = self.slot(instance_id)
         if slot.state is not ReplicaState.RUNNING:
             return
-        self._terminate_slot(slot, signal_type=_signal.SIGKILL, timeout_s=timeout_s)
         slot.state = ReplicaState.KILLED
+        self._terminate_slot(slot, signal_type=_signal.SIGKILL, timeout_s=timeout_s)
 
     def restart_worker(
         self,
