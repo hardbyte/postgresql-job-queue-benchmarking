@@ -368,22 +368,32 @@ def _launch_one_replica(
     # PRODUCER_PACING is harness (default in this branch). Depth-target
     # mode keeps adapter-local pacing for now — depth is observer-side
     # and the adapter already has the signal locally.
+    # Read pacer config from `instance_overrides` rather than `env`. For
+    # docker-launched adapters spec.env is empty (the env is baked into
+    # `docker run -e KEY=VAL ...` argv) and so `env.get("PRODUCER_RATE")`
+    # would return 0 even with --producer-rate set on the CLI. The
+    # orchestrator-side pacer needs the resolved rate, which lives in
+    # instance_overrides (or os.environ as a fallback for explicit
+    # PRODUCER_PACING overrides).
+    def _pacer_setting(key: str, default: str) -> str:
+        return instance_overrides.get(key) or os.environ.get(key) or default
+
     pacer = None
-    pacing_mode = env.get("PRODUCER_PACING", "harness")
-    producer_mode = env.get("PRODUCER_MODE", "fixed")
+    pacing_mode = _pacer_setting("PRODUCER_PACING", "harness")
+    producer_mode = _pacer_setting("PRODUCER_MODE", "fixed")
     if pacing_mode == "harness" and producer_mode == "fixed":
         from .pacer import FixedRatePacer, PacerConfig
         try:
-            target_rate = int(env.get("PRODUCER_RATE", "0"))
+            target_rate = int(_pacer_setting("PRODUCER_RATE", "0"))
         except ValueError:
             target_rate = 0
         if target_rate > 0 and proc.stdin is not None:
             try:
-                batch_max = int(env.get("PRODUCER_BATCH_MAX", "128"))
+                batch_max = int(_pacer_setting("PRODUCER_BATCH_MAX", "128"))
             except ValueError:
                 batch_max = 128
             try:
-                batch_ms = int(env.get("PRODUCER_BATCH_MS", "25"))
+                batch_ms = int(_pacer_setting("PRODUCER_BATCH_MS", "25"))
             except ValueError:
                 batch_ms = 25
             pacer = FixedRatePacer(

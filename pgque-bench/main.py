@@ -41,6 +41,14 @@ PGQUE_SQL = ADAPTER_DIR / "vendor" / "pgque" / "sql" / "pgque.sql"
 QUEUE_NAME = "long_horizon_bench"
 CONSUMER_NAME = "bench_consumer"
 
+# asyncio.create_task only weakly references the returned Task in
+# Python 3.11+. If we don't hold a strong reference, a task blocked on
+# I/O can be GC'd mid-flight ("Task was destroyed but it is pending"
+# warning, then the task silently stops). Long-lived background tasks
+# (the stdin pacer reader) park their handles in this module-level
+# list so they survive.
+_PERSISTENT_TASKS: list = []
+
 
 # ─── env helpers ─────────────────────────────────────────────────────────
 
@@ -356,30 +364,48 @@ async def scenario_long_horizon() -> None:
         token_q: asyncio.Queue[int] | None = None
         if pacing_mode == "harness" and producer_mode == "fixed":
             token_q = asyncio.Queue(maxsize=1024)
-            stdin_loop = loop
 
-            def _stdin_reader() -> None:
-                for raw in sys.stdin:
-                    line = raw.strip()
-                    if not line:
+            # Read ENQUEUE tokens from stdin via asyncio's pipe
+            # reader. The earlier "sync `for raw in sys.stdin` in a
+            # daemon thread" shape blocked indefinitely on the first
+            # read under `docker run -i`; `connect_read_pipe` receives
+            # bytes as they arrive.
+
+            async def _stdin_reader() -> None:
+                stream_reader = asyncio.StreamReader()
+                proto = asyncio.StreamReaderProtocol(stream_reader)
+                await loop.connect_read_pipe(lambda: proto, sys.stdin)
+                while not shutdown.is_set():
+                    raw = await stream_reader.readline()
+                    if not raw:
+                        return  # EOF
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("ENQUEUE "):
                         continue
-                    if line.startswith("ENQUEUE "):
-                        try:
-                            n = int(line.split(" ", 1)[1])
-                        except (ValueError, IndexError):
-                            continue
-                        if n <= 0:
-                            continue
-                        try:
-                            asyncio.run_coroutine_threadsafe(
-                                token_q.put(n), stdin_loop
-                            ).result(timeout=1.0)
-                        except Exception:
-                            return
+                    try:
+                        n = int(line.split(" ", 1)[1])
+                    except (ValueError, IndexError):
+                        continue
+                    if n <= 0:
+                        continue
+                    try:
+                        await token_q.put(n)
+                    except Exception as exc:
+                        print(
+                            f"[pgque] stdin reader put failed: {exc}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        return
 
-            import threading as _t
-            _t.Thread(target=_stdin_reader, name="pgque-pacer-stdin",
-                      daemon=True).start()
+            # Keep a strong reference so the task isn't GC'd before it
+            # runs (Python 3.11+: asyncio.create_task only weakly
+            # references tasks, and ones blocked on I/O can be
+            # destroyed mid-flight — emits "Task was destroyed but it
+            # is pending" and the reader silently stops).
+            _PERSISTENT_TASKS.append(
+                asyncio.create_task(_stdin_reader(), name="pgque-pacer-stdin")
+            )
 
         while not shutdown.is_set():
             if producer_mode == "depth-target":
