@@ -240,7 +240,21 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
     # can set them once for all adapters; without this allowlist they
     # don't reach docker-based adapters because _docker_launch only
     # forwards keys present in this dict.
-    for key in ("PRODUCER_BATCH_MAX", "PRODUCER_BATCH_MS", "PRODUCER_PACING"):
+    for key in (
+        "PRODUCER_BATCH_MAX",
+        "PRODUCER_BATCH_MS",
+        "PRODUCER_PACING",
+        # Adapter-side knobs the bench harness forwards verbatim. Not
+        # all adapters honour all of these — undefined keys are no-ops.
+        "WORKER_FAIL_MODE",
+        "JOB_PRIORITY_PATTERN",
+        "JOB_FAIL_FIRST_MOD",
+        "JOB_MAX_ATTEMPTS",
+        "PGQUE_CONSUMER_MODE",
+        "LEASE_DEADLINE_MS",
+        "LEASE_CLAIM_RECEIPTS",
+        "BENCH_QUEUE_COUNT",
+    ):
         if key in os.environ:
             env[key] = os.environ[key]
     # Default PRODUCER_PACING=harness — the orchestrator emits

@@ -41,6 +41,37 @@ PGQUE_SQL = ADAPTER_DIR / "vendor" / "pgque" / "sql" / "pgque.sql"
 QUEUE_NAME = "long_horizon_bench"
 CONSUMER_NAME = "bench_consumer"
 
+
+def _pgque_consumer_mode() -> str:
+    """`subconsumer` (default) drives the cooperative path — each replica
+    registers a unique subconsumer under the shared parent CONSUMER_NAME
+    and pulls batches via `pgque.next_batch_custom`. `shared` keeps the
+    legacy single-consumer path where every replica calls
+    `pgque.next_batch(QUEUE, CONSUMER)` and contends for the same
+    pointer. The subconsumer path is the documented horizontal-scaling
+    primitive in pgque.
+    """
+    return os.environ.get("PGQUE_CONSUMER_MODE", "subconsumer").lower()
+
+
+def _subconsumer_name() -> str:
+    """One subconsumer name per replica (BENCH_INSTANCE_ID), so killing
+    replica 0 in chaos scenarios doesn't strand replica 1 spinning on
+    NULL because the orphan batch is held under the same consumer
+    pointer.
+    """
+    return f"sub_{os.environ.get('BENCH_INSTANCE_ID', '0')}"
+
+
+def _worker_fail_mode() -> str:
+    """`success` (default) — every event is `finish_batch`-ed cleanly.
+    `nack-always` — every event is routed via `pgque.nack(...)` so the
+    DLQ ingest path is exercised end-to-end. Combined with
+    `queue_max_retries=0` (set at queue setup in this mode) every
+    `nack` lands the event in `pgque.dead_letter` on first try.
+    """
+    return os.environ.get("WORKER_FAIL_MODE", "success").lower()
+
 # asyncio.create_task only weakly references the returned Task in
 # Python 3.11+. If we don't hold a strong reference, a task blocked on
 # I/O can be GC'd mid-flight ("Task was destroyed but it is pending"
@@ -181,14 +212,32 @@ async def setup_queue(conn: psycopg.AsyncConnection) -> None:
     async with conn.cursor() as cur:
         await cur.execute("SELECT pgque.create_queue(%s)", (QUEUE_NAME,))
         await cur.execute("SELECT pgque.subscribe(%s, %s)", (QUEUE_NAME, CONSUMER_NAME))
+        if _pgque_consumer_mode() == "subconsumer":
+            # Each replica registers its own subconsumer under the
+            # shared parent CONSUMER_NAME. `i_convert_normal=>true`
+            # makes this idempotent on a parent that's been used as a
+            # plain consumer before. The cooperative path is what
+            # gives us per-replica batch pointers.
+            await cur.execute(
+                "SELECT pgque.register_subconsumer(%s, %s, %s, true)",
+                (QUEUE_NAME, CONSUMER_NAME, _subconsumer_name()),
+            )
         # Tighten ticker so latency is comparable to other adapters. Defaults
         # are seconds-scale (3s lag, 60s idle) which would make this a wall-
         # clock test of the ticker, not the queue.
-        for param, value in (
+        config = [
             ("ticker_max_count", "200"),
             ("ticker_max_lag", "100 milliseconds"),
             ("ticker_idle_period", "500 milliseconds"),
-        ):
+        ]
+        if _worker_fail_mode() == "nack-always":
+            # Force every nack to land in the DLQ on first try. Default
+            # is 5 retries before pgque.event_dead() routes to
+            # pgque.dead_letter (see vendor/pgque/sql/pgque.sql:5435).
+            # Param name is `max_retries` not `queue_max_retries` —
+            # pgque.set_queue_config prepends "queue_" automatically.
+            config.append(("max_retries", "0"))
+        for param, value in config:
             await cur.execute(
                 "SELECT pgque.set_queue_config(%s, %s, %s)",
                 (QUEUE_NAME, param, value),
@@ -582,16 +631,23 @@ async def scenario_long_horizon() -> None:
             completed += 1
 
     async def consumer_task() -> None:
-        # Single consumer name; one batch in flight at a time. Intra-batch
-        # parallelism is bounded by the semaphore. We LISTEN for ticker
-        # notifications but also poll on a short timer so we recover if a
-        # NOTIFY is missed (e.g. during reconnects).
+        # Per-replica subconsumer (default) or shared single-consumer
+        # (legacy) — selected by PGQUE_CONSUMER_MODE. In the default
+        # cooperative path each replica has its own batch pointer and
+        # killing replica 0 mid-batch no longer wedges replica 1
+        # spinning on NULL. Intra-batch parallelism is bounded by the
+        # semaphore. We LISTEN for ticker notifications but also poll
+        # on a short timer so we recover if a NOTIFY is missed (e.g.
+        # during reconnects).
         #
         # We drive next_batch + get_batch_events directly (rather than
         # pgque.receive) so we always know the batch_id even for empty
         # batches — PgQ opens a batch on next_batch regardless of event
         # count, and we MUST finish_batch to advance the consumer cursor.
         # Otherwise the consumer wedges on the first empty batch.
+        consumer_mode = _pgque_consumer_mode()
+        subconsumer = _subconsumer_name() if consumer_mode == "subconsumer" else None
+        fail_mode = _worker_fail_mode()
         listen_conn = await aconnect()
         try:
             async with listen_conn.cursor() as cur:
@@ -599,10 +655,25 @@ async def scenario_long_horizon() -> None:
             while not shutdown.is_set():
                 try:
                     async with consumer_conn.cursor() as cur:
-                        await cur.execute(
-                            "SELECT pgque.next_batch(%s, %s) AS batch_id",
-                            (QUEUE_NAME, CONSUMER_NAME),
-                        )
+                        if subconsumer is not None:
+                            # Cooperative path. The 7-arg next_batch_custom
+                            # returns (batch_id, prev_tick_id,
+                            # next_tick_id) — we only need batch_id.
+                            # i_min_lag/i_min_count/i_min_interval=0 ms/1/0 ms
+                            # mean "deliver as soon as the ticker rolls a
+                            # batch with >=1 event for me", matching the
+                            # latency profile of the legacy next_batch path.
+                            await cur.execute(
+                                "SELECT batch_id FROM pgque.next_batch_custom("
+                                "%s, %s, %s, '0 ms'::interval, 1, '0 ms'::interval"
+                                ")",
+                                (QUEUE_NAME, CONSUMER_NAME, subconsumer),
+                            )
+                        else:
+                            await cur.execute(
+                                "SELECT pgque.next_batch(%s, %s) AS batch_id",
+                                (QUEUE_NAME, CONSUMER_NAME),
+                            )
                         row = await cur.fetchone()
                         batch_id = row["batch_id"] if row else None
                 except Exception as exc:
@@ -640,7 +711,7 @@ async def scenario_long_horizon() -> None:
                 try:
                     async with consumer_conn.cursor() as cur:
                         await cur.execute(
-                            "SELECT ev_data FROM pgque.get_batch_events(%s)",
+                            "SELECT ev_id, ev_data FROM pgque.get_batch_events(%s)",
                             (batch_id,),
                         )
                         rows = await cur.fetchall()
@@ -650,13 +721,59 @@ async def scenario_long_horizon() -> None:
                     rows = []
 
                 if rows:
-                    msgs = []
-                    for r in rows:
+                    if fail_mode == "nack-always":
+                        # Route every event to the DLQ. With
+                        # queue_max_retries=0 set at queue setup,
+                        # pgque.nack lands the event in
+                        # pgque.dead_letter on the first call.
+                        # `pgque.message` is a 10-field composite — we
+                        # only need msg_id for the nack lookup, so
+                        # populate the rest with NULL. The bench still
+                        # records subscriber/end-to-end latency on the
+                        # event before nack-ing so the metrics aren't
+                        # silently zero.
+                        msgs = []
+                        for r in rows:
+                            try:
+                                msgs.append(json.loads(r["ev_data"]))
+                            except Exception:
+                                msgs.append({"created_at": _now_iso()})
+                        await asyncio.gather(*(process_one(m) for m in msgs))
                         try:
-                            msgs.append(json.loads(r["ev_data"]))
-                        except Exception:
-                            msgs.append({"created_at": _now_iso()})
-                    await asyncio.gather(*(process_one(m) for m in msgs))
+                            async with consumer_conn.cursor() as cur:
+                                for r in rows:
+                                    await cur.execute(
+                                        "SELECT pgque.nack(%s, ROW("
+                                        "%s::bigint, %s::bigint,"
+                                        " NULL::text, NULL::text,"
+                                        " NULL::int4, NULL::timestamptz,"
+                                        " NULL::text, NULL::text,"
+                                        " NULL::text, NULL::text"
+                                        ")::pgque.message,"
+                                        " '0 seconds'::interval,"
+                                        " 'WORKER_FAIL_MODE=nack-always') AS rc",
+                                        (batch_id, r["ev_id"], batch_id),
+                                    )
+                                    out = await cur.fetchone()
+                                    if out and out["rc"] != 1:
+                                        print(
+                                            f"[pgque] nack returned {out['rc']} for ev_id={r['ev_id']}",
+                                            file=sys.stderr,
+                                        )
+                        except Exception as exc:
+                            print(
+                                f"[pgque] nack failed: {exc}",
+                                file=sys.stderr,
+                            )
+                            await consumer_conn.reconnect()
+                    else:
+                        msgs = []
+                        for r in rows:
+                            try:
+                                msgs.append(json.loads(r["ev_data"]))
+                            except Exception:
+                                msgs.append({"created_at": _now_iso()})
+                        await asyncio.gather(*(process_one(m) for m in msgs))
 
                 try:
                     async with consumer_conn.cursor() as cur:
@@ -783,6 +900,25 @@ async def scenario_long_horizon() -> None:
             )
         except asyncio.TimeoutError:
             pass
+        # Release any in-flight batch the consumer was holding so a
+        # surviving replica (or the next start of this one) doesn't
+        # have to wait for `pgque.maint()` to reap it. In subconsumer
+        # mode this is `unregister_subconsumer(... batch_handling=>1)`,
+        # which routes any active events through retry/DLQ before
+        # removing the member row. Best-effort: failures during
+        # shutdown shouldn't escalate to a non-zero exit.
+        if _pgque_consumer_mode() == "subconsumer":
+            try:
+                async with consumer_conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT pgque.unregister_subconsumer(%s, %s, %s, 1)",
+                        (QUEUE_NAME, CONSUMER_NAME, _subconsumer_name()),
+                    )
+            except Exception as exc:
+                print(
+                    f"[pgque] unregister_subconsumer on shutdown: {exc}",
+                    file=sys.stderr,
+                )
         for c in (
             producer_conn,
             consumer_conn,
