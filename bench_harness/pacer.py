@@ -91,10 +91,18 @@ class FixedRatePacer:
             whole = int(credit)
             if whole < 1:
                 continue
-            credit -= whole
-            n = min(whole, self._cfg.batch_max)
+            # Emit one or more ENQUEUE tokens to drain `whole` jobs of
+            # credit, capped at `batch_max` per token. Looping here
+            # rather than emitting `min(whole, batch_max)` once keeps
+            # the offered rate honest at high target_rate or after a
+            # scheduler stall — otherwise the excess credit beyond
+            # batch_max would be silently dropped.
             try:
-                self._stdin.write(f"ENQUEUE {n}\n")
+                while whole >= 1:
+                    n = min(whole, self._cfg.batch_max)
+                    self._stdin.write(f"ENQUEUE {n}\n")
+                    credit -= n
+                    whole -= n
                 self._stdin.flush()
             except (BrokenPipeError, ValueError):
                 # Adapter exited or stdin closed — stop quietly.
