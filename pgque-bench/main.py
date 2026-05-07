@@ -254,8 +254,18 @@ async def setup_queue(conn: psycopg.AsyncConnection) -> None:
         config.append(("max_retries", "0"))
     async with conn.cursor() as cur:
         for q in queues:
+            # create_queue is idempotent (returns 0 if queue already
+            # exists); subscribe / register_subconsumer are not, so we
+            # try them and absorb the UniqueViolation that fires when a
+            # second replica subscribes the same parent consumer name.
             await cur.execute("SELECT pgque.create_queue(%s)", (q,))
-            await cur.execute("SELECT pgque.subscribe(%s, %s)", (q, CONSUMER_NAME))
+            try:
+                await cur.execute("SELECT pgque.subscribe(%s, %s)", (q, CONSUMER_NAME))
+            except psycopg.errors.UniqueViolation:
+                # Another replica already subscribed this consumer name
+                # to this queue. Fine — that's the shape we want for
+                # multi-replica subconsumer mode.
+                pass
             if sub_mode == "subconsumer":
                 # Each replica registers its own subconsumer under the
                 # shared parent CONSUMER_NAME. `i_convert_normal=>true`
