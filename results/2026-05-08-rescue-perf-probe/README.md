@@ -32,6 +32,8 @@ cell so the snapshot can be captured before teardown.
 
 ## Where the time goes
 
+![Per-query mean exec time, rescue OFF vs ON](plots/rescue_per_query.png)
+
 `snapshots/rescue_*_w256.tsv` are top-50-by-total_exec_time
 extracts from `pg_stat_statements`, scoped to `awa_bench` queries
 only. Top hot-path mean execution times:

@@ -139,7 +139,7 @@ loop takes exactly `PRODUCER_BATCH_MS` and to credit
 `rate × batch_ms / 1000` per iteration; if any iteration runs longer
 than `batch_ms` (COPY latency, sample emission, scheduler stalls)
 the offered rate silently under-meters by the elapsed/period ratio.
-The 2026-05-07 awa-vs-pgque shootout caught the awa-bench adapter
+The 2026-05-07 awa-vs-pgque comparison caught the awa-bench adapter
 under-metering 800 jobs/s offered load by 18–22 % this way.
 
 Reference shape (Rust; equivalent Python in `pgque-bench/main.py`

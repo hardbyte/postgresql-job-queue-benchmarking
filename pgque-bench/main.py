@@ -291,10 +291,9 @@ async def scenario_long_horizon() -> None:
     #
     # Default 128 matches the other bulk-producer adapters (pgmq,
     # pg-boss, absurd) so a stock cross-system run measures pgque on
-    # its documented bulk path rather than one row per `pgque.send()`
-    # — the row-by-row default underplayed pgque's ingest ceiling by
-    # ~50× in the 2026-05-07 shootout. Set to 1 to reproduce the older
-    # row-by-row behaviour; benchmarks targeting peak ingest typically
+    # its documented bulk path rather than one row per `pgque.send()`.
+    # Set to 1 for the row-by-row path; benchmarks targeting peak
+    # ingest typically
     # push this to 1000+ via the env var.
     producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 128))
     producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))

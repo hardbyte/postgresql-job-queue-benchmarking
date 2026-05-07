@@ -7,7 +7,7 @@
 #   - both adapters honour BENCH_QUEUE_COUNT for mixed-queue runs
 set -uo pipefail
 
-OUT_DIR="results/2026-05-08-awa-pgque-shootout-v2"
+OUT_DIR="results/2026-05-08-awa-pgque-comparison-v2"
 RAW_DIR="$OUT_DIR/raw"
 RUN_INDEX="$OUT_DIR/run_index.tsv"
 RUN_LOG="$OUT_DIR/run.log"

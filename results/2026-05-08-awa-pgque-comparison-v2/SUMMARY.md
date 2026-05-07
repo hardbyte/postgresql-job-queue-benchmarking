@@ -1,4 +1,4 @@
-# 2026-05-08 — awa 0.6.0-alpha.6 vs pgque v0.2.0-rc.1 shootout (v2)
+# 2026-05-08 — awa 0.6.0-alpha.6 vs pgque v0.2.0-rc.1 study (v2)
 
 Canonical cross-system rerun after the phase 1–4 follow-up commits
 landed on `bench/2026-05-07-awa-alpha6-pgque-rc1`. The
@@ -33,6 +33,8 @@ weren't:
 | Run window | `2026-05-07T13:06Z` → `2026-05-07T16:26Z` |
 
 ## Throughput sweep (depth-target, 1×N workers)
+
+![Throughput sweep](plots/throughput_sweep.png)
 
 `producer-rate=50000 producer-mode=depth-target target-depth=4000`,
 30 s warmup + 180 s clean phase per cell. pgque sweep runs at
@@ -94,6 +96,8 @@ without touching code.
 
 ### Multi-replica scenarios (replicas=2)
 
+![chaos_crash_recovery_2x](plots/chaos_crash_recovery.png)
+
 `chaos_crash_recovery_2x` — SIGKILL replica 0, restart, recover.
 This is the cell pgque hung on in v1 (replica 1 spinning on NULL
 because the orphan batch was held under the shared consumer name).
@@ -138,6 +142,8 @@ returned, so the orchestrator's `_sleep_or_abort` watch loop saw
 were an unexpected crash. Pre-flipping the state closes the race.
 
 ## Bloat / pressure (awa depth-target, pgque fixed-rate)
+
+![Bloat / pressure scenarios](plots/bloat_pressure.png)
 
 awa runs in depth-target mode (target_depth=2000) so the cells aren't
 constrained by the small-batch fixed-rate ceiling discussed in the v1
@@ -296,6 +302,8 @@ not "successfully completed jobs." `pgque.dead_letter` is the
 canonical signal of terminal failure, and it grows as expected.
 
 ## Mixed-queue (`BENCH_QUEUE_COUNT=4`)
+
+![Mixed-queue throughput](plots/mixed_queue.png)
 
 Same depth-target shape, 4 parallel queues, 5 min clean phase.
 

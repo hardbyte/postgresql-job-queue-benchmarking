@@ -1,4 +1,4 @@
-# 2026-05-07 — awa 0.6.0-alpha.6 vs pgque v0.2.0-rc.1 shootout
+# 2026-05-07 — awa 0.6.0-alpha.6 vs pgque v0.2.0-rc.1 study
 
 A four-hour autonomous run across throughput, chaos, and pressure
 scenarios for the latest alpha/RC of each system, plus a structural

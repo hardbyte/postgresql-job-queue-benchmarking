@@ -115,7 +115,7 @@ Other reference runs:
   — awa pushed to 256 / 512 / 1024 workers
 - [pgmq on `quay.io/tembo/pg17-pgmq`](results/2026-05-02-pgmq-extension-image/SUMMARY.md)
   — pgmq's first published numbers in this repo
-- [awa 0.6.0-alpha.6 vs pgque v0.2.0-rc.1 deep-dive](results/2026-05-08-awa-pgque-shootout-v2/SUMMARY.md)
+- [awa 0.6.0-alpha.6 vs pgque v0.2.0-rc.1 deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md)
   — focused two-system run with the harness's pacing and the
   pgque adapter's subconsumer model in their corrected shapes.
   Includes mixed-queue, mixed-priority, long-soak starvation, DLQ

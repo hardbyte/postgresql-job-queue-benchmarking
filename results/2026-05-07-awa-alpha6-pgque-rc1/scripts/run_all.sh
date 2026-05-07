@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Master runner for the 2026-05-07 awa alpha.6 / pgque v0.2.0-rc.1 shootout.
+# Master runner for the 2026-05-07 awa alpha.6 / pgque v0.2.0-rc.1 study.
 #
 # Each step is a single `uv run bench run ...` invocation. We capture stdout
 # to per-step logs and parse the run-id from the trailing "results at:" line

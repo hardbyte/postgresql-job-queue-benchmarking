@@ -3,7 +3,7 @@
 Two perf-sweep cells (1×128 and 1×256) and one `chaos_crash_recovery`
 cell at replicas=2, against awa `v0.6.0-alpha.7` on top of the same
 bench harness used for the
-[2026-05-08 v2 deep-dive](../2026-05-08-awa-pgque-shootout-v2/SUMMARY.md).
+[2026-05-08 v2 study](../2026-05-08-awa-pgque-comparison-v2/SUMMARY.md).
 Informal — single-cell-per-shape, no statistical run-to-run validation.
 
 | cell | a6 (v2) comp jobs/s | a7 comp jobs/s | Δ |
