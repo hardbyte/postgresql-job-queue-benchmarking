@@ -240,6 +240,14 @@ uv run bench run --systems awa --replicas 1 --worker-count 128 \
 
 - [`matrix.csv`](matrix.csv) — Phase A + B numerical matrix (32 rows)
 - [`throughput_scaling.png`](throughput_scaling.png) — Phase A scaling plot
-- [`idle-in-tx-shared/`](idle-in-tx-shared/), [`idle-in-tx-pgmq/`](idle-in-tx-pgmq/) — Phase C chart sets
-- [`soak-awa-1x128/`](soak-awa-1x128/) — Phase E chart set
+- [`idle-in-tx-shared/plots/throughput.png`](idle-in-tx-shared/plots/throughput.png),
+  [`idle-in-tx-pgmq/plots/throughput.png`](idle-in-tx-pgmq/plots/throughput.png) —
+  Phase C throughput-during-idle-tx for the shared 7-system run and
+  the pgmq run respectively. Other Phase C plots (queue depth,
+  end-to-end p99, dead tuples, wait events) are derivable from
+  `raw.csv` if needed.
+- [`soak-awa-1x128/plots/dead_tuples_faceted.png`](soak-awa-1x128/plots/dead_tuples_faceted.png),
+  [`soak-awa-1x128/plots/end_to_end_p99.png`](soak-awa-1x128/plots/end_to_end_p99.png) —
+  Phase E bloat and p99 trends. The throughput / queue-depth /
+  wait-event plots from this run are also derivable from `raw.csv`.
 - [`run.log`](run.log) — full harness log
