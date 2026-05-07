@@ -222,10 +222,19 @@ for w in 4 16 64 128; do
     --phase warmup=warmup:60s --phase clean=clean:240s
 done
 
-# Phase C — cross-system idle-in-tx
+# Phase C — cross-system idle-in-tx (shared image, 7 systems)
 uv run bench run \
   --systems awa,absurd,pgque,procrastinate,pgboss,river,oban \
   --replicas 1 --worker-count 32 \
+  --producer-rate 1000 --producer-mode depth-target --target-depth 2000 \
+  --phase warmup=warmup:30s --phase baseline=clean:60s \
+  --phase 'idle_tx=idle-in-tx:120s' --phase recovery=clean:60s
+
+# Phase C — pgmq idle-in-tx (Tembo image, separate invocation
+#   because pgmq needs the extension-bearing PG image)
+uv run bench run \
+  --systems pgmq --replicas 1 --worker-count 32 \
+  --pg-image quay.io/tembo/pg17-pgmq:latest \
   --producer-rate 1000 --producer-mode depth-target --target-depth 2000 \
   --phase warmup=warmup:30s --phase baseline=clean:60s \
   --phase 'idle_tx=idle-in-tx:120s' --phase recovery=clean:60s
