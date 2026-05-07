@@ -1,0 +1,108 @@
+{
+  "run_id": "custom-20260503T124736Z-f7d6f5",
+  "scenario": null,
+  "started_at": "2026-05-03T12:52:28+00:00",
+  "cli": [
+    "/home/brian/dev/postgresql-job-queue-benchmarking/.venv/bin/bench",
+    "run",
+    "--systems",
+    "pgmq",
+    "--replicas",
+    "1",
+    "--worker-count",
+    "32",
+    "--pg-image",
+    "quay.io/tembo/pg17-pgmq:latest",
+    "--producer-rate",
+    "1000",
+    "--producer-mode",
+    "depth-target",
+    "--target-depth",
+    "2000",
+    "--phase",
+    "warmup=warmup:30s",
+    "--phase",
+    "baseline=clean:60s",
+    "--phase",
+    "idle_tx=idle-in-tx:120s",
+    "--phase",
+    "recovery=clean:60s"
+  ],
+  "systems": [
+    "pgmq"
+  ],
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 30
+    },
+    {
+      "label": "baseline",
+      "type": "clean",
+      "duration_s": 60
+    },
+    {
+      "label": "idle_tx",
+      "type": "idle-in-tx",
+      "duration_s": 120
+    },
+    {
+      "label": "recovery",
+      "type": "clean",
+      "duration_s": 60
+    }
+  ],
+  "pg_image": "quay.io/tembo/pg17-pgmq:latest",
+  "postgres": {
+    "version": "PostgreSQL 17.4 (Debian 17.4-1.pgdg120+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14) 12.2.0, 64-bit",
+    "settings": {
+      "shared_buffers": "256MB",
+      "work_mem": "8MB",
+      "maintenance_work_mem": "128MB",
+      "autovacuum": "on",
+      "autovacuum_naptime": "1min",
+      "autovacuum_vacuum_cost_delay": "2ms",
+      "autovacuum_vacuum_cost_limit": "200",
+      "autovacuum_vacuum_scale_factor": "0.2",
+      "autovacuum_analyze_scale_factor": "0.1",
+      "max_connections": "400",
+      "synchronous_commit": "on",
+      "wal_level": "replica"
+    }
+  },
+  "host": {
+    "os": "Linux-6.18.21-x86_64-with-glibc2.42",
+    "kernel": "6.18.21",
+    "cpu": "x86_64",
+    "cpu_count": 24,
+    "memory_bytes": 98688577536,
+    "python": "3.14.3",
+    "docker": "Docker version 29.3.1, build v29.3.1",
+    "docker_compose": "Docker Compose version 5.0.2"
+  },
+  "adapters": {
+    "pgmq": {
+      "kind": "descriptor",
+      "system": "pgmq",
+      "event_tables": [
+        "pgmq.q_long_horizon_bench",
+        "pgmq.a_long_horizon_bench"
+      ],
+      "extensions": [
+        "pgmq"
+      ],
+      "version": "pgmq extension via ghcr.io/pgmq/pg18-pgmq:v1.10.0",
+      "schema_version": "1.5.1",
+      "db_name": "pgmq_bench",
+      "started_at": "2026-05-03T12:47:56.010Z",
+      "instance_id": 0,
+      "revision": {
+        "source": "pgmq-bench/main.py",
+        "library": "pgmq extension",
+        "pg_image": "ghcr.io/pgmq/pg18-pgmq:v1.10.0",
+        "pinned_version": "v1.10.0"
+      }
+    }
+  }
+}
