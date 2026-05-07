@@ -320,7 +320,7 @@ fn observer_enabled() -> bool {
 }
 
 fn build_batch_params(
-    queue_name: &str,
+    queue_names: &[String],
     next_seq: &mut i64,
     batch_size: usize,
     priority_pattern: &[i16],
@@ -332,6 +332,10 @@ fn build_batch_params(
     for _ in 0..batch_size {
         let seq = *next_seq;
         let priority = priority_pattern[seq.rem_euclid(priority_pattern.len() as i64) as usize];
+        // Round-robin across queues. With BENCH_QUEUE_COUNT=1 (the
+        // default) this collapses to a single queue and the slice is
+        // length-1.
+        let queue_name = &queue_names[seq.rem_euclid(queue_names.len() as i64) as usize];
         let args = LongHorizonJob {
             seq,
             produced_at_ms: now_epoch_ms(),
@@ -342,7 +346,7 @@ fn build_batch_params(
             insert::params_with(
                 &args,
                 awa_model::InsertOpts {
-                    queue: queue_name.into(),
+                    queue: queue_name.clone().into(),
                     priority,
                     max_attempts,
                     ..Default::default()
@@ -506,7 +510,25 @@ pub async fn run() {
         .map(|(_, storage)| storage.lease_claim_receipts)
         .unwrap_or(false);
 
-    let queue_name = "awa_longhorizon_bench";
+    // BENCH_QUEUE_COUNT lets the bench measure mixed-queue
+    // throughput. Default 1 (single queue named exactly the same as
+    // the legacy bench, so existing scenarios reproduce). With N>1
+    // each replica's producer round-robins across N queues and the
+    // worker registration calls Client::queue() N times — so total
+    // active workers stays roughly worker_count by dividing the
+    // per-queue worker pool.
+    let queue_count: usize = std::env::var("BENCH_QUEUE_COUNT")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(1);
+    let queue_names: Vec<String> = if queue_count == 1 {
+        vec!["awa_longhorizon_bench".to_string()]
+    } else {
+        (0..queue_count)
+            .map(|i| format!("awa_longhorizon_bench_{i}"))
+            .collect()
+    };
     // No clean here — the bench harness starts from a fresh PG, so existing
     // rows are not an issue. For --fast we do see stale rows across runs;
     // that's acceptable for dev iteration.
@@ -558,18 +580,26 @@ pub async fn run() {
         },
         Err(_) => QueueConfig::default().deadline_duration,
     };
-    let client_builder = Client::builder(pool.clone())
-        .priority_aging_interval(priority_aging_interval())
-        .queue(
-            queue_name,
+    // Divide the worker_count across queues so the total active worker
+    // pool stays roughly the same as a single-queue run. min 1 worker
+    // per queue.
+    let per_queue_workers: u32 =
+        ((worker_count as usize) / queue_names.len().max(1)).max(1) as u32;
+    let mut client_builder = Client::builder(pool.clone())
+        .priority_aging_interval(priority_aging_interval());
+    for q in &queue_names {
+        client_builder = client_builder.queue(
+            q.as_str(),
             QueueConfig {
-                max_workers: worker_count,
+                max_workers: per_queue_workers,
                 poll_interval: Duration::from_millis(50),
                 deadline_duration,
                 priority_aging_interval: priority_aging_interval(),
                 ..QueueConfig::default()
             },
-        )
+        );
+    }
+    let client_builder = client_builder
         // The portable bench is measuring queue behavior, not the cost of
         // refreshing runtime/admin snapshots every few seconds.
         .queue_stats_interval(Duration::from_secs(300))
@@ -604,6 +634,7 @@ pub async fn run() {
     let producer_latencies_window = Arc::clone(&producer_latencies);
     let padding = "x".repeat(payload_bytes.saturating_sub(32) as usize);
     let producer_priority_pattern = priority_pattern.clone();
+    let producer_queue_names = queue_names.clone();
     // Build the QueueStorage handle once outside the producer loop;
     // the handle is conceptually pool-scoped, not batch-scoped, and
     // re-creating it per batch would be pure allocator pressure at
@@ -722,7 +753,7 @@ pub async fn run() {
 
             let mut next_seq = seq;
             let params = build_batch_params(
-                queue_name,
+                &producer_queue_names,
                 &mut next_seq,
                 batch_size,
                 &producer_priority_pattern,
@@ -792,61 +823,74 @@ pub async fn run() {
                 }
                 return;
             }
+            let depth_queue_names = queue_names.clone();
             while !depth_shutdown.load(Ordering::Relaxed) {
+                let mut total_available: u64 = 0;
+                let mut total_running: u64 = 0;
+                let mut total_retryable: u64 = 0;
+                let mut total_scheduled: u64 = 0;
                 match storage_engine {
                     super::StorageEngineMode::QueueStorage => {
                         let depth_store = QueueStorage::new(
                             depth_storage.clone().expect("queue storage config missing"),
                         )
                         .expect("Invalid QueueStorageConfig");
-                        // queue_counts is now O(few rows) — reads from
-                        // queue_lanes.available_count / done_entries /
-                        // claim ring instead of scanning ready_entries.
-                        // No staleness window needed.
-                        match depth_store.queue_counts(&depth_pool, queue_name).await {
-                            Ok(counts) => {
-                                queue_depth.store(counts.available as u64, Ordering::Relaxed);
-                                running_depth.store(counts.running as u64, Ordering::Relaxed);
-                                match sqlx::query_as::<_, (i64, i64)>(&format!(
-                                    r#"
-                                    SELECT
-                                        COALESCE(sum(CASE WHEN state = 'retryable' THEN 1 ELSE 0 END), 0)::bigint AS retryable,
-                                        COALESCE(sum(CASE WHEN state = 'scheduled' THEN 1 ELSE 0 END), 0)::bigint AS scheduled
-                                    FROM {}.deferred_jobs
-                                    WHERE queue = $1
-                                    "#,
-                                    depth_store.schema()
-                                ))
-                                .bind(queue_name)
-                                .fetch_one(&depth_pool)
-                                .await
-                                {
-                                    Ok((retryable, scheduled)) => {
-                                        retryable_depth.store(retryable as u64, Ordering::Relaxed);
-                                        scheduled_depth.store(scheduled as u64, Ordering::Relaxed);
-                                    }
-                                    Err(err) => {
-                                        eprintln!("[awa] deferred depth poll failed: {err}");
+                        for q in &depth_queue_names {
+                            match depth_store.queue_counts(&depth_pool, q.as_str()).await {
+                                Ok(counts) => {
+                                    total_available += counts.available as u64;
+                                    total_running += counts.running as u64;
+                                    match sqlx::query_as::<_, (i64, i64)>(&format!(
+                                        r#"
+                                        SELECT
+                                            COALESCE(sum(CASE WHEN state = 'retryable' THEN 1 ELSE 0 END), 0)::bigint AS retryable,
+                                            COALESCE(sum(CASE WHEN state = 'scheduled' THEN 1 ELSE 0 END), 0)::bigint AS scheduled
+                                        FROM {}.deferred_jobs
+                                        WHERE queue = $1
+                                        "#,
+                                        depth_store.schema()
+                                    ))
+                                    .bind(q.as_str())
+                                    .fetch_one(&depth_pool)
+                                    .await
+                                    {
+                                        Ok((retryable, scheduled)) => {
+                                            total_retryable += retryable as u64;
+                                            total_scheduled += scheduled as u64;
+                                        }
+                                        Err(err) => {
+                                            eprintln!("[awa] deferred depth poll failed for {q}: {err}");
+                                        }
                                     }
                                 }
-                            }
-                            Err(err) => {
-                                eprintln!("[awa] queue depth poll failed: {err}");
+                                Err(err) => {
+                                    eprintln!("[awa] queue depth poll failed for {q}: {err}");
+                                }
                             }
                         }
+                        queue_depth.store(total_available, Ordering::Relaxed);
+                        running_depth.store(total_running, Ordering::Relaxed);
+                        retryable_depth.store(total_retryable, Ordering::Relaxed);
+                        scheduled_depth.store(total_scheduled, Ordering::Relaxed);
                     }
                     super::StorageEngineMode::Canonical => {
-                        match poll_canonical_depths(&depth_pool, queue_name).await {
-                            Ok((available, running, retryable, scheduled)) => {
-                                queue_depth.store(available, Ordering::Relaxed);
-                                running_depth.store(running, Ordering::Relaxed);
-                                retryable_depth.store(retryable, Ordering::Relaxed);
-                                scheduled_depth.store(scheduled, Ordering::Relaxed);
-                            }
-                            Err(err) => {
-                                eprintln!("[awa] canonical queue depth poll failed: {err}");
+                        for q in &depth_queue_names {
+                            match poll_canonical_depths(&depth_pool, q.as_str()).await {
+                                Ok((available, running, retryable, scheduled)) => {
+                                    total_available += available;
+                                    total_running += running;
+                                    total_retryable += retryable;
+                                    total_scheduled += scheduled;
+                                }
+                                Err(err) => {
+                                    eprintln!("[awa] canonical queue depth poll failed for {q}: {err}");
+                                }
                             }
                         }
+                        queue_depth.store(total_available, Ordering::Relaxed);
+                        running_depth.store(total_running, Ordering::Relaxed);
+                        retryable_depth.store(total_retryable, Ordering::Relaxed);
+                        scheduled_depth.store(total_scheduled, Ordering::Relaxed);
                     }
                 }
                 // Tight loop so the producer's depth-target backoff

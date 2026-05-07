@@ -42,6 +42,32 @@ QUEUE_NAME = "long_horizon_bench"
 CONSUMER_NAME = "bench_consumer"
 
 
+def _queue_count() -> int:
+    """`BENCH_QUEUE_COUNT` (default 1). N>1 makes the adapter use N
+    parallel queues with the producer round-robining across them; the
+    consumer side spawns one ticker + one consumer task per queue.
+    """
+    raw = os.environ.get("BENCH_QUEUE_COUNT")
+    if not raw:
+        return 1
+    try:
+        n = int(raw)
+    except ValueError:
+        return 1
+    return max(1, n)
+
+
+def _queue_names() -> list[str]:
+    """List of queue names this adapter operates on. With N=1 we keep
+    the legacy single name for back-compat (existing scenarios + run
+    ids reproduce); with N>1 we suffix per index.
+    """
+    n = _queue_count()
+    if n == 1:
+        return [QUEUE_NAME]
+    return [f"{QUEUE_NAME}_{i}" for i in range(n)]
+
+
 def _pgque_consumer_mode() -> str:
     """`subconsumer` (default) drives the cooperative path — each replica
     registers a unique subconsumer under the shared parent CONSUMER_NAME
@@ -209,39 +235,42 @@ def install_pgque_sync() -> None:
 
 
 async def setup_queue(conn: psycopg.AsyncConnection) -> None:
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT pgque.create_queue(%s)", (QUEUE_NAME,))
-        await cur.execute("SELECT pgque.subscribe(%s, %s)", (QUEUE_NAME, CONSUMER_NAME))
-        if _pgque_consumer_mode() == "subconsumer":
-            # Each replica registers its own subconsumer under the
-            # shared parent CONSUMER_NAME. `i_convert_normal=>true`
-            # makes this idempotent on a parent that's been used as a
-            # plain consumer before. The cooperative path is what
-            # gives us per-replica batch pointers.
-            await cur.execute(
-                "SELECT pgque.register_subconsumer(%s, %s, %s, true)",
-                (QUEUE_NAME, CONSUMER_NAME, _subconsumer_name()),
-            )
+    queues = _queue_names()
+    sub_mode = _pgque_consumer_mode()
+    config = [
         # Tighten ticker so latency is comparable to other adapters. Defaults
         # are seconds-scale (3s lag, 60s idle) which would make this a wall-
         # clock test of the ticker, not the queue.
-        config = [
-            ("ticker_max_count", "200"),
-            ("ticker_max_lag", "100 milliseconds"),
-            ("ticker_idle_period", "500 milliseconds"),
-        ]
-        if _worker_fail_mode() == "nack-always":
-            # Force every nack to land in the DLQ on first try. Default
-            # is 5 retries before pgque.event_dead() routes to
-            # pgque.dead_letter (see vendor/pgque/sql/pgque.sql:5435).
-            # Param name is `max_retries` not `queue_max_retries` —
-            # pgque.set_queue_config prepends "queue_" automatically.
-            config.append(("max_retries", "0"))
-        for param, value in config:
-            await cur.execute(
-                "SELECT pgque.set_queue_config(%s, %s, %s)",
-                (QUEUE_NAME, param, value),
-            )
+        ("ticker_max_count", "200"),
+        ("ticker_max_lag", "100 milliseconds"),
+        ("ticker_idle_period", "500 milliseconds"),
+    ]
+    if _worker_fail_mode() == "nack-always":
+        # Force every nack to land in the DLQ on first try. Default is
+        # 5 retries before pgque.event_dead() routes to
+        # pgque.dead_letter (see vendor/pgque/sql/pgque.sql:5435). Param
+        # name is `max_retries` not `queue_max_retries` —
+        # pgque.set_queue_config prepends "queue_" automatically.
+        config.append(("max_retries", "0"))
+    async with conn.cursor() as cur:
+        for q in queues:
+            await cur.execute("SELECT pgque.create_queue(%s)", (q,))
+            await cur.execute("SELECT pgque.subscribe(%s, %s)", (q, CONSUMER_NAME))
+            if sub_mode == "subconsumer":
+                # Each replica registers its own subconsumer under the
+                # shared parent CONSUMER_NAME. `i_convert_normal=>true`
+                # makes this idempotent on a parent that's been used as
+                # a plain consumer before. The cooperative path is what
+                # gives us per-replica batch pointers.
+                await cur.execute(
+                    "SELECT pgque.register_subconsumer(%s, %s, %s, true)",
+                    (q, CONSUMER_NAME, _subconsumer_name()),
+                )
+            for param, value in config:
+                await cur.execute(
+                    "SELECT pgque.set_queue_config(%s, %s, %s)",
+                    (q, param, value),
+                )
 
 
 async def discover_event_tables(conn: psycopg.AsyncConnection) -> list[str]:
@@ -406,6 +435,8 @@ async def scenario_long_horizon() -> None:
         # "Producer pacing (normative)" for the contract.
         rate_credit = 0.0
         last_credit_tick = loop.time()
+        producer_queues = _queue_names()
+        producer_queue_idx = 0
         pacing_mode = os.environ.get("PRODUCER_PACING", "adapter")
         # stdin reader queue for harness pacing tokens. Reading sync
         # stdin from asyncio requires hand-rolled glue — we do it in a
@@ -522,6 +553,14 @@ async def scenario_long_horizon() -> None:
                     )
                 )
                 seq += 1
+            # Round-robin across BENCH_QUEUE_COUNT queues. With N=1
+            # this collapses to the legacy single-queue path. The
+            # whole batch goes to one queue per dispatch (cheaper send_batch),
+            # but successive batches alternate.
+            target_queue = producer_queues[
+                producer_queue_idx % len(producer_queues)
+            ]
+            producer_queue_idx += 1
             insert_started = time.monotonic()
             try:
                 if batch_count == 1:
@@ -530,7 +569,7 @@ async def scenario_long_horizon() -> None:
                     async with producer_conn.cursor() as cur:
                         await cur.execute(
                             "SELECT pgque.send(%s, %s::text)",
-                            (QUEUE_NAME, payloads[0]),
+                            (target_queue, payloads[0]),
                         )
                 else:
                     # Documented bulk path:
@@ -541,7 +580,7 @@ async def scenario_long_horizon() -> None:
                     async with producer_conn.cursor() as cur:
                         await cur.execute(
                             "SELECT pgque.send_batch(%s, %s, %s::text[])",
-                            (QUEUE_NAME, "default", payloads),
+                            (target_queue, "default", payloads),
                         )
                 elapsed_ms = max(0.0, (time.monotonic() - insert_started) * 1000.0)
                 # Record per-message latency (call-cost / batch-count) so the
@@ -564,10 +603,14 @@ async def scenario_long_horizon() -> None:
     async def ticker_task() -> None:
         # No pg_cron in the bench env; we drive the ticker ourselves. 50ms is
         # well below queue_ticker_max_lag (100ms) so we never pace the ticker.
+        # Iterates over all configured queues each tick so multi-queue
+        # runs don't need extra ticker connections.
+        ticker_queues = _queue_names()
         while not shutdown.is_set():
             try:
                 async with ticker_conn.cursor() as cur:
-                    await cur.execute("SELECT pgque.ticker(%s)", (QUEUE_NAME,))
+                    for q in ticker_queues:
+                        await cur.execute("SELECT pgque.ticker(%s)", (q,))
             except Exception as exc:
                 print(f"[pgque] ticker failed: {exc}", file=sys.stderr)
                 await ticker_conn.reconnect()
@@ -630,7 +673,7 @@ async def scenario_long_horizon() -> None:
             end_to_end_latencies_ms.append((time.monotonic(), end_to_end_latency_ms))
             completed += 1
 
-    async def consumer_task() -> None:
+    async def consumer_task(queue_name: str = QUEUE_NAME) -> None:
         # Per-replica subconsumer (default) or shared single-consumer
         # (legacy) — selected by PGQUE_CONSUMER_MODE. In the default
         # cooperative path each replica has its own batch pointer and
@@ -651,7 +694,7 @@ async def scenario_long_horizon() -> None:
         listen_conn = await aconnect()
         try:
             async with listen_conn.cursor() as cur:
-                await cur.execute(f'LISTEN "pgque_{QUEUE_NAME}"')
+                await cur.execute(f'LISTEN "pgque_{queue_name}"')
             while not shutdown.is_set():
                 try:
                     async with consumer_conn.cursor() as cur:
@@ -667,12 +710,12 @@ async def scenario_long_horizon() -> None:
                                 "SELECT batch_id FROM pgque.next_batch_custom("
                                 "%s, %s, %s, '0 ms'::interval, 1, '0 ms'::interval"
                                 ")",
-                                (QUEUE_NAME, CONSUMER_NAME, subconsumer),
+                                (queue_name, CONSUMER_NAME, subconsumer),
                             )
                         else:
                             await cur.execute(
                                 "SELECT pgque.next_batch(%s, %s) AS batch_id",
-                                (QUEUE_NAME, CONSUMER_NAME),
+                                (queue_name, CONSUMER_NAME),
                             )
                         row = await cur.fetchone()
                         batch_id = row["batch_id"] if row else None
@@ -701,7 +744,7 @@ async def scenario_long_horizon() -> None:
                             try:
                                 listen_conn = await aconnect()
                                 async with listen_conn.cursor() as c2:
-                                    await c2.execute(f'LISTEN "pgque_{QUEUE_NAME}"')
+                                    await c2.execute(f'LISTEN "pgque_{queue_name}"')
                                 break
                             except Exception:
                                 await asyncio.sleep(0.2)
@@ -800,20 +843,24 @@ async def scenario_long_horizon() -> None:
             while not shutdown.is_set():
                 await asyncio.sleep(0.25)
             return
+        depth_queues = _queue_names()
         while not shutdown.is_set():
+            total = 0
             try:
                 async with depth_conn.cursor() as cur:
-                    await cur.execute(
-                        "SELECT pending_events FROM pgque.get_consumer_info(%s, %s)",
-                        (QUEUE_NAME, CONSUMER_NAME),
-                    )
-                    row = await cur.fetchone()
-                    queue_depth = int(row["pending_events"]) if row else 0
+                    for q in depth_queues:
+                        await cur.execute(
+                            "SELECT pending_events FROM pgque.get_consumer_info(%s, %s)",
+                            (q, CONSUMER_NAME),
+                        )
+                        row = await cur.fetchone()
+                        total += int(row["pending_events"]) if row else 0
+                queue_depth = total
             except Exception:
                 await depth_conn.reconnect()
             # Fast poll so the producer's depth-target backoff sees
             # fresh values; matches awa-bench / pgmq-bench / pgboss
-            # cadence. The single get_consumer_info call is cheap.
+            # cadence.
             await asyncio.sleep(0.2)
 
     async def sampler() -> None:
@@ -884,10 +931,18 @@ async def scenario_long_horizon() -> None:
         asyncio.create_task(ticker_task(), name="ticker"),
         asyncio.create_task(maint_task(), name="maint"),
         asyncio.create_task(maint_step2_task(), name="maint_step2"),
-        asyncio.create_task(consumer_task(), name="consumer"),
         asyncio.create_task(depth_poller(), name="depth"),
         asyncio.create_task(sampler(), name="sampler"),
     ]
+    # One consumer task per queue. With BENCH_QUEUE_COUNT=1 (default)
+    # this is just the legacy single consumer; with N>1 each queue
+    # gets its own consumer task that polls next_batch_custom against
+    # its own subconsumer, runs in parallel with the others, and
+    # finishes its own batches.
+    for q in _queue_names():
+        tasks.append(
+            asyncio.create_task(consumer_task(q), name=f"consumer:{q}")
+        )
     try:
         await shutdown.wait()
     finally:
@@ -910,10 +965,11 @@ async def scenario_long_horizon() -> None:
         if _pgque_consumer_mode() == "subconsumer":
             try:
                 async with consumer_conn.cursor() as cur:
-                    await cur.execute(
-                        "SELECT pgque.unregister_subconsumer(%s, %s, %s, 1)",
-                        (QUEUE_NAME, CONSUMER_NAME, _subconsumer_name()),
-                    )
+                    for q in _queue_names():
+                        await cur.execute(
+                            "SELECT pgque.unregister_subconsumer(%s, %s, %s, 1)",
+                            (q, CONSUMER_NAME, _subconsumer_name()),
+                        )
             except Exception as exc:
                 print(
                     f"[pgque] unregister_subconsumer on shutdown: {exc}",

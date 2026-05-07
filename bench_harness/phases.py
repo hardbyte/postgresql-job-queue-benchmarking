@@ -252,6 +252,18 @@ SCENARIOS: dict[str, list[str]] = {
         "warmup=warmup:10m",
         "clean_1=clean:6h",
     ],
+    # Mixed-queue scenario. Pair with `BENCH_QUEUE_COUNT=N` (default 4
+    # if not set, but explicit on the command line is clearer). The
+    # producer round-robins inserts across N queues, the consumer
+    # registers N queue / consumer / subconsumer triples. Two things
+    # we want to measure here: peak per-queue isolation (no per-queue
+    # starvation under fair load) and the engine's per-queue overhead
+    # (does N queues × baseline ≈ 1 queue × N×baseline, or do shared
+    # writers serialise?).
+    "mixed_queue": [
+        "warmup=warmup:30s",
+        "clean_1=clean:5m",
+    ],
     # Replaces the legacy chaos.py `scenario_crash_recovery`. Harsh kill
     # of replica 0, then restart and measure recovery. Pass/fail answers
     # (`jobs_lost`, `recovery_time`) are derived from the shared raw.csv
