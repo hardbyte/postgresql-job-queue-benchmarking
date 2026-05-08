@@ -29,10 +29,11 @@ from pathlib import Path
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
+BENCH_REPO_ROOT = SCRIPT_DIR
+AWA_REPO_ROOT = SCRIPT_DIR.parent / "awa"
 
 
-def _git(args: list[str], cwd: Path = REPO_ROOT) -> str | None:
+def _git(args: list[str], cwd: Path = BENCH_REPO_ROOT) -> str | None:
     try:
         res = subprocess.run(
             ["git", *args],
@@ -48,15 +49,17 @@ def _git(args: list[str], cwd: Path = REPO_ROOT) -> str | None:
 
 def _awa_repo_revision() -> dict[str, Any]:
     """Git state of the awa repo — shared by awa, awa-docker, awa-python."""
-    sha = _git(["rev-parse", "HEAD"])
-    short = _git(["rev-parse", "--short", "HEAD"])
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
-    dirty = bool((_git(["status", "--porcelain"]) or "").strip())
+    sha = _git(["rev-parse", "HEAD"], cwd=AWA_REPO_ROOT)
+    short = _git(["rev-parse", "--short", "HEAD"], cwd=AWA_REPO_ROOT)
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=AWA_REPO_ROOT)
+    tag = _git(["describe", "--tags", "--exact-match", "HEAD"], cwd=AWA_REPO_ROOT)
+    dirty = bool((_git(["status", "--porcelain"], cwd=AWA_REPO_ROOT) or "").strip())
     return {
         "source": "awa repo",
         "git_sha": sha,
         "git_short": short,
         "git_branch": branch,
+        "git_tag": tag,
         "dirty": dirty,
     }
 
@@ -65,7 +68,7 @@ def _pgque_submodule_revision() -> dict[str, Any]:
     """pgque upstream SHA via the submodule pointer."""
     base = _awa_repo_revision()
     sub_path = "pgque-bench/vendor/pgque"
-    status = _git(["submodule", "status", sub_path])
+    status = _git(["submodule", "status", sub_path], cwd=BENCH_REPO_ROOT)
     # `git submodule status` prints " <sha> <path> (<describe>)"; leading
     # char is '-' for uninitialised, '+' for mismatch, space for in-sync.
     submodule_sha: str | None = None
