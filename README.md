@@ -260,7 +260,7 @@ to `bench.py run`, or compose your own with `--phase
 | `pool-exhaustion(idle_conns=N)` | Holds `N` idle connections against the SUT's database for the duration; releases them on phase end. |
 | `repeated-kill(instance=I,period=Ns)` | Periodic SIGKILL + auto-restart of replica `I` every `period`. Composes `kill-worker` / `start-worker`. |
 
-## Wait-event sampling
+## Postgres Diagnostics
 
 Throughput, latency, and bloat answer *that* one system is slower than
 another. **Wait events** answer *why* — the postgres-side reason a
@@ -271,12 +271,20 @@ aggregates non-idle backend snapshots into a per-phase histogram of
 [pg_ash](https://github.com/NikolayS/pg_ash) produces, implemented
 inside the harness so we don't have to swap the postgres image.
 
-Output lands in `raw.csv` (`subject_kind=wait_event`), `summary.json`
-(top-10 events per phase plus `total_active_samples`), and a stacked
-bar plot per system in `index.html`. On by default at 1 s cadence;
-opt out with `--no-wait-events` or tune via
-`--wait-event-sample-every <seconds>`. Primer with the common event
-types and how to read the stack: [`docs/wait-events.md`](docs/wait-events.md).
+The metrics daemon also records `pg_notification_queue_usage()` and active
+transaction context from `pg_stat_activity` during load. Notification queue
+usage lands in `raw.csv` as the cluster metric
+`pg_notification_queue_usage`; active transaction rows land as
+`subject_kind=pg_activity` with `xact_age_s` as the numeric value and the
+backend pid, application name, state, `xact_start`, wait event, and compacted
+query text encoded in the subject.
+
+Wait-event output lands in `raw.csv` (`subject_kind=wait_event`),
+`summary.json` (top-10 events per phase plus `total_active_samples`), and a
+stacked bar plot per system in `index.html`. Wait-event sampling is on by
+default at 1 s cadence; opt out with `--no-wait-events` or tune via
+`--wait-event-sample-every <seconds>`. Primer with the common event types and
+how to read the stack: [`docs/wait-events.md`](docs/wait-events.md).
 
 ## Repo layout
 

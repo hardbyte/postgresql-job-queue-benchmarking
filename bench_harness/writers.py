@@ -308,6 +308,12 @@ def compute_summary(
             # (top-N histogram per phase) and don't fit the generic
             # (median, peak, count) shape — skip them in the bucket pass.
             continue
+        if row.get("subject_kind") == "pg_activity":
+            # Rich active-transaction rows intentionally carry query text
+            # and backend identity in `subject`. They are raw diagnostics,
+            # not summary dimensions; including them here would create a
+            # giant per-query metrics map in summary.json.
+            continue
         instance_id = row.get("instance_id") or ""
         key = (
             row["system"],

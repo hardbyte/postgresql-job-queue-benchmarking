@@ -1023,6 +1023,7 @@ from bench_harness.wait_events import (
     WaitEventSampler,
     aggregate_rows,
 )
+from bench_harness.metrics import activity_subject
 
 
 def test_aggregate_rows_buckets_by_event_pair():
@@ -1150,6 +1151,31 @@ def test_sampler_isolates_phases():
     assert rows[0].wait_event == "tuple"
 
 
+def test_activity_subject_preserves_transaction_context():
+    import json
+    from datetime import datetime, timezone
+
+    subject = activity_subject(
+        pid=123,
+        application_name="pgque-worker",
+        state="active",
+        xact_start=datetime(2026, 5, 8, 0, 0, 0, tzinfo=timezone.utc),
+        wait_event_type="Lock",
+        wait_event="transactionid",
+        query="SELECT  *\nFROM   pgque.receive('orders', 'consumer', 100)",
+    )
+    payload = json.loads(subject)
+    assert payload == {
+        "pid": 123,
+        "application_name": "pgque-worker",
+        "state": "active",
+        "xact_start": "2026-05-08T00:00:00+00:00",
+        "wait_event_type": "Lock",
+        "wait_event": "transactionid",
+        "query": "SELECT * FROM pgque.receive('orders', 'consumer', 100)",
+    }
+
+
 def test_summary_includes_wait_event_block(tmp_path: Path):
     # Cook up a raw.csv with both adapter rows and harness wait-event
     # rows, then run compute_summary and confirm the wait_events block
@@ -1182,6 +1208,20 @@ def test_summary_includes_wait_event_block(tmp_path: Path):
             "clean_1", "clean", "wait_event", "__total__",
             "total_active_samples", "42.0", "60.0",
         ])
+        # Rich pg_stat_activity rows are raw diagnostics. They should stay
+        # out of summary.json so query text does not become a giant metric key.
+        writer.writerow([
+            "test", "awa", "0", "61.0", "2026-05-01T00:01:01Z",
+            "clean_1", "clean", "pg_activity", '{"query":"SELECT 1"}',
+            "xact_age_s", "3.5", "0.0",
+        ])
+        # Notification pressure is a numeric cluster metric and should be
+        # summarized like the other cluster diagnostics.
+        writer.writerow([
+            "test", "awa", "0", "61.0", "2026-05-01T00:01:01Z",
+            "clean_1", "clean", "cluster", "",
+            "pg_notification_queue_usage", "0.125", "0.0",
+        ])
     phases = [parse_phase_spec("clean_1=clean:60s")]
     summary = compute_summary(
         raw_path, run_id="test", scenario=None, phases=phases
@@ -1196,6 +1236,9 @@ def test_summary_includes_wait_event_block(tmp_path: Path):
     assert we["top"][1] == {
         "event_type": "Lock", "event": "tuple", "count": 12,
     }
+    metrics = block["metrics"]
+    assert "pg_notification_queue_usage" in metrics
+    assert "xact_age_s@{\"query\":\"SELECT 1\"}" not in metrics
 
 
 def test_cliconfig_wait_event_defaults():
