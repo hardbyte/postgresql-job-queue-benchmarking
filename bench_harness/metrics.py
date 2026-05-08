@@ -10,7 +10,9 @@ regardless of when each system's run started within that second.
 
 from __future__ import annotations
 
+import json
 import queue
+import re
 import sys
 import threading
 import time
@@ -87,6 +89,26 @@ CROSS JOIN pg_stat_activity
 GROUP BY snap.snapshot_xmin
 """
 
+_NOTIFICATION_QUEUE_USAGE_SQL = """
+SELECT pg_notification_queue_usage()::double precision
+"""
+
+_ACTIVE_XACT_SQL = """
+SELECT
+  pid,
+  application_name,
+  state,
+  xact_start,
+  EXTRACT(EPOCH FROM (now() - xact_start))::double precision AS xact_age_s,
+  wait_event_type,
+  wait_event,
+  query
+FROM pg_stat_activity
+WHERE xact_start IS NOT NULL
+  AND pid <> pg_backend_pid()
+ORDER BY xact_start
+"""
+
 _PGSTATTUPLE_SQL = """
 SELECT dead_tuple_percent, free_percent
 FROM pgstattuple(%s)
@@ -100,6 +122,55 @@ FROM pgstatindex(%s)
 
 def _is_missing_relation(exc: psycopg.Error) -> bool:
     return exc.sqlstate in {"42P01", "42704"}
+
+
+def _compact_query_text(query: object, *, max_len: int = 1000) -> str:
+    """Normalize pg_stat_activity.query for compact raw.csv storage."""
+    if query is None:
+        return ""
+    text = re.sub(r"\s+", " ", str(query)).strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+def activity_subject(
+    *,
+    pid: int,
+    application_name: object,
+    state: object,
+    xact_start: object,
+    wait_event_type: object,
+    wait_event: object,
+    query: object,
+) -> str:
+    """Encode active-transaction context in a stable raw.csv subject string.
+
+    ``Sample.value`` stays numeric (``xact_age_s``), while the requested
+    pg_stat_activity columns that are descriptive rather than numeric live in
+    the subject as compact JSON. Keeping the shape in raw.csv avoids adding a
+    second output format while preserving the query attribution needed during
+    load-run triage.
+    """
+    if hasattr(xact_start, "isoformat"):
+        xact_start_value = xact_start.isoformat()
+    elif xact_start is None:
+        xact_start_value = None
+    else:
+        xact_start_value = str(xact_start)
+    return json.dumps(
+        {
+            "pid": int(pid),
+            "application_name": application_name or "",
+            "state": state or "",
+            "xact_start": xact_start_value,
+            "wait_event_type": wait_event_type,
+            "wait_event": wait_event,
+            "query": _compact_query_text(query),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 class MetricsDaemon(threading.Thread):
@@ -394,6 +465,56 @@ class MetricsDaemon(threading.Thread):
                     subject="",
                     metric="oldest_idle_in_tx_age_s",
                     value=float(oldest_idle_age),
+                )
+
+            try:
+                cur.execute(_NOTIFICATION_QUEUE_USAGE_SQL)
+                row = cur.fetchone()
+            except psycopg.Error:
+                row = None
+            if row is not None:
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_notification_queue_usage",
+                    value=float(row[0]),
+                )
+
+            try:
+                cur.execute(_ACTIVE_XACT_SQL)
+                rows = cur.fetchall()
+            except psycopg.Error:
+                rows = []
+            self._emit(
+                subject_kind="cluster",
+                subject="",
+                metric="active_xact_count",
+                value=float(len(rows)),
+            )
+            for activity in rows:
+                (
+                    pid,
+                    application_name,
+                    state,
+                    xact_start,
+                    xact_age_s,
+                    wait_event_type,
+                    wait_event,
+                    query,
+                ) = activity
+                self._emit(
+                    subject_kind="pg_activity",
+                    subject=activity_subject(
+                        pid=pid,
+                        application_name=application_name,
+                        state=state,
+                        xact_start=xact_start,
+                        wait_event_type=wait_event_type,
+                        wait_event=wait_event,
+                        query=query,
+                    ),
+                    metric="xact_age_s",
+                    value=float(xact_age_s),
                 )
 
     # ── emission helpers ───────────────────────────────────────────────

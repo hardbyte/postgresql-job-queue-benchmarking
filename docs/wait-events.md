@@ -99,14 +99,16 @@ samples during the clean phase. Quick interpretation guide:
 - 1 s sampling cadence misses sub-second contention bursts. Drop
   `--wait-event-sample-every` to e.g. 0.25 if you suspect short-lived
   spikes; the overhead is still negligible.
-- We don't capture `query` text. That would let us attribute waits
-  to specific queries (claim vs ack vs cleanup) but `pg_stat_activity`
-  truncates at `track_activity_query_size` and the cardinality
-  explodes the storage. Follow-up: see issue tagged
-  `wait-events-query-attribution`.
-- Single-PID samples — we don't track `xact_start`, so we can't
-  derive *durations*, only sample counts. Counts are a good enough
-  proxy at fixed cadence.
+- Wait-event rows are still aggregated by `(wait_event_type, wait_event)`,
+  so they do not carry query text. The metrics daemon separately records
+  active transactions in `raw.csv` as `subject_kind=pg_activity`, with
+  `xact_age_s` as the value and pid, application name, state, `xact_start`,
+  wait event, and compacted query text encoded in the subject.
+- `pg_stat_activity.query` is truncated by Postgres at
+  `track_activity_query_size`; the harness also compacts whitespace and
+  caps the stored text so raw samples remain usable over long runs.
+- Notification queue pressure is sampled as the cluster metric
+  `pg_notification_queue_usage`.
 
 ## Disabling
 
