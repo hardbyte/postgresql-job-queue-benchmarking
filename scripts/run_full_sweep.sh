@@ -88,7 +88,7 @@ run_chaos_cell() {
     $extra_args > "$logfile" 2>&1
   local rc=$?
   local ended; ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  local run_dir; run_dir=$(grep -oE '/home[^ ]*results/[A-Za-z]+-[^ ]+' "$logfile" | tail -1 || echo "")
+  local run_dir; run_dir=$(grep -oE '/home[^ ]*results/[A-Za-z0-9_]+-[0-9TZ]+-[a-f0-9]+' "$logfile" | tail -1 || echo "")
   echo -e "${phase}\t${cell_id}\t${replicas}\t${system}\t${run_dir}\t${rc}\t${started}\t${ended}" >> "$RUN_INDEX"
   log "END   ${cell_id} rc=${rc} dir=${run_dir##*/}"
 }
@@ -152,7 +152,7 @@ run_phase_c_cell() {
     $extra_args > "$logfile" 2>&1
   local rc=$?
   local ended; ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  local run_dir; run_dir=$(grep -oE '/home[^ ]*results/[A-Za-z]+-[^ ]+' "$logfile" | tail -1 || echo "")
+  local run_dir; run_dir=$(grep -oE '/home[^ ]*results/[A-Za-z0-9_]+-[0-9TZ]+-[a-f0-9]+' "$logfile" | tail -1 || echo "")
   echo -e "C\t${cell_id}\t${worker_count}\t${system}\t${run_dir}\t${rc}\t${started}\t${ended}" >> "$RUN_INDEX"
   log "END   ${cell_id} rc=${rc} dir=${run_dir##*/}"
 }
