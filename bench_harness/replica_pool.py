@@ -274,6 +274,16 @@ class ReplicaPool:
         timeout_s: float,
     ) -> None:
         proc = slot.process
+        if slot.stop_event is not None:
+            slot.stop_event.set()
+        stdin = getattr(proc, "stdin", None)
+        if stdin is not None and not getattr(stdin, "closed", False):
+            try:
+                stdin.close()
+            except (BrokenPipeError, OSError):
+                # The adapter may already have exited and closed its side of
+                # the harness pacing pipe. Teardown should stay quiet here.
+                pass
         if proc is not None and proc.poll() is None:
             try:
                 proc.send_signal(signal_type)
@@ -292,8 +302,6 @@ class ReplicaPool:
                 )
                 proc.kill()
                 proc.wait()
-        if slot.stop_event is not None:
-            slot.stop_event.set()
         if slot.tailer is not None:
             slot.tailer.join(timeout=2.0)
         # Clear the handle so subsequent checks don't see a stale pid.

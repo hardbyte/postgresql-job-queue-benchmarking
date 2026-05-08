@@ -248,6 +248,7 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         # all adapters honour all of these — undefined keys are no-ops.
         "WORKER_FAIL_MODE",
         "JOB_PRIORITY_PATTERN",
+        "PRIORITY_AGING_MS",
         "JOB_FAIL_FIRST_MOD",
         "JOB_MAX_ATTEMPTS",
         "PGQUE_CONSUMER_MODE",

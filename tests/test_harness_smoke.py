@@ -258,6 +258,7 @@ def test_run_readme_written(tmp_path: Path):
 
 from bench_harness.config import CliConfig, format_validation_error
 from pydantic import ValidationError
+from bench_harness.adapters import AdapterManifest, _base_env
 
 
 def _config_kwargs(**overrides):
@@ -348,6 +349,19 @@ def test_config_accepts_awa_completion_batch_size():
 def test_config_rejects_non_positive_awa_completion_batch_size():
     with pytest.raises(ValidationError):
         CliConfig(**_config_kwargs(awa_completion_batch_size=0))
+
+
+def test_base_env_forwards_priority_aging_ms(monkeypatch):
+    monkeypatch.setenv("PRIORITY_AGING_MS", "5000")
+    manifest = AdapterManifest(
+        system="awa",
+        db_name="awa_bench",
+        event_tables=[],
+        event_indexes=[],
+        extensions=[],
+    )
+    env = _base_env(manifest, {})
+    assert env["PRIORITY_AGING_MS"] == "5000"
 
 
 def test_format_validation_error_is_readable():
@@ -772,6 +786,17 @@ def test_pool_stop_all_is_idempotent():
     pool.stop_all()
     assert pool.slot(0).state is ReplicaState.KILLED
     assert pool.slot(1).state is ReplicaState.STOPPED
+
+
+def test_pool_teardown_closes_stdin_before_waiting():
+    launch, _, procs = _fake_launch_fn()
+    pool = ReplicaPool(system="awa", capacity=1, launch_fn=launch)
+    pool.start_all()
+    stdin = MagicMock()
+    stdin.closed = False
+    procs[0].stdin = stdin
+    pool.stop_all()
+    stdin.close.assert_called_once()
 
 
 # ── kill-worker / start-worker parsing + hooks ──────────────────────────
