@@ -8,6 +8,17 @@ different queue libraries behave when you push them past warm-up — focusing
 on the things that show up in production: latency tail, throughput stability,
 table bloat, and recovery from chaos.
 
+## What the latest run found
+
+Eight Postgres-backed queues, same hardware, same harness. There are three
+shapes of system here (full job queue, visibility-timeout queue,
+event-delivery bus), and within each shape a single library leads. The
+[2026-05-09 sweep](results/2026-05-09-full-sweep/SUMMARY.md) is the
+headline — chaos behaviour, bloat resistance, and a 6 h soak are in there
+alongside throughput.
+
+![Sustained throughput vs worker concurrency](results/2026-05-09-full-sweep/plots/throughput_scaling.png)
+
 ## Feature comparison
 
 Throughput is one shape of the question. The other shape is **what
@@ -39,90 +50,52 @@ DLQ row means jobs are routed there only when the queue's
 something wrong, please open a PR — corrections welcome from the
 maintainers of any of the systems listed.
 
-## Throughput
+## Three shapes of system
 
-![Sustained throughput vs worker concurrency](results/2026-05-02-alpha3-sweep/throughput_scaling.png)
-
-From the
-[2026-05-02 alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md):
-eight systems measured at 4 / 16 / 64 / 128 workers, each routed
-through its documented bulk producer path. Linestyles distinguish
-categories — the three tables below are not a single ranked list.
-
-### Three shapes of system
-
-The systems benchmarked here aren't all the same shape. Comparing peak
-jobs/s across categories is comparing different work, so the headline
-peaks split three ways:
+Comparing peak jobs/s across categories is comparing different work,
+so the headline peaks split three ways. Pick the category that
+matches your problem first, then look at the number inside it.
 
 **Job queues** — per-job lifecycle (claim → run → complete | retry |
 fail | DLQ), per-job retries with backoff, scheduled / priority jobs,
-DLQ. Throughput between members of this group means the same thing.
+DLQ.
 
 | System | Peak (jobs/s) | At |
 |---|---:|---|
-| **awa** | **6,834** | 1×128 w |
-| **pg-boss** | 5,302 | 1×64 w |
-| **river** | 2,522 | 1×128 w |
-| **oban** | 1,142 | 1×16 w |
-| **absurd** | 388 | 1×128 w |
-| **procrastinate** | 270 | flat |
+| **awa** | **14,158** | 1×256 w |
+| pg-boss | 2,387 | 1×64 w |
+| river | 501 | 1×64 w |
+| absurd | 410 | 1×128 w |
+| oban | 284 | 1×64 w |
+| procrastinate | 269 | flat |
 
 **Visibility-timeout queue** — pgmq is SQS-shaped: send, read with
-timeout, ack-or-redeliver. No per-job retry counter, no scheduling,
-you bring the worker. Comparable to a job queue on raw throughput
-only if your real workload doesn't need framework features.
+timeout, ack-or-redeliver. No per-job retry counter, no scheduling.
 
 | System | Peak (jobs/s) | At |
 |---|---:|---|
-| **pgmq** | 13,290 | 1×16 w |
+| **pgmq** | 11,277 | 1×16 w |
 
-**Event-distribution bus** — pgque (PgQ lineage) appends events to a
-log; a coordinator builds *batches* on a ticker; consumer groups pull
-a whole batch at a time and ack the batch, not individual events.
-The throughput it shows is the SQL ceiling for batched ingest-and-ack
-on Postgres, not "queue speed" the way it means for a job queue.
+**Event-distribution bus** — pgque appends events to a log; a
+coordinator builds *batches* on a ticker; consumer groups pull a whole
+batch and ack the batch, not individual events. Per-job work is
+thinner than the job-queue category — the throughput it shows is the
+SQL ceiling for batched ingest-and-ack on Postgres.
 
 | System | Peak (jobs/s) | At |
 |---|---:|---|
-| **pgque** | 22,104 | 1×128 w |
+| **pgque** | 39,898 | 1×256 w |
 
-If you skim the plot and see pgque comfortably above everything else:
-yes, on its own metric, but the work it's doing per "job" is thinner.
-Pick the system whose category matches your actual problem first;
-*then* look at the number inside that category.
+A note on pgque's worker axis: pgque runs a single consumer per
+replica; the `--worker-count` flag controls intra-batch handler
+concurrency, not "more pgque workers." Larger in-flight concurrency
+drains a batch faster and lets the consumer call `next_batch` sooner.
 
-A note on pgque's worker-count axis. pgque is a fan-out bus: every
-registered consumer reads its own copy of every event (consumer-group
-semantics like Kafka), so adding *more consumers* doesn't add
-processing throughput — it adds duplicate processing. Our pgque
-adapter runs a **single consumer** for the whole replica, and the
-harness's `--worker-count` flag controls **intra-batch handler
-concurrency** within that one consumer (how many events from a given
-batch we handle in flight before moving to `finish_batch` and the
-next batch). The scaling curve we plot is real — larger in-flight
-concurrency drains a batch faster and the consumer can call
-`next_batch` sooner — but it isn't measuring "more pgque workers" in
-the way the same axis does for awa, oban, river, etc. The honest
-read of pgque's number is "what a single consumer can ack a batched
-stream at, given enough in-flight handler slots."
-
-Other reference runs:
-- [awa under a 10-minute held writing transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md)
-  with postgres-side wait-event sampling — what limits awa
-  (spoiler: WAL fsync, not lock contention)
-- [awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md)
-  — awa pushed to 256 / 512 / 1024 workers
-- [pgmq on `quay.io/tembo/pg17-pgmq`](results/2026-05-02-pgmq-extension-image/SUMMARY.md)
-  — pgmq's first published numbers in this repo
-- [awa 0.6.0-alpha.6 vs pgque v0.2.0-rc.1 deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md)
-  — focused two-system run with the harness's pacing and the
-  pgque adapter's subconsumer model in their corrected shapes.
-  Includes mixed-queue, mixed-priority, long-soak starvation, DLQ
-  ingest, and a 33 % cost attribution for awa's deadline rescue
-  on the claim hot path. Not a replacement for the all-eight
-  alpha.3 sweep — these two systems got more instrumentation
-  than the others did.
+Earlier reference runs:
+[2026-05-08 awa vs pgque v2 deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md) ·
+[2026-05-02 alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md) ·
+[awa under a 10-minute held writing transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md) ·
+[awa extended scaling (W=256/512/1024)](results/2026-05-01-awa-extended-scaling/SUMMARY.md).
 
 **Author bias:** this repo is owned by the author of
 [awa](https://github.com/hardbyte/awa), one of the systems benchmarked.
@@ -130,44 +103,25 @@ Numbers are reproducible — re-run on your hardware and check.
 
 ## Chaos / correctness
 
-Chaos scenarios run inside the same `bench.py` harness as
-every other workload, as named compositions of phase types. The
-sample-stream metrics, wait-event histograms, and per-phase
-aggregates the steady-state runs produce all carry over; in
-addition the harness derives `jobs_lost` (cumulative
-`enqueue_rate − completion_rate` across the chaos and recovery
-phases) and `chaos_recovery_time_s` (time from end of chaos until
-completion rate re-attains 90% of baseline median) and writes them
-into `summary.json` for the recovery phase. Published so far:
+Chaos scenarios run inside the same `bench.py` harness, as named
+compositions of phase types. Steady-state metrics, wait-event
+histograms, and per-phase aggregates carry over; the harness also
+emits `jobs_lost` and `chaos_recovery_time_s` into the recovery
+phase's `summary.json`.
 
-- [Cross-system multi-phase chaos (alpha.3 sweep)](results/2026-05-02-alpha3-sweep/SUMMARY.md#phase-c--multi-phase-chaos-at-three-topologies)
-  — all 8 systems run sequentially through warmup → baseline →
-  pressure → kill (replica 0 SIGKILL) → restart → recovery, at three
-  topologies (1×64, 2×32, 4×16 replica×workers). The per-topology
-  throughput chart shows each system's behaviour across the kill +
-  restart events; the trend across topologies is "more replicas →
-  smaller visible kill dip", as you'd expect.
-- [awa under crash_recovery](results/2026-05-02-awa-crash-recovery/SUMMARY.md)
-  — single-system focused run with postgres-side wait-event sampling.
-  Replica 0 SIGKILLed mid-run; throughput stays in the 400-480 jobs/s
-  band across all five phases, wait-event profile invariant.
+The headline picture across all eight adapters is in the
+[2026-05-09 sweep — Phase B](results/2026-05-09-full-sweep/SUMMARY.md#chaos-suite--phase-b)
+(40 cells, 5 scenarios × 8 systems). Three systems recover from every
+chaos scenario; the other five hit zero on at least one. The
+per-adapter audits in the same run name the root causes.
 
-Available chaos scenarios:
-
-| Scenario | What it exercises |
-|---|---|
-| `chaos_crash_recovery` | Kill replica 0, restart, recover. Pair with `--replicas >= 2`. |
-| `chaos_postgres_restart` | Stop and restart Postgres mid-run; verify reconnect + completion. |
-| `chaos_repeated_kills` | Periodic SIGKILL+restart of replica 0; cumulative no-loss. |
-| `chaos_pg_backend_kill` | `pg_terminate_backend` of the SUT's backends at fixed rate. |
-| `chaos_pool_exhaustion` | Hold N idle connections to verify SUT survives pool pressure. |
-
-The full cross-system chaos picture is tracked under
+The available chaos scenarios are documented in
+[`docs/method.md`](docs/method.md). The cross-system chaos tracker is
 [#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12).
 
 ## Adapters
 
-- [awa](https://github.com/hardbyte/awa) (Rust + Python) — alpha.3 sweep on `0.6.0-alpha.3`; 2026-05-08 deep-dive on `0.6.0-alpha.6` (alpha.7 spotchecked).
+- [awa](https://github.com/hardbyte/awa) (Rust + Python) — 2026-05-09 sweep on `v0.6.0-alpha.9`.
 - [Absurd](https://github.com/earendil-works/absurd) (Python)
 - [Oban](https://github.com/oban-bg/oban) (Elixir)
 - [pg-boss](https://github.com/timgit/pg-boss) (Node.js)
@@ -185,8 +139,9 @@ The full cross-system chaos picture is tracked under
   writing one binary that respects the contract — see
   [CONTRIBUTING_ADAPTERS.md](./CONTRIBUTING_ADAPTERS.md).
 - **One Postgres for everyone.** All systems run against the same
-  `postgres:17.2-alpine` instance with the same `postgres.conf` — no
-  per-system tuning advantage.
+  `postgres:18.3-alpine` instance with the same `postgres.conf` — no
+  per-system tuning advantage. (pgmq is the exception; it requires the
+  Postgres extension and runs on a separate `pg18-pgmq` image.)
 - **Long-horizon.** Bloat and latency drift only show up after the first
   few minutes. Default scenarios run 30+ minutes.
 
@@ -216,75 +171,11 @@ Outputs land under `results/<run-id>/<system>/` as `manifest.json` +
 uv run bench compare results/<run-id>
 ```
 
-## Scenarios
+## Method reference
 
-Each named scenario desugars to a phase sequence; pass `--scenario <name>`
-to `bench.py run`, or compose your own with `--phase
-<label>=<type>:<duration>`.
-
-### `bench.py` scenarios
-
-| Scenario | What it exercises |
-|---|---|
-| `idle_in_tx_saturation` | Steady-state baseline → an idle-in-transaction holder takes a writing tx with an XID assigned and pins the cluster xmin → recovery. The classic Postgres bloat trigger. Surfaces how a system holds up when autovacuum can't reclaim dead tuples. |
-| `long_horizon` | Like `idle_in_tx_saturation` but longer, with a second idle-in-tx phase after recovery. Used for bloat-recovery soak studies. |
-| `sustained_high_load` | Baseline → sustained 1.5× offered load → recovery. Tests whether the queue engine collapses or degrades gracefully when producers outpace workers. |
-| `active_readers` | Baseline → 4 overlapping `REPEATABLE READ` connections running repeating scans against the queue's hot tables → recovery. Mirrors the analytics-on-OLTP pattern that pins MVCC horizon without an explicit idle-in-tx. |
-| `event_delivery_matrix` | Balanced compare profile: clean → readers → high-load → recovery. The "broad shape comparison" scenario for cross-system dashboards. |
-| `event_delivery_burst` | Burst / catch-up profile: clean → 45 min of high-load → 30 min recovery. Measures absorption + drain after a sustained oversupply of work. |
-| `fleet_steady_state` | Multi-replica steady-state. Pair with `--replicas >= 2`. |
-| `soak` | Warmup + 6 hours clean. Used to detect slow drift that shorter runs miss. |
-| `crash_recovery` | Clean → SIGKILL replica 0 → restart → recovery. Pair with `--replicas >= 2` for a meaningful "fleet covers the kill" measurement; single-replica still works but the recovery phase just measures time-to-empty. |
-| `crash_recovery_under_load` | `crash_recovery` with a high-load phase before the kill, so the fleet is already under backlog pressure. Pair with `--replicas >= 2`. |
-| `chaos_crash_recovery` | Warmup → baseline → SIGKILL replica 0 → restart → recovery. Aggregates `jobs_lost` and `chaos_recovery_time_s` into `summary.json`. |
-| `chaos_postgres_restart` | Stop + start the Postgres container mid-run; SUT must reconnect and drain. |
-| `chaos_repeated_kills` | Periodic SIGKILL+restart of replica 0 across a sustained chaos phase. |
-| `chaos_pg_backend_kill` | Steady stream of `pg_terminate_backend` against the SUT's connections. |
-| `chaos_pool_exhaustion` | Hold 300 idle connections to pressure the SUT's pool sizing. |
-| `mixed_queue` | Multi-queue run; pair with `BENCH_QUEUE_COUNT=N` to spawn N parallel queues. Producer round-robins inserts; consumer side registers N queue subscriptions. Tests per-queue isolation and engine-side per-queue overhead. |
-
-### Phase types (compose your own)
-
-| Phase type | What it does |
-|---|---|
-| `warmup` | Steady producer load for absorbing startup artifacts; samples are excluded from the summary. |
-| `clean` | Steady-state baseline at the configured `--producer-rate`. |
-| `high-load` | Steady producer load multiplied by `--high-load-multiplier` (default 1.5). |
-| `idle-in-tx` | Opens one `BEGIN` + `SELECT txid_current()` connection that holds an XID for the whole phase. Simulates a long-running writing transaction (held xmin → vacuum starvation). |
-| `active-readers` | Opens N (default 4, set via `ACTIVE_READER_COUNT`) `REPEATABLE READ` connections doing repeating scans against the adapter's hot tables. Simulates analytics readers on the OLTP path. |
-| `recovery` | Producer load drops to baseline; the bench measures how the system catches up after a stress phase. |
-| `kill-worker(instance=N)` | SIGKILLs replica N and waits for the configured duration. Used inside `crash_recovery` scenarios. |
-| `start-worker(instance=N)` | Restarts a previously killed replica and watches for re-registration. |
-| `postgres-restart` | `docker compose stop postgres` for half the duration, then `start` for the rest. Drives the harness-managed compose lifecycle. |
-| `pg-backend-kill(rate=N)` | Opens an admin connection that runs `pg_terminate_backend(pid)` against the SUT's database `N` times per second. |
-| `pool-exhaustion(idle_conns=N)` | Holds `N` idle connections against the SUT's database for the duration; releases them on phase end. |
-| `repeated-kill(instance=I,period=Ns)` | Periodic SIGKILL + auto-restart of replica `I` every `period`. Composes `kill-worker` / `start-worker`. |
-
-## Postgres Diagnostics
-
-Throughput, latency, and bloat answer *that* one system is slower than
-another. **Wait events** answer *why* — the postgres-side reason a
-system is bottlenecked, not just whether it is. The harness samples
-`pg_stat_activity` once per second from a dedicated connection and
-aggregates non-idle backend snapshots into a per-phase histogram of
-`(wait_event_type, wait_event)`. Same shape as
-[pg_ash](https://github.com/NikolayS/pg_ash) produces, implemented
-inside the harness so we don't have to swap the postgres image.
-
-The metrics daemon also records `pg_notification_queue_usage()` and active
-transaction context from `pg_stat_activity` during load. Notification queue
-usage lands in `raw.csv` as the cluster metric
-`pg_notification_queue_usage`; active transaction rows land as
-`subject_kind=pg_activity` with `xact_age_s` as the numeric value and the
-backend pid, application name, state, `xact_start`, wait event, and compacted
-query text encoded in the subject.
-
-Wait-event output lands in `raw.csv` (`subject_kind=wait_event`),
-`summary.json` (top-10 events per phase plus `total_active_samples`), and a
-stacked bar plot per system in `index.html`. Wait-event sampling is on by
-default at 1 s cadence; opt out with `--no-wait-events` or tune via
-`--wait-event-sample-every <seconds>`. Primer with the common event types and
-how to read the stack: [`docs/wait-events.md`](docs/wait-events.md).
+Scenarios, phase types, and Postgres-side diagnostics (wait events,
+notification queue usage, active transactions) are documented in
+[`docs/method.md`](docs/method.md).
 
 ## Repo layout
 

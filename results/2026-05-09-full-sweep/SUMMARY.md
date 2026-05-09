@@ -1,52 +1,31 @@
 # 2026-05-09 — full cross-system sweep (eight adapters, pg18)
 
-The first full eight-adapter sweep on PostgreSQL 18, run end-to-end
-against the post-PR-#23 harness with the post-PR-#25 diagnostics.
-Supersedes the [2026-05-02 alpha.3](../2026-05-02-alpha3-sweep/SUMMARY.md)
-and [2026-05-03 alpha.4](../2026-05-03-alpha4-sweep/SUMMARY.md) sweeps
-as the headline reference.
+Eight Postgres-backed queues, same hardware, same harness, on
+PostgreSQL 18. Supersedes the
+[2026-05-02 alpha.3](../2026-05-02-alpha3-sweep/SUMMARY.md) and
+[2026-05-03 alpha.4](../2026-05-03-alpha4-sweep/SUMMARY.md) sweeps as
+the headline reference.
 
-This run picks up the operator-honest awa configuration from the v2
-study (deadline rescue on, library default) and the pgque
-`subconsumer` consumer-mode default established there. The other six
-adapters — absurd, oban, pgboss, pgmq, procrastinate, river — get
-their first audited cross-system pass on the post-#23 harness.
+The short version:
 
-| | |
-|---|---|
-| awa | `v0.6.0-alpha.9` |
-| pgque | `v0.2.0-rc.1` |
-| pgmq | `ghcr.io/pgmq/pg18-pgmq:v1.11.1` |
-| pg-boss | `12.18.2` |
-| procrastinate | `3.8.1` |
-| river | `v0.35.1` |
-| oban | `2.22.1` |
-| absurd-sdk | `0.3.0` |
-| Postgres | `postgres:18.3-alpine` |
-| Hardware | local NixOS workstation; 4 CPU, 8 GB cgroup limit |
-| Run window | `2026-05-08T22:23Z` → `2026-05-09T~09Z` |
+- Three shapes of system on the same Postgres — comparing peak jobs/s
+  across categories is comparing different work.
+- **Within each shape, one library leads**: awa for full job-queue
+  semantics (14 k jobs/s @ 1×256w), pgque for batched event delivery
+  (40 k), pgmq for SQS-shaped throughput at low worker counts (11 k @
+  1×16w).
+- **Three of eight survive every chaos scenario**: awa, pgque, river.
+  The other five hit zero on at least one.
+- **Five adapters can't gracefully shut down under sustained
+  pressure** — 10 of 32 Phase C cells timed out at the harness's 15 min
+  ceiling. The Phase H audits explain each cluster.
 
-### Divergences from issue [#24](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/24) lock
-
-The issue locked the pg17.2-alpine baseline and a Tembo `pg17-pgmq` image
-SHA. This run bumped Postgres to 18.3-alpine and switched pgmq to the
-new `ghcr.io/pgmq/pg18-pgmq:v1.11.1` image (Tembo's pgmq registry is
-deprecated upstream). The decision was taken at issue prep on
-2026-05-08; per-comment trail in the issue.
-
-The other re-pinned adapters — pg-boss `12.18.2`, procrastinate
-`3.8.1`, river `v0.35.1` — track current upstream patch ranges. oban
-remained at `~> 2.18`, resolving to `2.22.1` (already current within
-the constraint).
+The follow-up issue list at the end of this document is the
+intended takeaway for any of the eight adapter authors.
 
 ## Throughput sweep — Phase A
 
 ![Throughput scaling](plots/throughput_scaling.png)
-
-`producer-rate=50000 producer-mode=depth-target target-depth=4000`,
-30 s warmup + 180 s clean phase per cell. pgque cells run at
-`PRODUCER_BATCH_MAX=1000`; pgmq cells run on its own pg18-pgmq
-image; everything else on stock `postgres:18.3-alpine`.
 
 ### Headline completion rate (median, jobs/s)
 
@@ -105,7 +84,8 @@ pgque dominates the bus category at 39.9 k jobs/s. Same shape as the
 v2 study, larger top-end (the v2 study capped at 28.4 k @ 1×256 on
 pg17.2; pg18 + the same `subconsumer` mode pushes the headline up).
 
-### Phase A.5 attribution A/B cells
+<details>
+<summary>Phase A.5 — attribution A/B cells (awa rescue, pgque shared-mode)</summary>
 
 Three awa cells with `LEASE_DEADLINE_MS=30000` (long enough that
 rescue never fires) at W=64 / 128 / 256, plus one pgque cell with
@@ -113,17 +93,16 @@ rescue never fires) at W=64 / 128 / 256, plus one pgque cell with
 
 **awa rescue overhead**: -7.5 % / -1.3 % / -4.0 % at W=64 / 128 /
 256. The 33 % drop the 2026-05-08 rescue probe attributed at 1×256
-*does not reproduce here*. Either the library default no longer
-fires rescue at this `JOB_WORK_MS=1` shape on alpha.9, or the
-rescue cost is small enough that variance swamps it. Either way, the
-operator-honest cost of `LEASE_DEADLINE_MS=default` on alpha.9 is in
-the noise floor at this worker-count axis. Worth a follow-up issue
-in the awa repo to settle which case applies.
+*does not reproduce here*. Either rescue isn't firing at this
+`JOB_WORK_MS=1` shape on alpha.9, or the cost sits in the noise
+floor at this worker-count axis. Tracked in the follow-ups list.
 
 **pgque shared-mode**: -13.5 % vs `subconsumer` at W=64 single
 replica. Cooperative `FOR UPDATE` contention is a real cost vs the
 per-replica subconsumer pointer path; same direction the v2 study
 documented, similar magnitude.
+
+</details>
 
 ## Chaos suite — Phase B
 
@@ -167,26 +146,10 @@ survived the kill+restart cycle at 103 % of baseline.
 
 ![Bloat summary](plots/bloat_summary.png)
 
-4 scenarios × 8 systems = 32 cells. **22 rc=0, 10 rc=137 (timeout)**.
-The 10 timeouts cluster on the same five adapters — absurd, pgboss,
-procrastinate, river, pgmq — under the two long-running stress
-scenarios (`idle_in_tx`, `event_burst`). The adapter prints the four
-phase-enter markers but the harness then hangs in adapter shutdown.
-
-The Phase H audits explain the cluster:
-
-- **absurd**: hardcoded `claim_timeout=120s` (SDK default) blocks
-  recovery-phase claims for the full timeout; we cap it at 15 min
-  per cell so the driver continues.
-- **pgmq**: no graceful flush of in-flight claimed messages on
-  shutdown; visibility-timeout entries sit on the queue and block
-  next-phase reads.
-- **pgboss**: same chaos path that took it down in Phase B.
-- **procrastinate / river**: similar shape; specifics in the audits.
-
-A harness-side hard "graceful shutdown timeout" would let individual
-adapters fail without taking the whole cell down — tracked as
-follow-up.
+4 scenarios × 8 systems = 32 cells. **22 rc=0, 10 rc=137**: the
+harness's 15 min cell timeout fires when an adapter can't drain or
+shut down cleanly. Five adapters cluster there — see the Phase H
+audits for the per-adapter root cause.
 
 ### Stress / clean completion-rate ratio (only cells that completed)
 
@@ -266,29 +229,18 @@ mode. Recorded as a coverage gap.
 
 ## Long soak — Phase G
 
-awa 1×128, `target-depth=2000`, 6 h clean phase. Wall:
-`2026-05-09T03:12:46Z` → `2026-05-09T09:14:42Z` (6 h 2 min). 4,320
-sample windows.
-
-| metric | median | peak |
-|---|---:|---:|
-| completion_rate | 7,348 jobs/s | 10,786 |
-| enqueue_rate | 7,362 jobs/s | 10,800 |
-| queue_depth | 1,664 | 4,352 |
-| end_to_end p99 | 576 ms | 15,933 |
-| claim p99 | 574 ms | 15,933 |
-
-Steady-state held all six hours. The peak p99 of 15.9 s is the
-warmup spike; the median p99 of 576 ms across the soak is the
-steady-state number.
+awa 1×128, `target-depth=2000`, 6 h clean phase
+(`2026-05-09T03:12:46Z` → `T09:14:42Z`).
 
 ![Soak dead tuples](plots/soak_dead_tuples.png)
 
-### Bloat / autovacuum behaviour
+### Headline: dead tuples stay flat across all relations
 
 `n_dead_tup` peaks across **every** relation stay below 350 rows for
-the entire soak — autovacuum keeps up with the churn. The
-partitioned hot-path tables show the steadiest pattern:
+the entire 6 hours. Autovacuum keeps up with the churn —
+roughly one autovac per partition per minute, steady cadence, no
+late-soak drift. The partitioned hot-path tables show the cleanest
+pattern:
 
 | relation pattern | dead-tuple peak | autovacuum count |
 |---|---:|---:|
@@ -302,11 +254,23 @@ partitioned hot-path tables show the steadiest pattern:
 | `awa.attempt_state` | 31 | 5 |
 | `awa.dlq_entries` | 0 | 0 |
 
-That works out to roughly **one autovac per partition per minute**
-across the 6 hours — a steady cadence with no late-soak drift. The
-six-hour soak doesn't surface any new bloat or autovacuum behaviour
-that the shorter cells miss. awa's append-only-plus-receipt-ring
-shape on alpha.9 is comfortable at 7.3 k jobs/s on this hardware.
+The six-hour soak doesn't surface any new bloat or autovacuum
+behaviour that the shorter cells miss — awa's
+append-only-plus-receipt-ring shape on alpha.9 holds steady at 7.3 k
+jobs/s on this hardware.
+
+### Steady-state numbers
+
+| metric | median | peak |
+|---|---:|---:|
+| completion_rate | 7,348 jobs/s | 10,786 |
+| enqueue_rate | 7,362 jobs/s | 10,800 |
+| queue_depth | 1,664 | 4,352 |
+| end_to_end p99 | 576 ms | 15,933 |
+| claim p99 | 574 ms | 15,933 |
+
+The peak p99 of 15.9 s is the warmup spike; 576 ms is the
+steady-state number across the rest of the soak.
 
 ## Adapter audits — Phase H
 
@@ -327,23 +291,75 @@ Six audits, one per adapter PR #23 didn't touch:
 
 ## Key follow-ups
 
+The list other adapter authors and awa users will scan for. Each
+item links to the audit or section that has the evidence.
+
 1. **pgboss-bench reconnect** — apply the pgque-shaped
    `try-catch-reconnect` to producer / depth / sampler tasks.
    Direct fix for the only two rc=1 cells in the run.
+   ([audit_pgboss.md](audit_pgboss.md))
 2. **absurd-bench `claim_timeout`** — expose as env var, default to
    10 s. Direct fix for the rc=137 cluster.
+   ([audit_absurd.md](audit_absurd.md))
 3. **pgmq-bench consumer batch sizing** — the `qty=1` collapse at
-   high worker counts caps pgmq at the W=16 peak. Worth tracking
-   as a pgmq-bench issue.
+   high worker counts caps pgmq at the W=16 peak.
+   ([audit_pgmq.md](audit_pgmq.md))
 4. **oban / river `PRODUCER_BATCH_MAX` defaults** — both expose
-   documented bulk paths the bench under-uses; align the default
-   with pgmq / pgboss / awa.
+   documented bulk paths the bench under-uses; align with the other
+   adapters' default of 128.
+   ([audit_oban.md](audit_oban.md), [audit_river.md](audit_river.md))
 5. **awa priority aging** — `aged_completion_rate=0` across a
-   60-min starvation soak.
-6. **Harness graceful-shutdown timeout** — adapter-level shutdown
-   hang shouldn't take the whole cell down.
-7. **DLQ coverage gap** — six of eight adapters don't exercise a
+   60-min starvation soak. Either aging isn't firing on this
+   workload shape on alpha.9, or the alpha.9 completion-key fix
+   didn't tie aging into the completion path.
+6. **awa rescue-cost reproducibility** — the 33 % drop the
+   2026-05-08 rescue probe attributed at 1×256 doesn't reproduce
+   here. Settle whether rescue is firing at all on this workload
+   shape.
+7. **Harness graceful-shutdown timeout** — adapter-level shutdown
+   hang shouldn't take the whole cell down. Today
+   `timeout --signal=KILL 15m` in the wrapper is the only ceiling;
+   a per-adapter `shutdown_grace_s` would let the harness fail the
+   *cell* with a typed rc instead of swallowing the driver.
+8. **DLQ coverage gap** — six of eight adapters don't exercise a
    DLQ surface in this bench.
+9. **Mixed-queue isolation plot** — deferred. Today both
+   `mixed_queue_*` cells emit a single rolled-up `subject_kind=adapter`
+   sample, so the per-queue split isn't in `raw.csv`. Lifting it
+   needs per-queue counters in awa-bench and pgque-bench plus a
+   rerun of the two cells.
+
+## Run conditions
+
+| | |
+|---|---|
+| awa | `v0.6.0-alpha.9` |
+| pgque | `v0.2.0-rc.1` |
+| pgmq | `ghcr.io/pgmq/pg18-pgmq:v1.11.1` |
+| pg-boss | `12.18.2` |
+| procrastinate | `3.8.1` |
+| river | `v0.35.1` |
+| oban | `2.22.1` |
+| absurd-sdk | `0.3.0` |
+| Postgres | `postgres:18.3-alpine` |
+| Hardware | local NixOS workstation; 4 CPU, 8 GB cgroup limit |
+| Run window | `2026-05-08T22:23Z` → `2026-05-09T~09Z` |
+
+Phase A cells: `producer-rate=50000 producer-mode=depth-target
+target-depth=4000`, 30 s warmup + 180 s clean per cell. pgque cells
+run at `PRODUCER_BATCH_MAX=1000`; pgmq runs on its own pg18-pgmq
+image; everything else on stock `postgres:18.3-alpine`. Phase B / C
+cell shapes are documented inline above each table.
+
+### Divergences from issue [#24](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/24) lock
+
+The issue locked the pg17.2-alpine baseline and a Tembo `pg17-pgmq`
+image SHA. This run bumped Postgres to 18.3-alpine and switched pgmq
+to the new `ghcr.io/pgmq/pg18-pgmq:v1.11.1` image (Tembo's pgmq
+registry is deprecated upstream). The other re-pinned adapters —
+pg-boss `12.18.2`, procrastinate `3.8.1`, river `v0.35.1` — track
+current upstream patch ranges. oban remained at `~> 2.18`,
+resolving to `2.22.1`.
 
 ## Layout
 
