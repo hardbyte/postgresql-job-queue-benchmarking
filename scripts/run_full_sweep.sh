@@ -18,6 +18,21 @@ PGMQ_IMAGE="ghcr.io/pgmq/pg18-pgmq:v1.11.1"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$MASTER_LOG"; }
 
+# Remove any orphaned adapter containers from prior cells. The harness
+# can leak these when chaos kills/restarts a replica — and they then
+# starve the next cell for postgres connections. Idempotent: safe to
+# call before every cell.
+cleanup_orphans() {
+  local imgs=(absurd-bench pgmq-bench pgque-bench oban-bench river-bench procrastinate-bench pgboss-bench awa-python-bench)
+  local args=()
+  for img in "${imgs[@]}"; do args+=(--filter "ancestor=$img"); done
+  local ids; ids=$(docker ps -q "${args[@]}" 2>/dev/null)
+  if [[ -n "$ids" ]]; then
+    log "  cleanup: removing $(echo "$ids" | wc -l) orphan adapter container(s)"
+    docker rm -f $ids >/dev/null 2>&1 || true
+  fi
+}
+
 run_cell() {
   local phase="$1" cell_id="$2" worker_count="$3" systems="$4" extra_args="$5" extra_env="$6" phases="$7" extra_flags="${8:-}"
   local logfile="$RESULTS_ROOT/logs/${cell_id}.log"
@@ -25,6 +40,7 @@ run_cell() {
     log "SKIP ${cell_id} (already in run_index)"
     return 0
   fi
+  cleanup_orphans
   local started; started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   log "START ${cell_id} W=${worker_count} systems=${systems}"
   # shellcheck disable=SC2086
@@ -76,6 +92,7 @@ run_chaos_cell() {
     log "SKIP ${cell_id} (already in run_index)"
     return 0
   fi
+  cleanup_orphans
   local started; started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   log "START ${cell_id} scenario=${scenario} system=${system} replicas=${replicas} rate=${rate}"
   # shellcheck disable=SC2086
@@ -128,13 +145,16 @@ phase_b() {
 }
 
 # Phase C: bloat / pressure. Custom phase shape per scenario per the issue.
+# Pass an explicit timeout via the 8th positional arg ("7h" for the soak,
+# default 15m for everything else).
 run_phase_c_cell() {
-  local cell_id="$1" system="$2" phases="$3" rate="$4" worker_count="$5" extra_env="$6" extra_args="${7:-}"
+  local cell_id="$1" system="$2" phases="$3" rate="$4" worker_count="$5" extra_env="$6" extra_args="${7:-}" cell_timeout="${8:-15m}"
   local logfile="$RESULTS_ROOT/logs/${cell_id}.log"
   if grep -q "^C	${cell_id}	" "$RUN_INDEX" 2>/dev/null; then
     log "SKIP ${cell_id} (already in run_index)"
     return 0
   fi
+  cleanup_orphans
   local started; started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   log "START ${cell_id} phases=${phases} rate=${rate} W=${worker_count}"
   # awa runs depth-target mode w/ target-depth=2000 per the issue.
@@ -143,7 +163,7 @@ run_phase_c_cell() {
     mode_args="--producer-mode depth-target --target-depth 2000 --producer-rate $rate"
   fi
   # shellcheck disable=SC2086
-  env $extra_env uv run bench run \
+  timeout --signal=KILL "$cell_timeout" env $extra_env uv run bench run \
     --systems "$system" \
     $phases \
     --worker-count "$worker_count" \
@@ -151,6 +171,10 @@ run_phase_c_cell() {
     --skip-build \
     $extra_args > "$logfile" 2>&1
   local rc=$?
+  if [[ $rc -eq 137 ]]; then
+    log "  TIMEOUT (${cell_timeout}); cleaning orphan adapter containers"
+    cleanup_orphans
+  fi
   local ended; ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   local run_dir; run_dir=$(grep -oE '/home[^ ]*results/[A-Za-z0-9_]+-[0-9TZ]+-[a-f0-9]+' "$logfile" | tail -1 || echo "")
   echo -e "C\t${cell_id}\t${worker_count}\t${system}\t${run_dir}\t${rc}\t${started}\t${ended}" >> "$RUN_INDEX"
@@ -205,7 +229,7 @@ phase_e() {
   sed -i 's/^C\tmixed_priority_awa\t/E\tmixed_priority_awa\t/' "$RUN_INDEX"
   run_phase_c_cell "starvation_awa_60min" "awa" \
     "--phase warmup=warmup:30s --phase clean=clean:60m" 800 32 \
-    "JOB_PRIORITY_PATTERN=1,1,1,1,1,1,1,1,1,4" ""
+    "JOB_PRIORITY_PATTERN=1,1,1,1,1,1,1,1,1,4" "" "75m"
   sed -i 's/^C\tstarvation_awa_60min\t/E\tstarvation_awa_60min\t/' "$RUN_INDEX"
 }
 
@@ -224,7 +248,7 @@ phase_f() {
 phase_g() {
   log "==== Phase G: long soak (awa 6h) ===="
   run_phase_c_cell "soak_awa_6h" "awa" \
-    "--phase warmup=warmup:30s --phase clean=clean:6h" 800 128 "" ""
+    "--phase warmup=warmup:30s --phase clean=clean:6h" 800 128 "" "" "7h"
   sed -i 's/^C\tsoak_awa_6h\t/G\tsoak_awa_6h\t/' "$RUN_INDEX"
 }
 
