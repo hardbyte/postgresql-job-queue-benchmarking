@@ -223,15 +223,14 @@ def plot_bloat_summary(rows):
 # ── Phase D DLQ growth from raw.csv ─────────────────────────────────
 def plot_dlq_growth():
     cells = [
-        ("dlq_terminal_awa",   "awa",   "n_live_tup@awa.dlq_entries"),
-        ("dlq_retry_smoke_awa","awa",   "n_live_tup@awa.attempt_state"),
-        ("dlq_terminal_pgque", "pgque", "n_live_tup@pgque.retry_queue"),
+        ("dlq_terminal_awa",   "awa",   "n_live_tup", "awa.dlq_entries"),
+        ("dlq_retry_smoke_awa","awa",   "n_live_tup", "awa.attempt_state"),
+        ("dlq_terminal_pgque", "pgque", "n_live_tup", "pgque.retry_queue"),
     ]
     fig, ax = plt.subplots(figsize=(9, 5))
-    for cell, sys_name, metric in cells:
-        # find run_dir from matrix.json
-        import json
-        idx = json.loads((OUT / "matrix.json").read_text())
+    import json
+    idx = json.loads((OUT / "matrix.json").read_text())
+    for cell, sys_name, metric, subject in cells:
         run_dir = idx.get(cell, {}).get("run_dir")
         if not run_dir:
             continue
@@ -246,6 +245,8 @@ def plot_dlq_growth():
                     continue
                 if r.get("metric") != metric:
                     continue
+                if r.get("subject") != subject:
+                    continue
                 el = fnum(r.get("elapsed_s"))
                 v = fnum(r.get("value"))
                 if el is None or v is None:
@@ -253,7 +254,7 @@ def plot_dlq_growth():
                 ts.append(el)
                 ys.append(v)
         if ts:
-            ax.plot(ts, ys, label=f"{cell} ({metric.split('@')[1]})")
+            ax.plot(ts, ys, label=f"{cell} ({subject})")
     ax.set_xlabel("elapsed (s)")
     ax.set_ylabel("rows (live tuples)")
     ax.set_title("Phase D — DLQ / retry table growth")
@@ -280,10 +281,11 @@ def plot_soak_dead_tuples():
         for r in csv.DictReader(f):
             if r.get("system") != "awa":
                 continue
-            metric = r.get("metric", "")
-            if not metric.startswith("n_dead_tup@"):
+            if r.get("metric") != "n_dead_tup":
                 continue
-            rel = metric.split("@", 1)[1]
+            rel = r.get("subject", "")
+            if not rel:
+                continue
             el = fnum(r.get("elapsed_s"))
             v = fnum(r.get("value"))
             if el is None or v is None:

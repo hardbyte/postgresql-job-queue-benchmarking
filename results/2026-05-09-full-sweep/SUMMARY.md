@@ -266,15 +266,47 @@ mode. Recorded as a coverage gap.
 
 ## Long soak — Phase G
 
-<!-- TODO once the 6h soak completes:
-   - awa 1×128 target-depth=2000 6h headline numbers
-   - dead-tuple plot reading
-   - autovacuum cadence per relation
-   - any p99 / queue-depth drift over the 6 hours
--->
+awa 1×128, `target-depth=2000`, 6 h clean phase. Wall:
+`2026-05-09T03:12:46Z` → `2026-05-09T09:14:42Z` (6 h 2 min). 4,320
+sample windows.
 
-_Pending — soak runs `2026-05-09T03:12Z` → `~09:13Z`. See
-`plots/soak_dead_tuples.png` once landed._
+| metric | median | peak |
+|---|---:|---:|
+| completion_rate | 7,348 jobs/s | 10,786 |
+| enqueue_rate | 7,362 jobs/s | 10,800 |
+| queue_depth | 1,664 | 4,352 |
+| end_to_end p99 | 576 ms | 15,933 |
+| claim p99 | 574 ms | 15,933 |
+
+Steady-state held all six hours. The peak p99 of 15.9 s is the
+warmup spike; the median p99 of 576 ms across the soak is the
+steady-state number.
+
+![Soak dead tuples](plots/soak_dead_tuples.png)
+
+### Bloat / autovacuum behaviour
+
+`n_dead_tup` peaks across **every** relation stay below 350 rows for
+the entire soak — autovacuum keeps up with the churn. The
+partitioned hot-path tables show the steadiest pattern:
+
+| relation pattern | dead-tuple peak | autovacuum count |
+|---|---:|---:|
+| `awa.ready_entries_*` (16 partitions) | 0 | 327–339 |
+| `awa.done_entries_*` (16 partitions) | 0 | 320–331 |
+| `awa.lease_claims_*` (8 partitions) | 126–127 | 304–321 |
+| `awa.lease_claim_closures_*` (8 partitions) | 0 | 300–318 |
+| `awa.queue_lanes` | 338 | 352 |
+| `awa.queue_ring_state` | 78 | 283 |
+| `awa.lease_ring_state` | 113 | 162 |
+| `awa.attempt_state` | 31 | 5 |
+| `awa.dlq_entries` | 0 | 0 |
+
+That works out to roughly **one autovac per partition per minute**
+across the 6 hours — a steady cadence with no late-soak drift. The
+six-hour soak doesn't surface any new bloat or autovacuum behaviour
+that the shorter cells miss. awa's append-only-plus-receipt-ring
+shape on alpha.9 is comfortable at 7.3 k jobs/s on this hardware.
 
 ## Adapter audits — Phase H
 
