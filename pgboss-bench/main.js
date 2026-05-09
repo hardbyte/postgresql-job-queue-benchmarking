@@ -231,55 +231,79 @@ async function scenarioLongHorizon() {
     }
   );
 
+  // Catch connection-loss errors from any boss.* call and let the
+  // task loop continue. Without this, a single FATAL 57P0x from
+  // chaos_postgres_restart / chaos_pg_backend_kill crashed the whole
+  // process at rc=1 (audit_pgboss.md §4) — pg-boss's pg-pool will
+  // reconnect on its own; we just need to not propagate the rejection.
+  const isConnectionLoss = (err) => {
+    if (!err) return false;
+    const code = err.code || (err.cause && err.cause.code);
+    if (code === "57P01" || code === "57P02" || code === "57P03" || code === "ECONNRESET" || code === "ECONNREFUSED") {
+      return true;
+    }
+    const msg = String(err.message || err);
+    return /connection|terminat|shutdown|ECONN/i.test(msg);
+  };
+
   const producerTask = (async () => {
     let nextAt = nowMonoMs();
     while (!shuttingDown) {
-      const targetRate = readProducerRate(producerRate);
-      currentProducerTargetRate = targetRate;
+      try {
+        const targetRate = readProducerRate(producerRate);
+        currentProducerTargetRate = targetRate;
 
-      let batchCount = 0;
-      if (producerMode === "depth-target") {
-        const stats = await boss.getQueueStats(QUEUE_NAME);
-        queueDepth = stats.queuedCount;
-        batchCount = Math.max(0, Math.min(producerBatchMax, targetDepth - queueDepth));
-        if (batchCount === 0) {
-          await sleep(producerBatchMs);
+        let batchCount = 0;
+        if (producerMode === "depth-target") {
+          const stats = await boss.getQueueStats(QUEUE_NAME);
+          queueDepth = stats.queuedCount;
+          batchCount = Math.max(0, Math.min(producerBatchMax, targetDepth - queueDepth));
+          if (batchCount === 0) {
+            await sleep(producerBatchMs);
+            continue;
+          }
+        } else {
+          const now = nowMonoMs();
+          const credit = Math.max(0, ((now - nextAt) * targetRate) / 1000 + 1);
+          batchCount = Math.max(1, Math.min(producerBatchMax, Math.floor(credit)));
+        }
+
+        const jobs = [];
+        for (let i = 0; i < batchCount; i += 1) {
+          seq += 1;
+          jobs.push({
+            data: {
+              seq,
+              enqueued_at_ms: Date.now(),
+              payload_padding: payloadPadding,
+            },
+          });
+        }
+
+        const started = nowMonoMs();
+        await boss.insert(QUEUE_NAME, jobs);
+        const elapsed = nowMonoMs() - started;
+        const perJobLatency = elapsed / Math.max(jobs.length, 1);
+        const sampleTs = nowMonoMs();
+        for (let i = 0; i < jobs.length; i += 1) {
+          producerLatencies.push(sampleTs, perJobLatency);
+        }
+        enqueued += jobs.length;
+
+        if (producerMode === "fixed") {
+          nextAt += Math.round((jobs.length * 1000) / Math.max(targetRate, 1));
+          const sleepFor = Math.max(0, nextAt - nowMonoMs());
+          if (sleepFor > 0) {
+            await sleep(Math.min(sleepFor, producerBatchMs));
+          }
+        }
+      } catch (err) {
+        if (isConnectionLoss(err)) {
+          console.error("[pgboss] producer connection lost; backing off 200ms", err.message || err);
+          await sleep(200);
           continue;
         }
-      } else {
-        const now = nowMonoMs();
-        const credit = Math.max(0, ((now - nextAt) * targetRate) / 1000 + 1);
-        batchCount = Math.max(1, Math.min(producerBatchMax, Math.floor(credit)));
-      }
-
-      const jobs = [];
-      for (let i = 0; i < batchCount; i += 1) {
-        seq += 1;
-        jobs.push({
-          data: {
-            seq,
-            enqueued_at_ms: Date.now(),
-            payload_padding: payloadPadding,
-          },
-        });
-      }
-
-      const started = nowMonoMs();
-      await boss.insert(QUEUE_NAME, jobs);
-      const elapsed = nowMonoMs() - started;
-      const perJobLatency = elapsed / Math.max(jobs.length, 1);
-      const sampleTs = nowMonoMs();
-      for (let i = 0; i < jobs.length; i += 1) {
-        producerLatencies.push(sampleTs, perJobLatency);
-      }
-      enqueued += jobs.length;
-
-      if (producerMode === "fixed") {
-        nextAt += Math.round((jobs.length * 1000) / Math.max(targetRate, 1));
-        const sleepFor = Math.max(0, nextAt - nowMonoMs());
-        if (sleepFor > 0) {
-          await sleep(Math.min(sleepFor, producerBatchMs));
-        }
+        throw err;
       }
     }
   })();
@@ -295,8 +319,16 @@ async function scenarioLongHorizon() {
       return;
     }
     while (!shuttingDown) {
-      const stats = await boss.getQueueStats(QUEUE_NAME);
-      queueDepth = stats.queuedCount;
+      try {
+        const stats = await boss.getQueueStats(QUEUE_NAME);
+        queueDepth = stats.queuedCount;
+      } catch (err) {
+        if (isConnectionLoss(err)) {
+          await sleep(200);
+          continue;
+        }
+        throw err;
+      }
       await sleep(250);
     }
   })();
@@ -307,6 +339,7 @@ async function scenarioLongHorizon() {
     let lastCompleted = completed;
 
     while (!shuttingDown) {
+      try {
       const sampleTs = nowIso();
       const monoNow = nowMonoMs();
       const producer = producerLatencies.percentiles(DEFAULT_SAMPLE_WINDOW_S * 1000, monoNow);
@@ -351,6 +384,13 @@ async function scenarioLongHorizon() {
           value,
           window_s: windowS,
         });
+      }
+      } catch (err) {
+        if (isConnectionLoss(err)) {
+          await sleep(200);
+          continue;
+        }
+        throw err;
       }
 
       await sleep(sampleEveryS * 1000);

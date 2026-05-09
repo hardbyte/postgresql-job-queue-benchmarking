@@ -13,6 +13,7 @@ from pathlib import Path
 from time import monotonic
 
 from absurd_sdk import AsyncAbsurd
+import psycopg
 from psycopg import AsyncConnection, sql
 from psycopg.rows import dict_row
 
@@ -276,8 +277,42 @@ async def scenario_long_horizon() -> None:
     current_total_backlog = 0
     current_producer_target_rate = float(producer_rate)
 
-    producer_conn = await connect()
-    depth_conn = await connect()
+    # Mirrors pgque-bench's ReconnectingConn so the producer/depth tasks
+    # transparently survive chaos cells (postgres-restart, pg_terminate_backend).
+    # Without this absurd's 0% recovery in chaos_postgres_restart_absurd /
+    # chaos_pg_backend_kill_absurd in the 2026-05-09 sweep (audit_absurd.md §6).
+    class ReconnectingConn:
+        __slots__ = ("_conn",)
+
+        def __init__(self, conn: AsyncConnection) -> None:
+            self._conn = conn
+
+        @property
+        def conn(self) -> AsyncConnection:
+            return self._conn
+
+        def cursor(self):
+            return self._conn.cursor()
+
+        async def close(self) -> None:
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+
+        async def reconnect(self) -> None:
+            await self.close()
+            for _ in range(50):
+                if shutdown.is_set():
+                    return
+                try:
+                    self._conn = await connect()
+                    return
+                except Exception:
+                    await asyncio.sleep(0.2)
+
+    producer_conn = ReconnectingConn(await connect())
+    depth_conn = ReconnectingConn(await connect())
     worker_app = build_app(
         QUEUE_NAME,
         loop=loop,
@@ -324,7 +359,11 @@ async def scenario_long_horizon() -> None:
                 )
 
             started = monotonic()
-            await enqueue_batch(producer_conn, QUEUE_NAME, batch)
+            try:
+                await enqueue_batch(producer_conn.conn, QUEUE_NAME, batch)
+            except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
+                await producer_conn.reconnect()
+                continue
             elapsed_ms = (monotonic() - started) * 1000
             sample_ts = loop.time()
             per_job_ms = elapsed_ms / max(len(batch), 1)
@@ -346,7 +385,11 @@ async def scenario_long_horizon() -> None:
                 await asyncio.sleep(0.25)
             return
         while not shutdown.is_set():
-            counts = await count_by_state(depth_conn, QUEUE_NAME)
+            try:
+                counts = await count_by_state(depth_conn.conn, QUEUE_NAME)
+            except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
+                await depth_conn.reconnect()
+                continue
             current_queue_depth = counts.get("pending", 0)
             current_running_depth = counts.get("running", 0)
             current_retryable_depth = counts.get("failed", 0)
@@ -432,10 +475,19 @@ async def scenario_long_horizon() -> None:
                 )
             await asyncio.sleep(sample_every_s)
 
+    # CLAIM_TIMEOUT_SECS — exposes AsyncAbsurd.start_worker(claim_timeout=…),
+    # which the SDK defaults to 120s. That default holds a row-level lock for
+    # 120s after a SIGKILL'd replica, blocking other replicas from claiming
+    # those rows until the lease expires — direct cause of the rc=137 cluster
+    # in 2026-05-09 idle_in_tx / event_burst Phase C cells (audit_absurd.md
+    # §1, §3). 10s is short enough to clear within a chaos-recovery window
+    # and long enough to absorb a worker hiccup.
+    claim_timeout_secs = env_int("CLAIM_TIMEOUT_SECS", 10)
     worker_task = asyncio.create_task(
         worker_app.start_worker(
             concurrency=worker_count,
             poll_interval=POLL_INTERVAL_SECS,
+            claim_timeout=claim_timeout_secs,
         )
     )
     tasks = [

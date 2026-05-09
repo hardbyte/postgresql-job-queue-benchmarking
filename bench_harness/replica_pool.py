@@ -230,11 +230,32 @@ class ReplicaPool:
     def stop_all(self, *, timeout_s: float = 10.0) -> None:
         """Stop every RUNNING replica. Best-effort terminal teardown used
         at the end of run_one_system — idempotent and safe to call even
-        when some replicas were already KILLED or CRASHED mid-run."""
+        when some replicas were already KILLED or CRASHED mid-run.
+
+        Emits a per-replica shutdown breadcrumb to stderr so
+        post-mortem analysis of a `run_full_sweep.sh` rc=137 cell can
+        tell whether the wrapper-script timeout fired during a stuck
+        adapter shutdown vs. somewhere else. The breadcrumb survives
+        in `logs/<cell>.log` even after the wrapper SIGKILLs the
+        driver."""
+        import time as _time
+
         for slot in self._slots:
             if slot.state is ReplicaState.RUNNING:
+                t0 = _time.monotonic()
+                print(
+                    f"[{self.system}] replica {slot.instance_id} stop_all: "
+                    f"sending SIGTERM, grace={timeout_s:.1f}s",
+                    file=sys.stderr,
+                )
                 self._terminate_slot(
                     slot, signal_type=_signal.SIGTERM, timeout_s=timeout_s
+                )
+                elapsed = _time.monotonic() - t0
+                print(
+                    f"[{self.system}] replica {slot.instance_id} stop_all: "
+                    f"exited in {elapsed:.2f}s",
+                    file=sys.stderr,
                 )
                 slot.state = ReplicaState.STOPPED
 
