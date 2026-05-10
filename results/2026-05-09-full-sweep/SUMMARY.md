@@ -8,12 +8,19 @@ the headline reference.
 
 The short version:
 
-- Three shapes of system on the same Postgres — comparing peak jobs/s
-  across categories is comparing different work.
-- **Within each shape, one library leads**: awa for full job-queue
-  semantics (14 k jobs/s @ 1×256w), pgque for batched event delivery
-  (40 k), pgmq for SQS-shaped throughput at low worker counts (11 k @
-  1×16w).
+- **pgque leads at 40 k jobs/s** by stripping the feature surface
+  (no priorities, no aging, no scheduled jobs, no dedup, no rate
+  limiting, no web UI) and using append-only + per-batch ack on the
+  SQL hot path. The next-best system with that minimal surface
+  doesn't exist — pgque is alone at the trade.
+- **awa leads the full-feature systems at 14 k** (priorities + aging,
+  scheduled jobs, dedup, rate limiting, callbacks, web UI). The other
+  six full-feature adapters — pgboss, river, oban, absurd,
+  procrastinate, plus pgmq's stripped-down visibility-timeout — sit
+  materially behind.
+- **pgmq is its own contract** — SQS-shaped (send / read-with-vt /
+  ack-or-redeliver, no per-job retry counter). 11 k jobs/s at 1×16 w
+  and then *anti-scales* down to 3.2 k at 1×256 w.
 - **Three of eight survive every chaos scenario**: awa, pgque, river.
   The other five hit zero on at least one.
 - **Five adapters can't gracefully shut down under sustained
@@ -40,27 +47,57 @@ intended takeaway for any of the eight adapter authors.
 | pgque | 3,439 | 11,505 | 27,719 | 34,433 | **39,898** |
 | pgmq | 3,571 | 11,277 | 10,243 | 6,180 | 3,252 |
 
-### Three shapes of system
+### Two contracts, one trade
 
-The eight systems aren't all the same shape — comparing peak jobs/s
-across categories means comparing different work. The headline peaks
-split three ways.
+Seven of the eight systems are job queues — send a job, a worker
+runs it, the queue tracks retries and dead-lettering. pgmq is the
+exception: SQS-shaped (visibility-timeout, no per-job retry counter,
+no scheduling, no DLQ surface beyond an archive). That's a different
+application contract; treat its number separately.
 
-**Job queues** — per-job lifecycle (claim → run → complete | retry |
-fail | DLQ), per-job retries with backoff, scheduled / priority jobs,
-DLQ.
+Inside the job-queue category, all seven offer the same application
+contract on paper, but they trade two things differently:
 
-| System | Peak (jobs/s) | At |
-|---|---:|---|
-| **awa** | **14,158** | 1×256 w |
-| pg-boss | 2,387 | 1×64 w |
-| river | 501 | 1×64 w |
-| oban | 284 | 1×64 w |
-| absurd | 410 | 1×128 w |
-| procrastinate | 269 | flat |
+- **Feature surface** — what the queue itself gives you out of the
+  box. pgque strips this to retries + DLQ + delayed jobs and skips
+  priorities, aging, scheduling, dedup, rate limiting, and ops UI.
+  awa and the others carry the full surface.
+- **Ack granularity** — pgque acks an entire batch with one row
+  update; the others ack per job. A pgque worker that crashes mid-batch
+  redoes the whole batch on the next claim. Per-job ack costs more SQL
+  per completion but matches finer-grained workloads (long-running,
+  side-effecting jobs).
 
-**Visibility-timeout queue** — pgmq is SQS-shaped: send, read with
-timeout, ack-or-redeliver. No per-job retry counter, no scheduling.
+That trade is what the throughput gap is buying. Sorted by peak
+jobs/s, with the trade flagged:
+
+| System | Peak (jobs/s) | At | Feature surface | Ack granularity |
+|---|---:|---|---|---|
+| **pgque** | **39,898** | 1×256 w | reduced (no priorities / no aging / no cron / no dedup / no rate limit / no UI) | per-batch |
+| **awa** | **14,158** | 1×256 w | full | per-job |
+| pg-boss | 2,387 | 1×64 w | full | per-job |
+| river | 501 | 1×64 w | full | per-job |
+| absurd | 410 | 1×128 w | reduced | per-job |
+| oban | 284 | 1×64 w | full | per-job |
+| procrastinate | 269 | flat | full | per-job |
+
+Reading that table honestly: pgque trades feature surface and
+per-job durability for roughly 3× the throughput of the next-best
+job queue. Whether that's the right trade is workload-specific —
+analytics events that are cheap and idempotent are happy; long-running
+side-effecting jobs prefer per-job ack. **What the awa-vs-pgque gap
+asks is whether awa can adopt pgque's batched-ack hot path *without*
+giving up the feature surface** — tracked in the awa follow-up list.
+
+A note on pgque's worker axis: pgque runs a single consumer per
+replica; `--worker-count` controls in-flight handler concurrency
+within that consumer (how many events from a batch are handled
+in flight before `finish_batch` and the next batch). Larger
+concurrency drains a batch faster. That's a different knob shape
+than awa's worker pool, but it's a knob *within* the job-queue
+category, not evidence of a different category.
+
+#### pgmq — visibility-timeout queue
 
 | System | Peak (jobs/s) | At |
 |---|---:|---|
@@ -70,19 +107,9 @@ pgmq peaks at W=16 then *anti-scales* — 11.3 k → 10.2 k → 6.2 k → 3.2 k
 across W=64 / 128 / 256. The Phase H audit (`audit_pgmq.md`) points
 to the consumer-batch-size formula collapsing to `qty=1` reads at high
 worker counts, which serialises the readers on the underlying
-`FOR UPDATE` lock.
-
-**Event-distribution bus** — pgque (PgQ lineage) appends events to a
-log; a coordinator builds *batches* on a ticker; consumer groups pull
-a whole batch at a time and ack the batch, not individual events.
-
-| System | Peak (jobs/s) | At |
-|---|---:|---|
-| **pgque** | 39,898 | 1×256 w |
-
-pgque dominates the bus category at 39.9 k jobs/s. Same shape as the
-v2 study, larger top-end (the v2 study capped at 28.4 k @ 1×256 on
-pg17.2; pg18 + the same `subconsumer` mode pushes the headline up).
+`FOR UPDATE` lock. The application contract — at-least-once delivery
+via vt-extends, no retry counter — is what makes pgmq its own bucket
+rather than where it lands on a single ranked list.
 
 <details>
 <summary>Phase A.5 — attribution A/B cells (awa rescue, pgque shared-mode)</summary>
@@ -308,26 +335,35 @@ item links to the audit or section that has the evidence.
    documented bulk paths the bench under-uses; align with the other
    adapters' default of 128.
    ([audit_oban.md](audit_oban.md), [audit_river.md](audit_river.md))
-5. **awa priority aging** — `aged_completion_rate=0` across a
+5. **awa: can the batched-ack hot path land without giving up the
+   feature surface?** This is the load-bearing follow-up of the
+   sweep. pgque hits 40 k jobs/s by acking per-batch on an
+   append-only event log. awa already has the append-only ready
+   ring; the gap to close is the per-completion row update. If
+   awa can amortise completions into a batched commit while
+   preserving per-job claim/complete semantics for the fault path,
+   the throughput trade collapses into "you can have the feature
+   surface for free."
+6. **awa priority aging** — `aged_completion_rate=0` across a
    60-min starvation soak. Either aging isn't firing on this
    workload shape on alpha.9, or the alpha.9 completion-key fix
    didn't tie aging into the completion path.
-6. **awa rescue-cost reproducibility** — the 33 % drop the
+7. **awa rescue-cost reproducibility** — the 33 % drop the
    2026-05-08 rescue probe attributed at 1×256 doesn't reproduce
    here. Settle whether rescue is firing at all on this workload
    shape.
-7. **Harness graceful-shutdown timeout** — adapter-level shutdown
+8. **Harness graceful-shutdown timeout** — adapter-level shutdown
    hang shouldn't take the whole cell down. Today
    `timeout --signal=KILL 15m` in the wrapper is the only ceiling;
    a per-adapter `shutdown_grace_s` would let the harness fail the
    *cell* with a typed rc instead of swallowing the driver.
-8. **DLQ coverage gap** — six of eight adapters don't exercise a
+9. **DLQ coverage gap** — six of eight adapters don't exercise a
    DLQ surface in this bench.
-9. **Mixed-queue isolation plot** — deferred. Today both
-   `mixed_queue_*` cells emit a single rolled-up `subject_kind=adapter`
-   sample, so the per-queue split isn't in `raw.csv`. Lifting it
-   needs per-queue counters in awa-bench and pgque-bench plus a
-   rerun of the two cells.
+10. **Mixed-queue isolation plot** — deferred. Today both
+    `mixed_queue_*` cells emit a single rolled-up `subject_kind=adapter`
+    sample, so the per-queue split isn't in `raw.csv`. Lifting it
+    needs per-queue counters in awa-bench and pgque-bench plus a
+    rerun of the two cells.
 
 ## Run conditions
 
