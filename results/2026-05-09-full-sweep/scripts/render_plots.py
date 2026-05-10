@@ -3,6 +3,7 @@
 
 Produces (when source data is present):
   - headline_throughput.png — peak clean completion_rate by contract
+  - latency_at_peak.png     — e2e p99 latency at each system's peak cell
   - throughput_scaling.png  — Phase A peak completion_rate per system across W
   - chaos_summary.png       — Phase B 8x5 heatmap of recovery/baseline ratio
   - bloat_summary.png       — Phase C 8x4 heatmap of stress/clean ratio
@@ -88,13 +89,28 @@ def phase_a_completion_series(rows):
     return series
 
 
-def plot_headline_throughput(rows):
-    series = phase_a_completion_series(rows)
-    peaks = []
-    for system, by_worker in series.items():
-        if not by_worker:
+def phase_a_peak_rows(rows):
+    peaks = {}
+    for r in rows:
+        if r.get("phase") != "A":
             continue
-        worker, rate = max(by_worker.items(), key=lambda item: item[1])
+        if r.get("phase_type") != "clean":
+            continue
+        rate = fnum(r.get("completion_rate_median"))
+        if rate is None:
+            continue
+        system = r.get("system")
+        if system not in peaks or rate > peaks[system][0]:
+            peaks[system] = (rate, r)
+    return {system: row for system, (_, row) in peaks.items()}
+
+
+def plot_headline_throughput(rows):
+    peak_rows = phase_a_peak_rows(rows)
+    peaks = []
+    for system, row in peak_rows.items():
+        rate = fnum(row.get("completion_rate_median"))
+        worker = int(row.get("worker_count") or 0)
         peaks.append((rate, system, worker))
     if not peaks:
         return
@@ -141,6 +157,75 @@ def plot_headline_throughput(rows):
     )
     fig.tight_layout(rect=[0, 0.04, 1, 1])
     fig.savefig(PLOTS / "headline_throughput.png", dpi=140)
+    plt.close(fig)
+
+
+def plot_latency_at_peak(rows):
+    peak_rows = phase_a_peak_rows(rows)
+    records = []
+    missing = []
+    for system, row in peak_rows.items():
+        rate = fnum(row.get("completion_rate_median"))
+        latency = fnum(row.get("end_to_end_p99_ms_median"))
+        worker = int(row.get("worker_count") or 0)
+        if latency is None:
+            missing.append(system.replace("pgboss", "pg-boss"))
+            continue
+        records.append((rate, system, worker, latency))
+    if not records:
+        return
+
+    records.sort()
+    systems = [system for _, system, _, _ in records]
+    latencies = [latency for _, _, _, latency in records]
+    rates = [rate for rate, _, _, _ in records]
+    workers = [worker for _, _, worker, _ in records]
+    colors = [CONTRACT_COLOR[CONTRACT[system]] for system in systems]
+
+    cap_ms = 2_000
+    clipped = [min(latency, cap_ms) for latency in latencies]
+    fig, ax = plt.subplots(figsize=(10, 5.4))
+    y = np.arange(len(systems))
+    for yi, value, latency, color in zip(y, clipped, latencies, colors, strict=True):
+        ax.hlines(yi, 0, value, color=color, linewidth=3, alpha=0.75)
+        marker = ">" if latency > cap_ms else "o"
+        ax.plot(value, yi, marker=marker, color=color, markersize=8)
+    ax.set_yticks(y)
+    ax.set_yticklabels([s.replace("pgboss", "pg-boss") for s in systems])
+    ax.set_xlabel("median end-to-end p99 latency at peak throughput (ms)")
+    ax.set_title("Tail latency at each system's peak throughput")
+    ax.set_xlim(0, cap_ms * 1.12)
+    ax.grid(True, axis="x", alpha=0.25)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    for yi, value, latency, rate, worker in zip(
+        y, clipped, latencies, rates, workers, strict=True
+    ):
+        label = f"{latency:,.0f} ms, {rate:,.0f}/s @ 1x{worker}w"
+        if latency > cap_ms:
+            ax.text(
+                cap_ms - cap_ms * 0.025,
+                yi,
+                label,
+                va="center",
+                ha="right",
+                fontsize=9,
+            )
+        else:
+            ax.text(value + cap_ms * 0.025, yi, label, va="center", fontsize=9)
+
+    handles = [
+        plt.Line2D([0], [0], marker="s", linestyle="", markersize=9, color=color, label=label)
+        for label, color in CONTRACT_COLOR.items()
+    ]
+    ax.legend(handles=handles, loc="upper right", frameon=True)
+    note = "Linear axis clipped at 2s; arrows mark clipped outliers."
+    if missing:
+        note += " No end-to-end p99 emitted at peak for: " + ", ".join(sorted(missing)) + "."
+    ax.text(0, -0.16, note, transform=ax.transAxes, fontsize=9, color="#555")
+    fig.tight_layout(rect=[0, 0.04, 1, 1])
+    fig.savefig(PLOTS / "latency_at_peak.png", dpi=140)
     plt.close(fig)
 
 
@@ -392,6 +477,7 @@ def plot_soak_dead_tuples():
 def main():
     rows = load_matrix()
     plot_headline_throughput(rows)
+    plot_latency_at_peak(rows)
     plot_throughput_scaling(rows)
     plot_chaos_summary(rows)
     plot_bloat_summary(rows)

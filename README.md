@@ -18,6 +18,8 @@ per-cell numbers, chaos behaviour, and bloat resistance.
 
 ![Peak throughput by queue contract](results/2026-05-09-full-sweep/plots/headline_throughput.png)
 
+![Tail latency at each system's peak throughput](results/2026-05-09-full-sweep/plots/latency_at_peak.png)
+
 Headline comparisons from that run:
 
 - **Peak clean throughput:** pgque 39.9 k jobs/s in single-consumer
