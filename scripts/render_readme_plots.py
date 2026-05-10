@@ -247,7 +247,7 @@ def plot_throughput(df: pd.DataFrame, out_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Plot 2: dead tuples total (log scale)
+# Plot 2: dead tuples total
 # ---------------------------------------------------------------------------
 
 

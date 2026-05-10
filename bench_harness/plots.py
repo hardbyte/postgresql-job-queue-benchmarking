@@ -83,7 +83,6 @@ class PlotSpec:
     title: str
     filename_stem: str
     y_label: str
-    log_scale: bool = False
     use_raw_underlay: bool = False
     sum_by_subject: bool = True  # aggregate across subject per system
     subject_kind: str | None = None  # filter to a kind (e.g. "table")
@@ -101,7 +100,6 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="Claim p99 latency",
         filename_stem="claim_p99",
         y_label="claim p99 latency (ms)",
-        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -110,7 +108,6 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="Producer p99 latency",
         filename_stem="producer_p99",
         y_label="producer p99 latency (ms)",
-        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -119,7 +116,6 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="Producer call p99 latency",
         filename_stem="producer_call_p99",
         y_label="producer call p99 latency (ms)",
-        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -128,7 +124,6 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="Subscriber p99 latency",
         filename_stem="subscriber_p99",
         y_label="subscriber p99 latency (ms)",
-        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -137,7 +132,6 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         title="End-to-end p99 latency",
         filename_stem="end_to_end_p99",
         y_label="end-to-end p99 latency (ms)",
-        log_scale=False,
         use_raw_underlay=True,
         subject_kind="adapter",
         sum_by_subject=False,
@@ -350,7 +344,6 @@ def _setup_axes(
     phases: Iterable[Phase],
     title: str,
     y_label: str,
-    log_scale: bool,
 ) -> None:
     phase_list = list(phases)
     total_s = sum(p.duration_s for p in phase_list) or 1
@@ -384,8 +377,6 @@ def _setup_axes(
     ax.xaxis.set_major_formatter(plt.FuncFormatter(_fmt))
     ax.set_xlabel("elapsed time")
     ax.set_xlim(0, total_s)
-    if log_scale:
-        ax.set_yscale("log")
     ax.grid(True, axis="y", linestyle=":", color="#999", alpha=0.4)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -430,7 +421,6 @@ def render_plot(
         phases=phases,
         title=spec.title,
         y_label=spec.y_label,
-        log_scale=spec.log_scale,
     )
     fig.text(
         0.5,
@@ -658,7 +648,6 @@ def render_faceted_dead_tuples(
             phases=phases,
             title=panel_title,
             y_label="n_dead_tup",
-            log_scale=False,
         )
         subject_series: list[tuple[str, list[tuple[float, float]], float]] = []
         subjects = {
