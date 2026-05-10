@@ -14,9 +14,33 @@ Eight Postgres-backed queues, same hardware, same harness. Three
 contracts in the lineup — event bus, job queue, visibility-timeout
 queue — so the throughput list isn't a single ranking. The
 [2026-05-09 sweep](results/2026-05-09-full-sweep/SUMMARY.md) has the
-per-cell numbers, chaos behaviour, bloat resistance, and a 6 h soak.
+per-cell numbers, chaos behaviour, and bloat resistance.
 
-![Sustained throughput vs worker concurrency](results/2026-05-09-full-sweep/plots/throughput_scaling.png)
+![Peak throughput by queue contract](results/2026-05-09-full-sweep/plots/headline_throughput.png)
+
+Headline comparisons from that run:
+
+- **Peak clean throughput:** pgque 39.9 k jobs/s in single-consumer
+  event-bus mode; awa 14.2 k as the fastest full job queue; pgmq
+  11.3 k as a visibility-timeout queue before anti-scaling at higher
+  worker counts.
+- **Chaos recovery:** awa, pgque, and river recover from every
+  scenario. The other five adapters either hit zero or fail to
+  produce recovery samples in at least one chaos cell.
+- **Bloat / pressure:** five adapters time out under at least one
+  sustained-pressure cell; only awa, oban, and pgque complete all
+  four pressure scenarios.
+
+| System | Contract | Chaos recovery | Pressure cells | Notable caveat |
+|---|---|---:|---:|---|
+| awa | job queue | 5/5 | 4/4 | Full job-queue feature surface; fastest job queue in this run. |
+| pgque | event/message bus | 5/5 | 4/4 | Single-consumer mode; batched success ack is a different contract. |
+| river | job queue | 5/5 | 2/4 | Times out in two sustained-pressure cells. |
+| oban | job queue | 4/5 | 4/4 | Handles pressure cells but has lower throughput in this run. |
+| pg-boss | job queue | 3/5 | 2/4 | Postgres-level chaos exits the worker; times out in two pressure cells. |
+| absurd | job queue | 3/5 | 2/4 | Shutdown timeout under pressure. |
+| procrastinate | job queue | 3/5 | 2/4 | Weak repeated-kill recovery; times out in two pressure cells. |
+| pgmq | visibility-timeout queue | 3/5 | 2/4 | Anti-scales past 16 workers and has the active-readers cliff. |
 
 ## Feature comparison
 
@@ -29,25 +53,44 @@ distribution.
 | | awa | Absurd | pg-boss | pgmq | pgque | Oban | Procrastinate | River |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | **Language / runtime** | Rust + Python | Python | Node.js | Postgres extension (Rust core) | Postgres extension (PL/pgSQL) | Elixir | Python | Go |
-| **Postgres extension required** | no | no | no | yes (`pgmq`) | optional (`pg_cron` for `pgque.start()`) | no | no | no |
-| **Producer surface — bulk insert** | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (COPY) |
+| **Postgres extension required** | no | no | no | yes[^pgmq-extension] | optional[^pgque-cron] | no | no | no |
+| **Producer surface — bulk insert** | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓[^river-copy] |
 | **Storage shape on hot path** | append-only + receipt ring | row-mutating | row-mutating | partitioned archive | append-only + ticker | row-mutating | row-mutating | row-mutating |
-| **Priorities** | ✓ (with aging) | — | ✓ | — | — | ✓ | ✓ | ✓ |
-| **Retries with backoff** | ✓ | ✓ | ✓ | (visibility timeout) | ✓ | ✓ | ✓ | ✓ |
-| **Cron / scheduled jobs** | ✓ | — | ✓ | — | (delayed) | ✓ | ✓ | ✓ |
-| **Dead-letter queue** | ✓ (opt-in) | — | (failed-archive) | (archive table) | ✓ | (discarded) | (discarded) | ✓ |
-| **Unique jobs / dedup** | ✓ | — | ✓ (singleton key) | — | — | ✓ | ✓ | ✓ |
-| **Rate limiting per queue** | ✓ | — | ✓ (throttling) | — | — | ✓ (Pro for global) | (concurrency limit) | ✓ |
-| **Callbacks / external waits** | ✓ | (workflow steps) | (event subscription) | — | — | — | — | — |
-| **Web UI for ops** | ✓ (`awa serve`) | — | (3rd party: pgboss-dashboard) | — | — | ✓ (Oban Web, Pro) | (3rd party) | ✓ |
+| **Priorities** | ✓[^awa-priority-aging] | — | ✓ | — | — | ✓ | ✓ | ✓ |
+| **Retries with backoff** | ✓ | ✓ | ✓ | ✓[^pgmq-vt] | ✓ | ✓ | ✓ | ✓ |
+| **Cron / scheduled jobs** | ✓ | — | ✓ | — | ✓[^pgque-delayed] | ✓ | ✓ | ✓ |
+| **Dead-letter queue** | ✓[^awa-dlq] | — | ✓[^pgboss-failed-archive] | ✓[^pgmq-archive] | ✓ | ✓[^discarded-state] | ✓[^discarded-state] | ✓ |
+| **Unique jobs / dedup** | ✓ | — | ✓[^pgboss-singleton] | — | — | ✓ | ✓ | ✓ |
+| **Rate limiting per queue** | ✓ | — | ✓[^pgboss-throttling] | — | — | ✓[^oban-pro-rate-limit] | ✓[^procrastinate-concurrency] | ✓ |
+| **Callbacks / external waits** | ✓ | ✓[^absurd-workflow-steps] | ✓[^pgboss-events] | — | — | — | — | — |
+| **Web UI for ops** | ✓[^awa-serve] | — | —[^pgboss-dashboard] | — | — | —[^oban-web] | —[^procrastinate-third-party-ui] | ✓ |
+
+[^pgmq-extension]: pgmq can also be installed as SQL, but the benchmark and the common packaged distribution use the `pgmq` Postgres extension.
+[^pgque-cron]: pgque itself is PL/pgSQL. `pg_cron` is needed for the convenience `pgque.start()` ticker; callers may drive the ticker themselves instead.
+[^river-copy]: River's fast bulk path uses the Postgres `COPY` protocol.
+[^awa-priority-aging]: awa priorities include aging so lower-priority work is eventually promoted.
+[^pgmq-vt]: pgmq is a visibility-timeout queue: redelivery is controlled by the visibility timeout rather than a job-framework retry policy with counted attempts and backoff.
+[^pgque-delayed]: pgque supports delayed visibility, but not cron-style periodic scheduling.
+[^awa-dlq]: awa DLQ routing is opt-in via `dlq_enabled_by_default` or a per-queue override.
+[^pgboss-failed-archive]: pg-boss keeps failed/expired job history rather than exposing a separate DLQ queue abstraction.
+[^pgmq-archive]: pgmq archives messages into queue-specific archive tables; that is retention/replay storage rather than a job-framework DLQ policy.
+[^discarded-state]: Oban and Procrastinate retain exhausted failures in discarded/failed states rather than moving them to a separate queue table.
+[^pgboss-singleton]: pg-boss deduplication is expressed through singleton keys and singleton windows.
+[^pgboss-throttling]: pg-boss rate limiting is exposed as throttling.
+[^oban-pro-rate-limit]: Oban OSS supports local queue limits; global rate limiting is an Oban Pro feature.
+[^procrastinate-concurrency]: Procrastinate can limit concurrency with locks/queueing policy, but does not expose a named per-queue rate-limit primitive.
+[^absurd-workflow-steps]: Absurd models external waits as durable workflow steps rather than queue-level callbacks.
+[^pgboss-events]: pg-boss exposes job lifecycle events/subscriptions rather than durable external-wait callbacks.
+[^awa-serve]: awa includes the `awa serve` ops UI.
+[^pgboss-dashboard]: pg-boss has third-party dashboards such as `pgboss-dashboard`, not an official bundled UI.
+[^oban-web]: Oban Web is part of Oban Pro.
+[^procrastinate-third-party-ui]: Procrastinate has community/third-party admin surfaces rather than a bundled official UI.
 
 Dashes indicate "not provided as a documented feature out of the box",
 not "impossible". pgmq / pgque in particular are intentionally minimal
-— you build the worker, you choose the lifecycle. "opt-in" on awa's
-DLQ row means jobs are routed there only when the queue's
-`dlq_enabled_by_default` (or per-queue override) is set. If you spot
-something wrong, please open a PR — corrections welcome from the
-maintainers of any of the systems listed.
+— you build the worker, you choose the lifecycle. If you spot something
+wrong, please open a PR — corrections welcome from the maintainers of
+any of the systems listed.
 
 ## What's in the lineup
 

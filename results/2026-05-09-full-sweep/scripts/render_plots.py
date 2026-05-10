@@ -2,6 +2,7 @@
 """Render headline plots for the 2026-05-09 full sweep from matrix.csv.
 
 Produces (when source data is present):
+  - headline_throughput.png — peak clean completion_rate by contract
   - throughput_scaling.png  — Phase A peak completion_rate per system across W
   - chaos_summary.png       — Phase B 8x5 heatmap of recovery/baseline ratio
   - bloat_summary.png       — Phase C 8x4 heatmap of stress/clean ratio
@@ -39,6 +40,18 @@ JOB_QUEUES = ["awa", "absurd", "oban", "pgboss", "procrastinate", "river"]
 VT_QUEUES = ["pgmq"]
 EVENT_BUSES = ["pgque"]
 
+CONTRACT = {
+    **{s: "Job queue" for s in JOB_QUEUES},
+    **{s: "Visibility-timeout queue" for s in VT_QUEUES},
+    **{s: "Event/message bus" for s in EVENT_BUSES},
+}
+
+CONTRACT_COLOR = {
+    "Job queue": "#4E79A7",
+    "Visibility-timeout queue": "#59A14F",
+    "Event/message bus": "#E377C2",
+}
+
 LINE_STYLE = {
     **{s: "-" for s in JOB_QUEUES},
     **{s: ":" for s in VT_QUEUES},
@@ -56,9 +69,7 @@ def fnum(s):
 
 
 # ── Phase A throughput scaling ───────────────────────────────────────
-def plot_throughput_scaling(rows):
-    # We need clean-phase median completion_rate per (system, worker_count)
-    # using only Phase A cells.
+def phase_a_completion_series(rows):
     series = defaultdict(dict)  # system -> {workers: rate}
     for r in rows:
         if r.get("phase") != "A":
@@ -74,6 +85,69 @@ def plot_throughput_scaling(rows):
         if rate is None:
             continue
         series[sys_name][w] = rate
+    return series
+
+
+def plot_headline_throughput(rows):
+    series = phase_a_completion_series(rows)
+    peaks = []
+    for system, by_worker in series.items():
+        if not by_worker:
+            continue
+        worker, rate = max(by_worker.items(), key=lambda item: item[1])
+        peaks.append((rate, system, worker))
+    if not peaks:
+        return
+
+    peaks.sort()
+    systems = [system for _, system, _ in peaks]
+    values = [rate for rate, _, _ in peaks]
+    workers = [worker for _, _, worker in peaks]
+    colors = [CONTRACT_COLOR[CONTRACT[system]] for system in systems]
+
+    fig, ax = plt.subplots(figsize=(10, 5.8))
+    y = np.arange(len(systems))
+    ax.barh(y, values, color=colors, alpha=0.9)
+    ax.set_yticks(y)
+    ax.set_yticklabels([s.replace("pgboss", "pg-boss") for s in systems])
+    ax.set_xlabel("peak median completion rate (jobs/s)")
+    ax.set_title("Peak throughput by queue contract")
+    ax.set_xlim(0, max(values) * 1.16)
+    ax.grid(True, axis="x", alpha=0.25)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    for yi, value, worker in zip(y, values, workers, strict=True):
+        ax.text(
+            value + max(values) * 0.012,
+            yi,
+            f"{value:,.0f} @ 1x{worker}w",
+            va="center",
+            fontsize=9,
+        )
+
+    handles = [
+        plt.Line2D([0], [0], marker="s", linestyle="", markersize=9, color=color, label=label)
+        for label, color in CONTRACT_COLOR.items()
+    ]
+    ax.legend(handles=handles, loc="lower right", frameon=True)
+    ax.text(
+        0,
+        -0.16,
+        "pgque is shown in the benchmark's single-consumer competing-consumers mode; native fan-out is a different contract.",
+        transform=ax.transAxes,
+        fontsize=9,
+        color="#555",
+    )
+    fig.tight_layout(rect=[0, 0.04, 1, 1])
+    fig.savefig(PLOTS / "headline_throughput.png", dpi=140)
+    plt.close(fig)
+
+
+def plot_throughput_scaling(rows):
+    # We need clean-phase median completion_rate per (system, worker_count)
+    # using only Phase A cells.
+    series = phase_a_completion_series(rows)
     if not series:
         return
     fig, ax = plt.subplots(figsize=(9, 6))
@@ -84,13 +158,12 @@ def plot_throughput_scaling(rows):
         xs = [w for w in ws if w in series[s]]
         ys = [series[s][w] for w in xs]
         ax.plot(xs, ys, LINE_STYLE.get(s, "-"), marker="o", label=s, linewidth=2)
-    ax.set_xscale("log", base=2)
-    ax.set_yscale("log")
     ax.set_xticks(ws)
-    ax.get_xaxis().set_major_formatter(plt.matplotlib.ticker.ScalarFormatter())
+    ax.set_xlim(0, max(ws) + 12)
+    ax.set_ylim(bottom=0)
     ax.set_xlabel("worker count (1× replica)")
     ax.set_ylabel("completion rate (jobs/s, median during clean)")
-    ax.set_title("Phase A — throughput scaling (depth-target=4000, producer-rate=50000)")
+    ax.set_title("Clean throughput scaling (depth-target=4000, producer-rate=50000)")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(loc="lower right", ncol=2)
     fig.tight_layout()
@@ -318,6 +391,7 @@ def plot_soak_dead_tuples():
 
 def main():
     rows = load_matrix()
+    plot_headline_throughput(rows)
     plot_throughput_scaling(rows)
     plot_chaos_summary(rows)
     plot_bloat_summary(rows)
