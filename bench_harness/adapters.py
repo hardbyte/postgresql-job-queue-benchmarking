@@ -26,7 +26,7 @@ REPO_ROOT = SCRIPT_DIR
 PG_PORT = 15555
 PG_USER = "bench"
 PG_PASS = "bench"
-DEFAULT_PG_IMAGE = "postgres:17.2-alpine"
+DEFAULT_PG_IMAGE = "postgres:18.3-alpine"
 
 
 def pg_url(dbname: str, host: str = "localhost") -> str:
