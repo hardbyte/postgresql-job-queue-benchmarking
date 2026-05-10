@@ -10,15 +10,11 @@ table bloat, and recovery from chaos.
 
 ## What the latest run found
 
-Eight Postgres-backed queues, same hardware, same harness. Seven are
-job queues; pgmq is the SQS-shaped exception. Inside the job-queue
-category, **pgque leads at 40 k jobs/s** by stripping the feature
-surface (no priorities, no aging, no scheduling, no dedup, no rate
-limit, no UI) and acking per batch instead of per job. **awa leads
-the full-feature systems at 14 k jobs/s.** That gap is the trade
-worth understanding — see the [2026-05-09 sweep](results/2026-05-09-full-sweep/SUMMARY.md)
-for the per-cell numbers, chaos behaviour, bloat resistance, and a
-6 h soak.
+Eight Postgres-backed queues, same hardware, same harness. Three
+contracts in the lineup — event bus, job queue, visibility-timeout
+queue — so the throughput list isn't a single ranking. The
+[2026-05-09 sweep](results/2026-05-09-full-sweep/SUMMARY.md) has the
+per-cell numbers, chaos behaviour, bloat resistance, and a 6 h soak.
 
 ![Sustained throughput vs worker concurrency](results/2026-05-09-full-sweep/plots/throughput_scaling.png)
 
@@ -53,63 +49,62 @@ DLQ row means jobs are routed there only when the queue's
 something wrong, please open a PR — corrections welcome from the
 maintainers of any of the systems listed.
 
-## Two contracts, one trade
+## What's in the lineup
 
-Seven of the eight are job queues — send a job, a worker runs it, the
-queue tracks retries and dead-lettering. pgmq is the exception:
-SQS-shaped (visibility-timeout, no per-job retry counter, no
-scheduling, no DLQ surface beyond an archive). Different application
-contract; treat its number separately.
+Each system maps onto one of three application contracts.
 
-Inside the job-queue category, all seven offer the same application
-contract on paper. They trade two things differently:
+**Job queues** — send a job, a worker runs it, the queue tracks
+retries and dead-lettering: awa, pg-boss, river, oban, absurd,
+procrastinate.
 
-- **Feature surface** — what the queue gives you out of the box.
-  pgque strips this to retries + DLQ + delayed jobs, skipping
-  priorities / aging / scheduled jobs / dedup / rate limiting / UI.
-  awa and the others carry the full surface.
-- **Ack granularity** — pgque acks an entire batch with one row
-  update; the others ack per job. A pgque worker that crashes
-  mid-batch redoes the whole batch on the next claim. Per-job ack
-  costs more SQL per completion but matches finer-grained workloads
-  (long-running, side-effecting jobs).
+**Visibility-timeout queue** — pgmq. Send / read with timeout /
+ack-or-redeliver. No per-job retry counter, no scheduling, no DLQ
+beyond an archive table.
 
-Sorted by peak jobs/s, with the trade flagged:
+**Event/message bus** — pgque (PgQ lineage). Append-only event log,
+ticker forms batch boundaries, multiple consumer groups each track
+a cursor over the shared log
+([upstream](https://github.com/NikolayS/pgque#what-genuinely-differentiates-pgque)
+calls it Kafka-shaped). pgque also runs as a single-consumer
+competing-consumers queue, which is how this bench drives it: one
+consumer per replica, `--worker-count` controls in-flight handler
+concurrency within that consumer.
 
-| System | Peak (jobs/s) | At | Feature surface | Ack granularity |
-|---|---:|---|---|---|
-| **pgque** | **39,898** | 1×256 w | reduced | per-batch |
-| **awa** | **14,158** | 1×256 w | full | per-job |
-| pg-boss | 2,387 | 1×64 w | full | per-job |
-| river | 501 | 1×64 w | full | per-job |
-| absurd | 410 | 1×128 w | reduced | per-job |
-| oban | 284 | 1×64 w | full | per-job |
-| procrastinate | 269 | flat | full | per-job |
+| System | Contract | Peak (jobs/s) | At |
+|---|---|---:|---|
+| **pgque** *(single-consumer mode)* | event bus | **39,898** | 1×256 w |
+| **awa** | job queue | **14,158** | 1×256 w |
+| pgmq | visibility-timeout | 11,277 | 1×16 w |
+| pg-boss | job queue | 2,387 | 1×64 w |
+| river | job queue | 501 | 1×64 w |
+| absurd | job queue | 410 | 1×128 w |
+| oban | job queue | 284 | 1×64 w |
+| procrastinate | job queue | 269 | flat |
 
-Reading honestly: pgque trades feature surface and per-job
-durability for roughly 3× the throughput of the next-best job queue.
-Whether that's the right trade is workload-specific — analytics events
-that are cheap and idempotent are happy with batched ack; long-running
-side-effecting jobs prefer per-job ack and the full feature surface.
+pgque's number is its single-consumer mode; native fan-out across
+multiple consumer groups isn't exercised here. pgmq peaks at 1×16 w
+and anti-scales to 3.2 k at 1×256 w
+([audit](results/2026-05-09-full-sweep/audit_pgmq.md)).
 
-A note on pgque's worker axis: pgque runs a single consumer per
-replica; `--worker-count` controls intra-batch handler concurrency
-within that consumer, not "more pgque workers." Larger in-flight
-concurrency drains a batch faster and lets the consumer call
-`next_batch` sooner. That's a knob shape *within* the job-queue
-category, not evidence of a different category.
+### What pgque trades for the throughput
 
-### pgmq — visibility-timeout queue
+In the bench's single-consumer mode, pgque competes with the job
+queues. Two ways it differs from awa and the other five:
 
-| System | Peak (jobs/s) | At |
-|---|---:|---|
-| **pgmq** | 11,277 | 1×16 w |
+- **Feature surface.** Default install ships retries with backoff,
+  per-message nack, DLQ. No priorities, no aging, no dedup, no rate
+  limiting, no web UI. Delayed delivery (`send_at`) is in
+  `sql/experimental/`.
+- **Ack granularity.** `receive` returns a batch and `ack(batch_id)`
+  finishes the batch in one row update. Failure handling is still
+  per-message via `nack(batch_id, msg_id, retry_after, reason)`. A
+  consumer that crashes mid-batch without acking redoes the whole
+  batch on the next claim.
 
-pgmq peaks at 1×16 w then anti-scales to 3.2 k at 1×256 w (audit at
-[`audit_pgmq.md`](results/2026-05-09-full-sweep/audit_pgmq.md)). Its
-contract — at-least-once via vt-extends, no retry counter — is what
-makes it its own bucket rather than where it lands on a single
-ranked list.
+Whether that fits your workload is workload-specific. Analytics
+events that are cheap and idempotent are comfortable with batched
+ack. Long-running side-effecting jobs prefer the per-job ack the six
+job queues give you.
 
 Earlier reference runs:
 [2026-05-08 awa vs pgque v2 deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md) ·

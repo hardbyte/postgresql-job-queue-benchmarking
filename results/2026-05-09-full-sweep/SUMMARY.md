@@ -8,24 +8,17 @@ the headline reference.
 
 The short version:
 
-- **pgque leads at 40 k jobs/s** by stripping the feature surface
-  (no priorities, no aging, no scheduled jobs, no dedup, no rate
-  limiting, no web UI) and using append-only + per-batch ack on the
-  SQL hot path. The next-best system with that minimal surface
-  doesn't exist — pgque is alone at the trade.
-- **awa leads the full-feature systems at 14 k** (priorities + aging,
-  scheduled jobs, dedup, rate limiting, callbacks, web UI). The other
-  six full-feature adapters — pgboss, river, oban, absurd,
-  procrastinate, plus pgmq's stripped-down visibility-timeout — sit
-  materially behind.
-- **pgmq is its own contract** — SQS-shaped (send / read-with-vt /
-  ack-or-redeliver, no per-job retry counter). 11 k jobs/s at 1×16 w
-  and then *anti-scales* down to 3.2 k at 1×256 w.
-- **Three of eight survive every chaos scenario**: awa, pgque, river.
+- **Throughput**, sorted: pgque 40 k, awa 14 k, pgmq 11 k @ W=16
+  (anti-scales to 3.2 k at W=256), pg-boss 2.4 k, river 501,
+  absurd 410, oban 284, procrastinate 269. Three contracts in that
+  list — event bus, job queue, visibility-timeout queue — see the
+  next section before reading the ordering as a single ranking.
+- **Chaos**: awa, pgque, and river survive every scenario.
   The other five hit zero on at least one.
-- **Five adapters can't gracefully shut down under sustained
-  pressure** — 10 of 32 Phase C cells timed out at the harness's 15 min
-  ceiling. The Phase H audits explain each cluster.
+- **Phase C shutdown**: five adapters (absurd, pgboss, procrastinate,
+  river, pgmq) couldn't gracefully exit under sustained pressure;
+  10 of 32 cells timed out at the harness's 15 min ceiling. Per
+  adapter, the Phase H audits name the cause.
 
 The follow-up issue list at the end of this document is the
 intended takeaway for any of the eight adapter authors.
@@ -47,69 +40,73 @@ intended takeaway for any of the eight adapter authors.
 | pgque | 3,439 | 11,505 | 27,719 | 34,433 | **39,898** |
 | pgmq | 3,571 | 11,277 | 10,243 | 6,180 | 3,252 |
 
-### Two contracts, one trade
+### Reading the numbers
 
-Seven of the eight systems are job queues — send a job, a worker
-runs it, the queue tracks retries and dead-lettering. pgmq is the
-exception: SQS-shaped (visibility-timeout, no per-job retry counter,
-no scheduling, no DLQ surface beyond an archive). That's a different
-application contract; treat its number separately.
+Each system maps onto one of three application contracts.
 
-Inside the job-queue category, all seven offer the same application
-contract on paper, but they trade two things differently:
+**Job queues** — send a job, a worker runs it, the queue tracks
+retries and dead-lettering: awa, pg-boss, river, oban, absurd,
+procrastinate.
 
-- **Feature surface** — what the queue itself gives you out of the
-  box. pgque strips this to retries + DLQ + delayed jobs and skips
-  priorities, aging, scheduling, dedup, rate limiting, and ops UI.
-  awa and the others carry the full surface.
-- **Ack granularity** — pgque acks an entire batch with one row
-  update; the others ack per job. A pgque worker that crashes mid-batch
-  redoes the whole batch on the next claim. Per-job ack costs more SQL
-  per completion but matches finer-grained workloads (long-running,
-  side-effecting jobs).
+**Visibility-timeout queue** — pgmq. Send / read with timeout /
+ack-or-redeliver. No per-job retry counter, no scheduling, no DLQ
+beyond an archive table.
 
-That trade is what the throughput gap is buying. Sorted by peak
-jobs/s, with the trade flagged:
+**Event/message bus** — pgque. Append-only event log, ticker forms
+batch boundaries, multiple consumer groups each track their own
+cursor over the shared log (Kafka-style fan-out per the
+[upstream README](https://github.com/NikolayS/pgque#what-genuinely-differentiates-pgque)).
+pgque can also be operated as a single-consumer competing-consumers
+queue, which is how the bench drives it: one consumer per replica,
+`--worker-count` controls in-flight handler concurrency within that
+consumer.
 
-| System | Peak (jobs/s) | At | Feature surface | Ack granularity |
-|---|---:|---|---|---|
-| **pgque** | **39,898** | 1×256 w | reduced (no priorities / no aging / no cron / no dedup / no rate limit / no UI) | per-batch |
-| **awa** | **14,158** | 1×256 w | full | per-job |
-| pg-boss | 2,387 | 1×64 w | full | per-job |
-| river | 501 | 1×64 w | full | per-job |
-| absurd | 410 | 1×128 w | reduced | per-job |
-| oban | 284 | 1×64 w | full | per-job |
-| procrastinate | 269 | flat | full | per-job |
+pgque's 40 k jobs/s is the single-consumer-competing-consumers
+number. The native fan-out mode (multiple consumer groups each
+receiving every event) isn't exercised here.
 
-Reading that table honestly: pgque trades feature surface and
-per-job durability for roughly 3× the throughput of the next-best
-job queue. Whether that's the right trade is workload-specific —
-analytics events that are cheap and idempotent are happy; long-running
-side-effecting jobs prefer per-job ack. **What the awa-vs-pgque gap
-asks is whether awa can adopt pgque's batched-ack hot path *without*
-giving up the feature surface** — tracked in the awa follow-up list.
+| System | Contract | Peak (jobs/s) | At |
+|---|---|---:|---|
+| **pgque** *(single-consumer mode)* | event bus | **39,898** | 1×256 w |
+| **awa** | job queue | **14,158** | 1×256 w |
+| pgmq | visibility-timeout | 11,277 | 1×16 w |
+| pg-boss | job queue | 2,387 | 1×64 w |
+| river | job queue | 501 | 1×64 w |
+| absurd | job queue | 410 | 1×128 w |
+| oban | job queue | 284 | 1×64 w |
+| procrastinate | job queue | 269 | flat |
 
-A note on pgque's worker axis: pgque runs a single consumer per
-replica; `--worker-count` controls in-flight handler concurrency
-within that consumer (how many events from a batch are handled
-in flight before `finish_batch` and the next batch). Larger
-concurrency drains a batch faster. That's a different knob shape
-than awa's worker pool, but it's a knob *within* the job-queue
-category, not evidence of a different category.
+#### What pgque trades for the throughput
 
-#### pgmq — visibility-timeout queue
+In single-consumer mode pgque competes with the job queues. The two
+ways it differs:
 
-| System | Peak (jobs/s) | At |
-|---|---:|---|
-| **pgmq** | 11,277 | 1×16 w |
+- **Feature surface.** Default install ships retries with backoff,
+  per-message nack, DLQ. No priorities, no aging, no dedup, no rate
+  limiting, no web UI. Delayed delivery (`send_at`) is in
+  `sql/experimental/`, not the default install. The other job queues
+  ship the full surface.
+- **Ack granularity.** `receive` returns a whole batch and `ack`
+  finishes the batch in one row update — that's where the SQL
+  amortisation comes from. Failure handling is still per-message
+  (`nack(batch_id, msg_id, retry_after, reason)`). A consumer that
+  crashes mid-batch without acking redoes the whole batch on the
+  next claim.
 
-pgmq peaks at W=16 then *anti-scales* — 11.3 k → 10.2 k → 6.2 k → 3.2 k
-across W=64 / 128 / 256. The Phase H audit (`audit_pgmq.md`) points
-to the consumer-batch-size formula collapsing to `qty=1` reads at high
-worker counts, which serialises the readers on the underlying
-`FOR UPDATE` lock. The application contract — at-least-once delivery
-via vt-extends, no retry counter — is what makes pgmq its own bucket
-rather than where it lands on a single ranked list.
+Whether that trade fits your workload is workload-specific.
+Analytics events that are cheap and idempotent are comfortable with
+batched success ack. Long-running side-effecting jobs prefer the
+per-job ack the other six systems give you. Whether awa can adopt
+the batched-ack hot path while keeping the full feature surface is
+in the follow-up list.
+
+#### pgmq
+
+pgmq peaks at W=16 then anti-scales — 11.3 k → 10.2 k → 6.2 k → 3.2 k
+across W=64 / 128 / 256. The Phase H audit ([`audit_pgmq.md`](audit_pgmq.md))
+points to the consumer-batch-size formula collapsing to `qty=1` reads
+at high worker counts, which serialises the readers on the underlying
+`FOR UPDATE` lock.
 
 <details>
 <summary>Phase A.5 — attribution A/B cells (awa rescue, pgque shared-mode)</summary>
