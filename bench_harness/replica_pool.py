@@ -232,32 +232,51 @@ class ReplicaPool:
         at the end of run_one_system — idempotent and safe to call even
         when some replicas were already KILLED or CRASHED mid-run.
 
-        Emits a per-replica shutdown breadcrumb to stderr so
-        post-mortem analysis of a `run_full_sweep.sh` rc=137 cell can
-        tell whether the wrapper-script timeout fired during a stuck
-        adapter shutdown vs. somewhere else. The breadcrumb survives
-        in `logs/<cell>.log` even after the wrapper SIGKILLs the
-        driver."""
+        Replicas are signalled in parallel and then waited on against a
+        single shared deadline rather than sequentially. Sequential
+        teardown would multiply wall-time by replica count: a pgmq cell
+        with `--replicas 32` and a 30 s adapter grace would burn 16 min
+        in shutdown alone, blowing past the wrapper script's per-cell
+        ceiling. Parallel signalling caps wall-time at roughly
+        ``timeout_s`` regardless of replica count.
+
+        Emits per-replica shutdown breadcrumbs to stderr so post-mortem
+        analysis of a wrapper-timed-out cell can tell whether shutdown
+        wedged in the adapter vs. somewhere else. The breadcrumb
+        survives in `logs/<cell>.log` even after the wrapper SIGKILLs
+        the driver."""
         import time as _time
 
-        for slot in self._slots:
-            if slot.state is ReplicaState.RUNNING:
-                t0 = _time.monotonic()
-                print(
-                    f"[{self.system}] replica {slot.instance_id} stop_all: "
-                    f"sending SIGTERM, grace={timeout_s:.1f}s",
-                    file=sys.stderr,
-                )
-                self._terminate_slot(
-                    slot, signal_type=_signal.SIGTERM, timeout_s=timeout_s
-                )
-                elapsed = _time.monotonic() - t0
-                print(
-                    f"[{self.system}] replica {slot.instance_id} stop_all: "
-                    f"exited in {elapsed:.2f}s",
-                    file=sys.stderr,
-                )
-                slot.state = ReplicaState.STOPPED
+        targets: list[ReplicaSlot] = [
+            slot for slot in self._slots if slot.state is ReplicaState.RUNNING
+        ]
+        if not targets:
+            return
+
+        deadline = _time.monotonic() + timeout_s
+
+        # Phase 1: send SIGTERM and close stdin to every running replica
+        # in parallel, without blocking on any individual exit.
+        for slot in targets:
+            print(
+                f"[{self.system}] replica {slot.instance_id} stop_all: "
+                f"sending SIGTERM, grace={timeout_s:.1f}s (shared deadline)",
+                file=sys.stderr,
+            )
+            self._signal_slot(slot, _signal.SIGTERM)
+
+        # Phase 2: wait for each replica against the shared deadline.
+        # Any slot that hasn't exited by `deadline` is SIGKILLed.
+        for slot in targets:
+            t0 = _time.monotonic()
+            self._reap_slot(slot, deadline=deadline)
+            elapsed = _time.monotonic() - t0
+            print(
+                f"[{self.system}] replica {slot.instance_id} stop_all: "
+                f"exited in {elapsed:.2f}s",
+                file=sys.stderr,
+            )
+            slot.state = ReplicaState.STOPPED
 
     # ── Health watch ───────────────────────────────────────────────────
 
@@ -287,13 +306,12 @@ class ReplicaPool:
                 f"(capacity={self.capacity})"
             )
 
-    def _terminate_slot(
-        self,
-        slot: ReplicaSlot,
-        *,
-        signal_type: int,
-        timeout_s: float,
-    ) -> None:
+    def _signal_slot(self, slot: ReplicaSlot, signal_type: int) -> None:
+        """Send `signal_type` to the slot's process and close stdin.
+
+        Non-blocking: returns as soon as the signal has been delivered;
+        the caller is responsible for waiting on exit. Used by
+        ``stop_all`` to fan signals out across replicas in parallel."""
         proc = slot.process
         if slot.stop_event is not None:
             slot.stop_event.set()
@@ -312,13 +330,29 @@ class ReplicaPool:
                 # Already gone between our poll() check and the signal —
                 # not a fault, just racy teardown.
                 pass
+
+    def _reap_slot(
+        self,
+        slot: ReplicaSlot,
+        *,
+        deadline: float,
+    ) -> None:
+        """Wait for the slot's process to exit, escalating to SIGKILL if
+        the absolute monotonic ``deadline`` is reached.
+
+        Sharing one deadline across replicas (as ``stop_all`` does) lets
+        teardown finish in O(grace) wall-time instead of O(N × grace)."""
+        import time as _time
+
+        proc = slot.process
+        if proc is not None and proc.poll() is None:
+            remaining = max(0.0, deadline - _time.monotonic())
             try:
-                proc.wait(timeout=timeout_s)
+                proc.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
-                # Escalate if graceful window expired.
                 print(
                     f"[{self.system}] replica {slot.instance_id} did not exit "
-                    f"within {timeout_s}s on {signal_type}; escalating to SIGKILL",
+                    f"within shared grace; escalating to SIGKILL",
                     file=sys.stderr,
                 )
                 proc.kill()
@@ -329,3 +363,18 @@ class ReplicaPool:
         slot.process = None
         slot.tailer = None
         slot.stop_event = None
+
+    def _terminate_slot(
+        self,
+        slot: ReplicaSlot,
+        *,
+        signal_type: int,
+        timeout_s: float,
+    ) -> None:
+        """Synchronous send-then-wait. Used by single-slot lifecycle
+        operations (``stop_worker`` / ``kill_worker``). ``stop_all``
+        uses ``_signal_slot`` + ``_reap_slot`` directly to fan-out."""
+        import time as _time
+
+        self._signal_slot(slot, signal_type)
+        self._reap_slot(slot, deadline=_time.monotonic() + timeout_s)
