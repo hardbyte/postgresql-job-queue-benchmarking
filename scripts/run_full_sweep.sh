@@ -55,7 +55,10 @@ run_cell() {
     $extra_args $extra_flags > "$logfile" 2>&1
   local rc=$?
   local ended; ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  local run_dir; run_dir=$(grep -oE '/home[^ ]*results/custom-[^ ]+' "$logfile" | tail -1 || echo "")
+  # Anchor on `/results/<run-id>` rather than the `/home` prefix so the
+  # script works from any checkout (e.g. /Users/<u>/dev/..., /workspace/...
+  # in CI). The run-id tail is the recognisable signature.
+  local run_dir; run_dir=$(grep -oE '/[^[:space:]]*/results/custom-[0-9TZ]+-[a-f0-9]+' "$logfile" | tail -1 || echo "")
   echo -e "${phase}\t${cell_id}\t${worker_count}\t${systems}\t${run_dir}\t${rc}\t${started}\t${ended}" >> "$RUN_INDEX"
   log "END   ${cell_id} rc=${rc} dir=${run_dir##*/}"
 }
@@ -105,7 +108,8 @@ run_chaos_cell() {
     $extra_args > "$logfile" 2>&1
   local rc=$?
   local ended; ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  local run_dir; run_dir=$(grep -oE '/home[^ ]*results/[A-Za-z0-9_]+-[0-9TZ]+-[a-f0-9]+' "$logfile" | tail -1 || echo "")
+  # See run_cell — same path-prefix-agnostic match.
+  local run_dir; run_dir=$(grep -oE '/[^[:space:]]*/results/[A-Za-z0-9_]+-[0-9TZ]+-[a-f0-9]+' "$logfile" | tail -1 || echo "")
   echo -e "${phase}\t${cell_id}\t${replicas}\t${system}\t${run_dir}\t${rc}\t${started}\t${ended}" >> "$RUN_INDEX"
   log "END   ${cell_id} rc=${rc} dir=${run_dir##*/}"
 }
@@ -150,7 +154,13 @@ phase_b() {
 run_phase_c_cell() {
   local cell_id="$1" system="$2" phases="$3" rate="$4" worker_count="$5" extra_env="$6" extra_args="${7:-}" cell_timeout="${8:-15m}"
   local logfile="$RESULTS_ROOT/logs/${cell_id}.log"
-  if grep -q "^C	${cell_id}	" "$RUN_INDEX" 2>/dev/null; then
+  # Match by cell_id alone, not by `^C\t…`: phase_d / phase_e / phase_f /
+  # phase_g rewrite the appended row's phase column from `C` to D/E/F/G
+  # via sed after this function returns. A retry against this hardcoded
+  # `^C\t` would miss those rewritten rows and rerun the cell — including
+  # the 6 h soak. Anchoring on the second column (cell_id) finds the row
+  # regardless of which phase prefix landed in column 1.
+  if awk -F '\t' -v id="$cell_id" '$2 == id { found=1; exit } END { exit !found }' "$RUN_INDEX" 2>/dev/null; then
     log "SKIP ${cell_id} (already in run_index)"
     return 0
   fi
@@ -176,7 +186,8 @@ run_phase_c_cell() {
     cleanup_orphans
   fi
   local ended; ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  local run_dir; run_dir=$(grep -oE '/home[^ ]*results/[A-Za-z0-9_]+-[0-9TZ]+-[a-f0-9]+' "$logfile" | tail -1 || echo "")
+  # See run_cell — same path-prefix-agnostic match.
+  local run_dir; run_dir=$(grep -oE '/[^[:space:]]*/results/[A-Za-z0-9_]+-[0-9TZ]+-[a-f0-9]+' "$logfile" | tail -1 || echo "")
   echo -e "C\t${cell_id}\t${worker_count}\t${system}\t${run_dir}\t${rc}\t${started}\t${ended}" >> "$RUN_INDEX"
   log "END   ${cell_id} rc=${rc} dir=${run_dir##*/}"
 }
