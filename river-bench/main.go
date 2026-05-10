@@ -286,10 +286,11 @@ func scenarioWorkerThroughput(ctx context.Context, pool *pgxpool.Pool, jobCount 
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: workerCount},
 		},
-		Workers:           workers,
-		JobTimeout:        -1,
-		FetchCooldown:     50 * time.Millisecond,
-		FetchPollInterval: 50 * time.Millisecond,
+		Workers:              workers,
+		JobTimeout:           -1,
+		FetchCooldown:        50 * time.Millisecond,
+		FetchPollInterval:    50 * time.Millisecond,
+		RescueStuckJobsAfter: time.Duration(envInt("RESCUE_AFTER_SECS", 30)) * time.Second,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create worker client: %v", err)
@@ -334,10 +335,11 @@ func scenarioPickupLatency(ctx context.Context, pool *pgxpool.Pool, iterations i
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: workerCount},
 		},
-		Workers:           workers,
-		JobTimeout:        -1,
-		FetchCooldown:     50 * time.Millisecond,
-		FetchPollInterval: 50 * time.Millisecond,
+		Workers:              workers,
+		JobTimeout:           -1,
+		FetchCooldown:        50 * time.Millisecond,
+		FetchPollInterval:    50 * time.Millisecond,
+		RescueStuckJobsAfter: time.Duration(envInt("RESCUE_AFTER_SECS", 30)) * time.Second,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
@@ -531,8 +533,10 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	// Batch size for River's documented bulk-insert API
 	// (Client.InsertManyFast: https://pkg.go.dev/github.com/riverqueue/river#Client.InsertManyFast,
 	// docs: https://riverqueue.com/docs/batch-job-insertion). Uses Postgres
-	// COPY under the hood. Default 1 keeps existing row-by-row behaviour.
-	producerBatchMax := envInt("PRODUCER_BATCH_MAX", 1)
+	// COPY under the hood. Default 128 to align with the other adapters;
+	// pre-2026-05-09 default of 1 forced row-at-a-time inserts and was a
+	// likely contributor to river's ~500 jobs/s ceiling on long_horizon.
+	producerBatchMax := envInt("PRODUCER_BATCH_MAX", 128)
 	if producerBatchMax < 1 {
 		producerBatchMax = 1
 	}
@@ -578,10 +582,11 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: workerCount},
 		},
-		Workers:           workers,
-		JobTimeout:        -1,
-		FetchCooldown:     50 * time.Millisecond,
-		FetchPollInterval: 50 * time.Millisecond,
+		Workers:              workers,
+		JobTimeout:           -1,
+		FetchCooldown:        50 * time.Millisecond,
+		FetchPollInterval:    50 * time.Millisecond,
+		RescueStuckJobsAfter: time.Duration(envInt("RESCUE_AFTER_SECS", 30)) * time.Second,
 	})
 	if err != nil {
 		log.Fatalf("long_horizon: failed to create client: %v", err)

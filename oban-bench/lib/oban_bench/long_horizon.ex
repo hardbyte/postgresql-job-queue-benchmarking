@@ -42,8 +42,10 @@ defmodule ObanBench.LongHorizon do
     # Batch size for Oban's documented bulk-insert API
     # (`Oban.insert_all/2`: https://hexdocs.pm/oban/Oban.html#insert_all/2 —
     # accepts a list of changesets, issues a single multi-row INSERT).
-    # Default 1 keeps existing row-by-row behaviour.
-    producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 1))
+    # Default 128 to align with the other adapters (pgmq, pgque, awa,
+    # pgboss); pre-2026-05-09 default of 1 forced row-at-a-time inserts
+    # and was the largest factor in oban's flat ~280 jobs/s ceiling.
+    producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 128))
     producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
     db_name =

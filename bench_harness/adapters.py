@@ -42,6 +42,13 @@ class AdapterManifest:
     extensions: list[str]
     family: str = ""
     display_name: str = ""
+    # Per-adapter SIGTERM grace window before the harness escalates to
+    # SIGKILL. Default 10s — long enough for a clean Postgres connection
+    # close, short enough that a wedged adapter fails the cell rather than
+    # eating the wrapper script's 15-min ceiling. Adapters with documented
+    # slow-drain shutdown paths (e.g. pgmq archive, absurd fail-task-run)
+    # can override via `adapter.json -> shutdown_grace_s`.
+    shutdown_grace_s: float = 10.0
 
     def __post_init__(self) -> None:
         # Sensible defaults: standalone systems are their own family and
@@ -64,6 +71,7 @@ class AdapterManifest:
             extensions=list(data.get("extensions", [])),
             family=data.get("family", "") or "",
             display_name=data.get("display_name", "") or "",
+            shutdown_grace_s=float(data.get("shutdown_grace_s", 10.0)),
         )
 
 

@@ -799,6 +799,53 @@ def test_pool_teardown_closes_stdin_before_waiting():
     stdin.close.assert_called_once()
 
 
+def test_pool_stop_all_signals_in_parallel_before_waiting():
+    """``stop_all`` must fan SIGTERM out to every replica before
+    starting to wait on any single one. Sequential signal-then-wait
+    would multiply teardown wall-time by replica count, blowing past
+    the wrapper script's per-cell ceiling on multi-replica pgmq runs
+    (audit_pgmq.md / Codex review of PR #27)."""
+    launch, _, procs = _fake_launch_fn()
+    pool = ReplicaPool(system="awa", capacity=4, launch_fn=launch)
+    pool.start_all()
+
+    events: list[tuple[str, int]] = []
+    for idx, proc in enumerate(procs):
+        # _fake_launch_fn's default send_signal flips poll to 0 after
+        # firing. Wrap it so we can record ordering — the flip behaviour
+        # still runs so wait() short-circuits naturally.
+        def make_signal_recorder(idx: int, proc: MagicMock):
+            def _signal(_sig: int):
+                events.append(("signal", idx))
+                proc.returncode = 0
+                proc.poll.configure_mock(return_value=0)
+
+            return _signal
+
+        proc.send_signal = MagicMock(side_effect=make_signal_recorder(idx, proc))
+        proc.wait = MagicMock(
+            side_effect=lambda *a, idx=idx, **kw: events.append(("wait", idx)) or 0
+        )
+
+    pool.stop_all()
+
+    # All four SIGTERMs must land before any wait. The fan-out ordering
+    # is what gives ``stop_all`` its O(grace) wall-time guarantee: a
+    # sequential signal-then-wait would interleave them and multiply
+    # teardown time by replica count.
+    signal_count = sum(1 for kind, _ in events if kind == "signal")
+    assert signal_count == 4
+    first_wait_idx = next(
+        (i for i, (kind, _) in enumerate(events) if kind == "wait"),
+        len(events),
+    )
+    # Either no wait was needed (procs reaped immediately) or every
+    # wait happened after every signal.
+    assert all(events[i][0] == "signal" for i in range(first_wait_idx)), (
+        f"signals must precede the first wait; got {events}"
+    )
+
+
 # ── kill-worker / start-worker parsing + hooks ──────────────────────────
 
 

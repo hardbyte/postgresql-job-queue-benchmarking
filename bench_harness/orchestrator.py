@@ -815,7 +815,10 @@ def run_one_system(
         daemon.join(timeout=5.0)
         if wait_sampler is not None:
             wait_sampler.stop()
-        pool.stop_all()
+        # Per-adapter SIGTERM grace before the pool escalates to SIGKILL.
+        # See AdapterManifest.shutdown_grace_s — defaults to 10s, adapters
+        # with a documented slow-drain shutdown path can override.
+        pool.stop_all(timeout_s=manifest.shutdown_grace_s)
         shutil.rmtree(control_dir, ignore_errors=True)
 
     # Representative descriptor for manifest inclusion. Prefer replica 0's

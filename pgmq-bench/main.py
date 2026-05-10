@@ -152,9 +152,14 @@ async def scenario_long_horizon() -> None:
     producer_batch_max = env_int("PRODUCER_BATCH_MAX", 128)
     poll_interval_ms = env_int("POLL_INTERVAL_MS", 50)
     visibility_timeout_s = env_int("VISIBILITY_TIMEOUT_S", 30)
+    # Floor at 8 to keep the W>=64 path off pgmq.read(qty=1), which
+    # serialises the readers on FOR UPDATE and was the direct cause
+    # of pgmq's W=16 → W=256 throughput cliff in the 2026-05-09 sweep
+    # (audit_pgmq.md §4). The default formula stays — operators can
+    # still pin a smaller batch via CONSUMER_BATCH_SIZE.
     consumer_batch_size = env_int(
         "CONSUMER_BATCH_SIZE",
-        max(1, min(64, round((producer_rate * 1.25) / max(worker_count * (1000 / max(poll_interval_ms, 1)), 1)))),
+        max(8, min(64, round((producer_rate * 1.25) / max(worker_count * (1000 / max(poll_interval_ms, 1)), 1)))),
     )
 
     db_name = database_url().rsplit("/", 1)[-1]
@@ -204,8 +209,51 @@ async def scenario_long_horizon() -> None:
         except NotImplementedError:
             signal.signal(sig, lambda *_a: shutdown.set())
 
-    producer_conn = await aconnect()
-    depth_conn = await aconnect()
+    # Mirrors pgque-bench's ReconnectingConn so per-task loops can
+    # transparently reconnect when chaos kills the underlying socket
+    # (postgres-restart, pg_terminate_backend). Without this, the
+    # consumer loop swallowed OperationalError and continued on a
+    # stale handle — the direct cause of the 0% recovery in
+    # chaos_postgres_restart_pgmq / chaos_pg_backend_kill_pgmq cells
+    # in the 2026-05-09 sweep (audit_pgmq.md §7).
+    class ReconnectingConn:
+        __slots__ = ("_conn",)
+
+        def __init__(self, conn: psycopg.AsyncConnection) -> None:
+            self._conn = conn
+
+        @property
+        def conn(self) -> psycopg.AsyncConnection:
+            return self._conn
+
+        def cursor(self):
+            return self._conn.cursor()
+
+        async def close(self) -> None:
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+
+        async def reconnect(self) -> None:
+            await self.close()
+            for _ in range(50):
+                if shutdown.is_set():
+                    return
+                try:
+                    self._conn = await aconnect()
+                    return
+                except Exception:
+                    await asyncio.sleep(0.2)
+
+    producer_conn = ReconnectingConn(await aconnect())
+    depth_conn = ReconnectingConn(await aconnect())
+
+    # Track in-flight claimed message ids per consumer worker so the
+    # shutdown path can archive any still held when SIGTERM arrives.
+    # Without this the recovery phase of long-running stress cells
+    # blocked on stale visibility-timeout entries — see audit_pgmq.md §6.
+    in_flight: dict[int, list[int]] = {}
 
     async def producer() -> None:
         nonlocal enqueued, current_producer_target_rate, current_queue_depth
@@ -216,7 +264,11 @@ async def scenario_long_horizon() -> None:
             current_producer_target_rate = float(target_rate)
 
             if producer_mode == "depth-target":
-                current_queue_depth = await queue_depth(producer_conn)
+                try:
+                    current_queue_depth = await queue_depth(producer_conn.conn)
+                except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
+                    await producer_conn.reconnect()
+                    continue
                 remaining = max(0, target_depth - current_queue_depth)
                 batch_count = min(producer_batch_max, remaining)
                 if batch_count <= 0:
@@ -240,12 +292,16 @@ async def scenario_long_horizon() -> None:
                 )
 
             started = time.monotonic()
-            async with producer_conn.cursor() as cur:
-                await cur.execute(
-                    "SELECT * FROM pgmq.send_batch(%s, %s)",
-                    (QUEUE_NAME, batch),
-                )
-                await cur.fetchall()
+            try:
+                async with producer_conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT * FROM pgmq.send_batch(%s, %s)",
+                        (QUEUE_NAME, batch),
+                    )
+                    await cur.fetchall()
+            except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
+                await producer_conn.reconnect()
+                continue
             elapsed_ms = (time.monotonic() - started) * 1000
             sample_ts = loop.time()
             per_msg_ms = elapsed_ms / max(len(batch), 1)
@@ -257,17 +313,22 @@ async def scenario_long_horizon() -> None:
                 next_t += len(batch) / max(target_rate, 1)
                 await asyncio.sleep(max(0.0, min(producer_batch_ms / 1000.0, next_t - loop.time())))
 
-    async def consumer_task() -> None:
+    async def consumer_task(worker_idx: int) -> None:
         nonlocal completed
-        conn = await aconnect()
+        conn = ReconnectingConn(await aconnect())
+        in_flight[worker_idx] = []
         try:
             while not shutdown.is_set():
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        "SELECT * FROM pgmq.read(queue_name => %s, vt => %s, qty => %s)",
-                        (QUEUE_NAME, visibility_timeout_s, consumer_batch_size),
-                    )
-                    rows = await cur.fetchall()
+                try:
+                    async with conn.cursor() as cur:
+                        await cur.execute(
+                            "SELECT * FROM pgmq.read(queue_name => %s, vt => %s, qty => %s)",
+                            (QUEUE_NAME, visibility_timeout_s, consumer_batch_size),
+                        )
+                        rows = await cur.fetchall()
+                except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
+                    await conn.reconnect()
+                    continue
                 if not rows:
                     await asyncio.sleep(poll_interval_ms / 1000.0)
                     continue
@@ -280,16 +341,27 @@ async def scenario_long_horizon() -> None:
                             (loop.time(), float(started_at_ms - int(message["enqueued_at_ms"])))
                         )
 
+                msg_ids = [int(row["msg_id"]) for row in rows]
+                # Mark claimed; cleared once archive() lands.
+                in_flight[worker_idx] = msg_ids
+
                 if work_ms > 0:
                     await asyncio.sleep((work_ms * len(rows)) / 1000.0)
 
-                msg_ids = [int(row["msg_id"]) for row in rows]
-                async with conn.cursor() as cur:
-                    await cur.execute(
-                        "SELECT pgmq.archive(%s, %s)",
-                        (QUEUE_NAME, msg_ids),
-                    )
-                    await cur.fetchall()
+                try:
+                    async with conn.cursor() as cur:
+                        await cur.execute(
+                            "SELECT pgmq.archive(%s, %s)",
+                            (QUEUE_NAME, msg_ids),
+                        )
+                        await cur.fetchall()
+                except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
+                    # Archive failed — leave msg_ids in `in_flight` so the
+                    # shutdown drain path can retry, and reconnect for
+                    # subsequent reads.
+                    await conn.reconnect()
+                    continue
+                in_flight[worker_idx] = []
 
                 completed_at_ms = int(time.time() * 1000)
                 for row in rows:
@@ -312,7 +384,11 @@ async def scenario_long_horizon() -> None:
                 await asyncio.sleep(0.25)
             return
         while not shutdown.is_set():
-            current_queue_depth = await queue_depth(depth_conn)
+            try:
+                current_queue_depth = await queue_depth(depth_conn.conn)
+            except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
+                await depth_conn.reconnect()
+                continue
             await asyncio.sleep(0.25)
 
     async def sampler() -> None:
@@ -377,12 +453,38 @@ async def scenario_long_horizon() -> None:
         asyncio.create_task(depth_task()),
         asyncio.create_task(sampler()),
     ]
-    tasks.extend(asyncio.create_task(consumer_task()) for _ in range(worker_count))
+    tasks.extend(
+        asyncio.create_task(consumer_task(idx)) for idx in range(worker_count)
+    )
 
     await shutdown.wait()
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Drain any in-flight claimed message ids by archiving them, so
+    # the next phase doesn't block on stale visibility-timeout entries.
+    # Best-effort with a single fresh connection — failures are logged
+    # to stderr; the process is going down anyway.
+    leftover = sorted({mid for ids in in_flight.values() for mid in ids})
+    if leftover:
+        try:
+            drain_conn = await aconnect()
+            try:
+                async with drain_conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT pgmq.archive(%s, %s)",
+                        (QUEUE_NAME, leftover),
+                    )
+                    await cur.fetchall()
+            finally:
+                await drain_conn.close()
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[pgmq] shutdown drain failed for {len(leftover)} msgs: {exc}",
+                flush=True,
+            )
+
     await producer_conn.close()
     await depth_conn.close()
 
