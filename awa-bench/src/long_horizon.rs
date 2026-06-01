@@ -836,7 +836,11 @@ pub async fn run() {
                         )
                         .expect("Invalid QueueStorageConfig");
                         for q in &depth_queue_names {
-                            match depth_store.queue_counts(&depth_pool, q.as_str()).await {
+                            // Use queue_counts_fast: index-only, suitable for
+                            // 200 ms-cadence polling. queue_counts (exact)
+                            // scans done_entries + lease_claims and competes
+                            // with the worker hot path under load.
+                            match depth_store.queue_counts_fast(&depth_pool, q.as_str()).await {
                                 Ok(counts) => {
                                     total_available += counts.available as u64;
                                     total_running += counts.running as u64;
