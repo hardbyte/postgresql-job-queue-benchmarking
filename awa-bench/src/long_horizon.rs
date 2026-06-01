@@ -824,6 +824,16 @@ pub async fn run() {
                 return;
             }
             let depth_queue_names = queue_names.clone();
+            // Cache the QueueStorage handle outside the loop; it carries
+            // only schema strings and config, but constructing one per
+            // poll iteration was unnecessary churn at the previous 200 ms
+            // cadence.
+            let cached_depth_store: Option<QueueStorage> = match storage_engine {
+                super::StorageEngineMode::QueueStorage => depth_storage.clone().map(|config| {
+                    QueueStorage::new(config).expect("Invalid QueueStorageConfig")
+                }),
+                super::StorageEngineMode::Canonical => None,
+            };
             while !depth_shutdown.load(Ordering::Relaxed) {
                 let mut total_available: u64 = 0;
                 let mut total_running: u64 = 0;
@@ -831,15 +841,15 @@ pub async fn run() {
                 let mut total_scheduled: u64 = 0;
                 match storage_engine {
                     super::StorageEngineMode::QueueStorage => {
-                        let depth_store = QueueStorage::new(
-                            depth_storage.clone().expect("queue storage config missing"),
-                        )
-                        .expect("Invalid QueueStorageConfig");
+                        let depth_store = cached_depth_store
+                            .as_ref()
+                            .expect("queue storage cached_depth_store");
                         for q in &depth_queue_names {
-                            // Use queue_counts_fast: index-only, suitable for
-                            // 200 ms-cadence polling. queue_counts (exact)
-                            // scans done_entries + lease_claims and competes
-                            // with the worker hot path under load.
+                            // queue_counts_fast: index-only depth probe.
+                            // queue_counts (exact) scans done_entries +
+                            // lease_claims by queue, both unindexed on
+                            // (queue), so it grows multi-second under
+                            // load and competes with the worker hot path.
                             match depth_store.queue_counts_fast(&depth_pool, q.as_str()).await {
                                 Ok(counts) => {
                                     total_available += counts.available as u64;
@@ -897,12 +907,18 @@ pub async fn run() {
                         scheduled_depth.store(total_scheduled, Ordering::Relaxed);
                     }
                 }
-                // Tight loop so the producer's depth-target backoff
-                // sees fresh values; closes #8. The two queries
-                // underneath (queue_counts + deferred_jobs counts)
-                // are O(few rows) and cheap on the bench's queue
-                // size, so polling every 200 ms is negligible load.
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                // The producer's depth-target backoff already sleeps
+                // 50 ms when over target and bursts when under, so
+                // sub-second freshness on this signal is not load-
+                // bearing. Polling every 1 s keeps the depth-target
+                // controller responsive without staying on the same
+                // hot connections as the worker pool. Even with
+                // queue_counts_fast the two queries underneath are
+                // still real work — the canonical poller's CTE is
+                // not index-only — and the deferred_jobs scan grows
+                // with retryable backlog. A 5× cadence reduction
+                // applies before either of those becomes a problem.
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         })
     };
