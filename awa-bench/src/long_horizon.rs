@@ -543,6 +543,13 @@ pub async fn run() {
     let aged_completions = Arc::new(AtomicU64::new(0));
     let enqueued = Arc::new(AtomicU64::new(0));
     let queue_depth = Arc::new(AtomicU64::new(0));
+    // Snapshot of `enqueued` at the moment the depth poller last
+    // updated `queue_depth`. The producer uses this to track how many
+    // jobs it has inserted since the last poll, so its perceived
+    // backlog (`queue_depth + delta`) accounts for inserts that the
+    // stale snapshot hasn't observed yet. Closes the depth-target
+    // overshoot window between polls.
+    let enqueued_at_depth_poll = Arc::new(AtomicU64::new(0));
     let running_depth = Arc::new(AtomicU64::new(0));
     let retryable_depth = Arc::new(AtomicU64::new(0));
     let scheduled_depth = Arc::new(AtomicU64::new(0));
@@ -629,6 +636,7 @@ pub async fn run() {
     let producer_shutdown = Arc::clone(&shutdown);
     let producer_enqueued = Arc::clone(&enqueued);
     let producer_queue_depth = Arc::clone(&queue_depth);
+    let producer_enqueued_at_poll = Arc::clone(&enqueued_at_depth_poll);
     let producer_target_rate_metric = Arc::clone(&producer_target_rate);
     let producer_call_latencies_window = Arc::clone(&producer_call_latencies);
     let producer_latencies_window = Arc::clone(&producer_latencies);
@@ -689,14 +697,26 @@ pub async fn run() {
         while !producer_shutdown.load(Ordering::Relaxed) {
             let batch_size = if producer_mode == "depth-target" {
                 producer_target_rate_metric.store(0, Ordering::Relaxed);
+                // The depth poller runs at a finite cadence (200 ms),
+                // so `queue_depth` is a snapshot, not a live value.
+                // Between polls the producer would otherwise read the
+                // same stale "depth < target" reading and fire batch
+                // after batch — bursting many thousands of inserts on
+                // top of an already-at-target queue. Track inserts
+                // since the last poll locally so the burst self-
+                // throttles inside the stale window.
                 let depth = producer_queue_depth.load(Ordering::Relaxed);
-                if depth >= target_depth {
+                let enqueued_now = producer_enqueued.load(Ordering::Relaxed);
+                let enqueued_at_poll = producer_enqueued_at_poll.load(Ordering::Relaxed);
+                let inflight_since_poll = enqueued_now.saturating_sub(enqueued_at_poll);
+                let effective_depth = depth.saturating_add(inflight_since_poll);
+                if effective_depth >= target_depth {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                     continue;
                 }
                 next_tick = tokio::time::Instant::now();
                 last_credit_tick = next_tick;
-                ((target_depth - depth) as usize).clamp(1, producer_batch_max)
+                ((target_depth - effective_depth) as usize).clamp(1, producer_batch_max)
             } else if let Some(rx) = token_rx.as_mut() {
                 // Harness-paced fixed rate: block on next ENQUEUE token.
                 let current_rate = read_producer_rate(producer_rate);
@@ -816,6 +836,11 @@ pub async fn run() {
         let retryable_depth = Arc::clone(&retryable_depth);
         let scheduled_depth = Arc::clone(&scheduled_depth);
         let depth_storage = queue_storage.as_ref().map(|(_, storage)| storage.clone());
+        // For the depth-target overshoot fix: read enqueued at the
+        // same moment we publish queue_depth so the producer can
+        // compute its in-flight delta against a consistent snapshot.
+        let poll_enqueued = Arc::clone(&enqueued);
+        let poll_enqueued_at_poll = Arc::clone(&enqueued_at_depth_poll);
         tokio::spawn(async move {
             if !observer_enabled() {
                 while !depth_shutdown.load(Ordering::Relaxed) {
@@ -886,6 +911,14 @@ pub async fn run() {
                         running_depth.store(total_running, Ordering::Relaxed);
                         retryable_depth.store(total_retryable, Ordering::Relaxed);
                         scheduled_depth.store(total_scheduled, Ordering::Relaxed);
+                        // Pair the depth snapshot with the
+                        // total-enqueued reading the producer's delta
+                        // tracking is computed against. Publish
+                        // AFTER queue_depth so the producer never
+                        // sees a delta computed against a stale poll
+                        // snapshot.
+                        poll_enqueued_at_poll
+                            .store(poll_enqueued.load(Ordering::Relaxed), Ordering::Relaxed);
                     }
                     super::StorageEngineMode::Canonical => {
                         for q in &depth_queue_names {
@@ -905,6 +938,8 @@ pub async fn run() {
                         running_depth.store(total_running, Ordering::Relaxed);
                         retryable_depth.store(total_retryable, Ordering::Relaxed);
                         scheduled_depth.store(total_scheduled, Ordering::Relaxed);
+                        poll_enqueued_at_poll
+                            .store(poll_enqueued.load(Ordering::Relaxed), Ordering::Relaxed);
                     }
                 }
                 // 200 ms is load-bearing for the depth-target
