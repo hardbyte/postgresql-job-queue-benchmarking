@@ -907,18 +907,18 @@ pub async fn run() {
                         scheduled_depth.store(total_scheduled, Ordering::Relaxed);
                     }
                 }
-                // The producer's depth-target backoff already sleeps
-                // 50 ms when over target and bursts when under, so
-                // sub-second freshness on this signal is not load-
-                // bearing. Polling every 1 s keeps the depth-target
-                // controller responsive without staying on the same
-                // hot connections as the worker pool. Even with
-                // queue_counts_fast the two queries underneath are
-                // still real work — the canonical poller's CTE is
-                // not index-only — and the deferred_jobs scan grows
-                // with retryable backlog. A 5× cadence reduction
-                // applies before either of those becomes a problem.
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                // 200 ms is load-bearing for the depth-target
+                // controller. The producer reads `queue_depth` and
+                // bursts when below target; a 1 s cadence leaves the
+                // producer firing against a stale signal for up to
+                // 1 s after workers drain, which overshoots backlog
+                // and starves the steady state. Empirically a 5×
+                // cadence reduction dropped median throughput from
+                // ~9 k jobs/s to ~7.5 k and ~doubled depth on an
+                // 8 min smoke. With queue_counts_fast the poll is
+                // index-only and cheap, so the original cadence
+                // stays.
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
         })
     };
