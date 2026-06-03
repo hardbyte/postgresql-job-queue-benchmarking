@@ -61,6 +61,24 @@ def _awa_repo_revision() -> dict[str, Any]:
         "git_branch": branch,
         "git_tag": tag,
         "dirty": dirty,
+        "benchmark_harness": _bench_repo_revision(),
+    }
+
+
+def _bench_repo_revision() -> dict[str, Any]:
+    """Git state of the benchmark harness checkout used to drive the run."""
+    sha = _git(["rev-parse", "HEAD"], cwd=BENCH_REPO_ROOT)
+    short = _git(["rev-parse", "--short", "HEAD"], cwd=BENCH_REPO_ROOT)
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=BENCH_REPO_ROOT)
+    tag = _git(["describe", "--tags", "--exact-match", "HEAD"], cwd=BENCH_REPO_ROOT)
+    dirty = bool((_git(["status", "--porcelain"], cwd=BENCH_REPO_ROOT) or "").strip())
+    return {
+        "source": "benchmark repo",
+        "git_sha": sha,
+        "git_short": short,
+        "git_branch": branch,
+        "git_tag": tag,
+        "dirty": dirty,
     }
 
 
@@ -81,6 +99,7 @@ def _pgque_submodule_revision() -> dict[str, Any]:
     return {
         **base,
         "source": "awa repo + pgque submodule",
+        "benchmark_harness": _bench_repo_revision(),
         "pgque_submodule_sha": submodule_sha,
         "pgque_submodule_describe": submodule_describe,
     }

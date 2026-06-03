@@ -313,14 +313,14 @@ async fn wait_for_completion(
             .queue_counts(pool, queue_name)
             .await
             .expect("Failed to query queue_storage queue counts");
-        if counts.completed >= expected {
+        if counts.terminal >= expected {
             return;
         }
         if start.elapsed() > timeout {
             let state_counts = count_by_state(store, pool, queue_name).await;
             panic!(
                 "Timeout after {:?}: {}/{} completed, state counts: {:?}",
-                timeout, counts.completed, expected, state_counts
+                timeout, counts.terminal, expected, state_counts
             );
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

@@ -326,8 +326,8 @@ async def scenario_long_horizon() -> None:
             "system": "pgque",
             "event_tables": descriptor_tables,
             "extensions": [],
-            "version": "0.1.0",
-            "schema_version": os.environ.get("PGQUE_SCHEMA_VERSION", "alpha3+3b75f58"),
+            "version": os.environ.get("PGQUE_VERSION", "0.2.0"),
+            "schema_version": os.environ.get("PGQUE_SCHEMA_VERSION", "v0.2.0"),
             "db_name": db_name,
             "started_at": _now_iso(),
         }
