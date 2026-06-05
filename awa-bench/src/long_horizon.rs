@@ -381,6 +381,10 @@ fn queue_storage_event_tables(
         format!("{schema}.claim_ring_state"),
         format!("{schema}.claim_ring_slots"),
         format!("{schema}.queue_lanes"),
+        format!("{schema}.queue_enqueue_heads"),
+        format!("{schema}.queue_claim_heads"),
+        format!("{schema}.queue_terminal_live_counts"),
+        format!("{schema}.queue_terminal_rollups"),
         format!("{schema}.attempt_state"),
         format!("{schema}.deferred_jobs"),
         format!("{schema}.dlq_entries"),
@@ -583,10 +587,9 @@ pub async fn run() {
     // Divide the worker_count across queues so the total active worker
     // pool stays roughly the same as a single-queue run. min 1 worker
     // per queue.
-    let per_queue_workers: u32 =
-        ((worker_count as usize) / queue_names.len().max(1)).max(1) as u32;
-    let mut client_builder = Client::builder(pool.clone())
-        .priority_aging_interval(priority_aging_interval());
+    let per_queue_workers: u32 = ((worker_count as usize) / queue_names.len().max(1)).max(1) as u32;
+    let mut client_builder =
+        Client::builder(pool.clone()).priority_aging_interval(priority_aging_interval());
     for q in &queue_names {
         client_builder = client_builder.queue(
             q.as_str(),
@@ -666,7 +669,9 @@ pub async fn run() {
             let stdin = std::io::stdin();
             let lock = stdin.lock();
             for line in lock.lines() {
-                let Ok(line) = line else { return; };
+                let Ok(line) = line else {
+                    return;
+                };
                 let line = line.trim();
                 if let Some(rest) = line.strip_prefix("ENQUEUE ") {
                     if let Ok(n) = rest.parse::<usize>() {
@@ -721,12 +726,7 @@ pub async fn run() {
                 // Harness-paced fixed rate: block on next ENQUEUE token.
                 let current_rate = read_producer_rate(producer_rate);
                 producer_target_rate_metric.store(current_rate, Ordering::Relaxed);
-                let n = match tokio::time::timeout(
-                    Duration::from_millis(500),
-                    rx.recv(),
-                )
-                .await
-                {
+                let n = match tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
                     Ok(Some(n)) => n,
                     Ok(None) => {
                         // Pacer closed — drop to adapter-local fallback
@@ -760,7 +760,9 @@ pub async fn run() {
                 // the achievable fixed-rate at ~83 % of target on a
                 // moderately-loaded host.
                 let now = tokio::time::Instant::now();
-                let dt_s = now.saturating_duration_since(last_credit_tick).as_secs_f64();
+                let dt_s = now
+                    .saturating_duration_since(last_credit_tick)
+                    .as_secs_f64();
                 last_credit_tick = now;
                 fixed_rate_credit += current_rate as f64 * dt_s;
                 let whole = fixed_rate_credit.floor() as usize;
@@ -854,9 +856,9 @@ pub async fn run() {
             // poll iteration was unnecessary churn at the previous 200 ms
             // cadence.
             let cached_depth_store: Option<QueueStorage> = match storage_engine {
-                super::StorageEngineMode::QueueStorage => depth_storage.clone().map(|config| {
-                    QueueStorage::new(config).expect("Invalid QueueStorageConfig")
-                }),
+                super::StorageEngineMode::QueueStorage => depth_storage
+                    .clone()
+                    .map(|config| QueueStorage::new(config).expect("Invalid QueueStorageConfig")),
                 super::StorageEngineMode::Canonical => None,
             };
             while !depth_shutdown.load(Ordering::Relaxed) {
@@ -930,7 +932,9 @@ pub async fn run() {
                                     total_scheduled += scheduled;
                                 }
                                 Err(err) => {
-                                    eprintln!("[awa] canonical queue depth poll failed for {q}: {err}");
+                                    eprintln!(
+                                        "[awa] canonical queue depth poll failed for {q}: {err}"
+                                    );
                                 }
                             }
                         }
