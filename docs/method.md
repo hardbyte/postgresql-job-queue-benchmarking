@@ -29,6 +29,17 @@ to `bench.py run`, or compose your own with
 | `chaos_pool_exhaustion` | Hold 300 idle connections to pressure the SUT's pool sizing. |
 | `mixed_queue` | Multi-queue run; pair with `BENCH_QUEUE_COUNT=N` to spawn N parallel queues. Producer round-robins inserts; consumer side registers N queue subscriptions. Tests per-queue isolation and engine-side per-queue overhead. |
 
+## Awa tuning knobs
+
+These environment variables are forwarded to the Awa adapter for focused
+Awa-only experiments:
+
+| Variable | Default | Effect |
+|---|---:|---|
+| `BENCH_QUEUE_COUNT` | `1` | Number of logical queues registered by one adapter process. Producer inserts round-robin across them; workers are divided evenly across queues. |
+| `AWA_QUEUE_CLAIMERS` | `1` | Queue-storage dispatcher/claimer loops per logical queue. Claimers share that queue's worker permits. |
+| `AWA_CLAIM_BATCH_SIZE` | `512` | Maximum jobs each claimer attempts to claim in one database round trip. |
+
 ## Phase types (compose your own)
 
 | Phase type | What it does |

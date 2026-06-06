@@ -538,6 +538,8 @@ pub async fn run() {
     let latency_window = Duration::from_millis(env_u64("LATENCY_WINDOW_MS", 30_000).max(1));
     let producer_batch_ms = env_u64("PRODUCER_BATCH_MS", 25).max(1);
     let producer_batch_max = env_u64("PRODUCER_BATCH_MAX", 128).max(1) as usize;
+    let queue_claimers = env_u16("AWA_QUEUE_CLAIMERS", 1).max(1);
+    let claim_batch_size = env_u64("AWA_CLAIM_BATCH_SIZE", 512).max(1) as usize;
     // Per-replica connection pool. Sized to cover the steady-state
     // demand: 8 workers × concurrent in-flight + dispatcher + 4 batcher
     // shards + heartbeat + maintenance + producer + depth poller +
@@ -678,6 +680,8 @@ pub async fn run() {
                 poll_interval: Duration::from_millis(50),
                 deadline_duration,
                 priority_aging_interval: priority_aging_interval(),
+                claimers: queue_claimers,
+                claim_batch_size,
                 ..QueueConfig::default()
             },
         );
