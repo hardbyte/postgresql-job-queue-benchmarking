@@ -37,6 +37,7 @@ Awa-only experiments:
 | Variable | Default | Effect |
 |---|---:|---|
 | `BENCH_QUEUE_COUNT` | `1` | Number of logical queues registered by one adapter process. Producer inserts round-robin across them; workers are divided evenly across queues. |
+| `AWA_COMPLETION_SHARDS` | queue-storage: `1`; canonical: `8` | Completion batcher flush workers inside one adapter process. |
 | `AWA_QUEUE_CLAIMERS` | `1` | Queue-storage dispatcher/claimer loops per logical queue. Claimers share that queue's worker permits. |
 | `AWA_CLAIM_BATCH_SIZE` | `512` | Maximum jobs each claimer attempts to claim in one database round trip. |
 
