@@ -201,7 +201,9 @@ The available chaos scenarios are documented in
 - **One Postgres for everyone.** All systems run against the same
   `postgres:18.3-alpine` instance with the same `postgres.conf` — no
   per-system tuning advantage. (pgmq is the exception; it requires the
-  Postgres extension and runs on a separate `pg18-pgmq` image.)
+  Postgres extension and runs on a separate `pg18-pgmq` image.) The
+  compose default caps Postgres at 4 CPUs for repeatable laptop and CI
+  runs; set `POSTGRES_CPUS=N` when measuring a larger machine envelope.
 - **Long-horizon.** Bloat and latency drift only show up after the first
   few minutes. Default scenarios run 30+ minutes.
 
