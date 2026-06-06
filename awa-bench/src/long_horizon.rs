@@ -8,7 +8,9 @@
 
 use async_trait::async_trait;
 use awa_macros::JobArgs;
-use awa_model::{insert, insert_many_copy_from_pool, InsertParams, QueueStorage};
+use awa_model::{
+    insert, insert_many_copy_from_pool, InsertParams, QueueStorage, QueueStorageConfig,
+};
 use awa_worker::{
     Client, JobContext, JobError, JobResult, QueueConfig, TransitionWorkerRole, Worker,
 };
@@ -321,6 +323,74 @@ fn observer_enabled() -> bool {
     instance_id() == 0
 }
 
+async fn wait_for_queue_storage_substrate(pool: &sqlx::PgPool, config: &QueueStorageConfig) {
+    let mut required = vec![
+        "queue_ring_state".to_string(),
+        "queue_ring_slots".to_string(),
+        "lease_ring_state".to_string(),
+        "lease_ring_slots".to_string(),
+        "claim_ring_state".to_string(),
+        "claim_ring_slots".to_string(),
+        "queue_lanes".to_string(),
+        "queue_enqueue_heads".to_string(),
+        "queue_claim_heads".to_string(),
+        "queue_terminal_live_counts".to_string(),
+        "queue_terminal_rollups".to_string(),
+        "attempt_state".to_string(),
+        "deferred_jobs".to_string(),
+        "dlq_entries".to_string(),
+        "ready_entries".to_string(),
+        "ready_tombstones".to_string(),
+        "done_entries".to_string(),
+        "leases".to_string(),
+    ];
+    for slot in 0..config.queue_slot_count {
+        required.push(format!("ready_entries_{slot}"));
+        required.push(format!("ready_tombstones_{slot}"));
+        required.push(format!("done_entries_{slot}"));
+    }
+    for slot in 0..config.lease_slot_count {
+        required.push(format!("leases_{slot}"));
+    }
+    for slot in 0..config.claim_slot_count {
+        required.push(format!("lease_claims_{slot}"));
+        required.push(format!("lease_claim_closures_{slot}"));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let ready = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT count(*)::int = cardinality($2::text[])
+            FROM unnest($2::text[]) AS required(relname)
+            WHERE EXISTS (
+                SELECT 1
+                FROM pg_class AS c
+                JOIN pg_namespace AS n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1
+                  AND c.relname = required.relname
+            )
+            "#,
+        )
+        .bind(&config.schema)
+        .bind(&required)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        if ready {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for queue_storage substrate in schema {}",
+                config.schema
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 fn build_batch_params(
     queue_names: &[String],
     next_seq: &mut i64,
@@ -492,8 +562,15 @@ pub async fn run() {
     let queue_storage = match storage_engine {
         super::StorageEngineMode::QueueStorage => {
             let storage = super::queue_storage_config_with_receipts_default(true);
-            let (store, storage) =
-                super::prepare_queue_storage_with_config(&pool, storage, false).await;
+            let (store, storage) = if instance_id() == 0 {
+                super::prepare_queue_storage_with_config(&pool, storage, false).await
+            } else {
+                wait_for_queue_storage_substrate(&pool, &storage).await;
+                (
+                    QueueStorage::new(storage.clone()).expect("Invalid QueueStorageConfig"),
+                    storage,
+                )
+            };
             emit_descriptor(
                 &system_name,
                 &db_name,
