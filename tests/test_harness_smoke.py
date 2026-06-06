@@ -23,6 +23,7 @@ from bench_harness.phases import (
 from bench_harness.plots import PLOT_SPECS, lttb, render_all
 from bench_harness.report import write_interactive_report
 from bench_harness.sample import RAW_CSV_HEADER
+from bench_harness.orchestrator import _check_descriptor_drift
 from bench_harness.writers import compute_summary, write_run_readme
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -362,6 +363,39 @@ def test_base_env_forwards_priority_aging_ms(monkeypatch):
     )
     env = _base_env(manifest, {})
     assert env["PRIORITY_AGING_MS"] == "5000"
+
+
+def test_descriptor_drift_allows_custom_schema_table_names():
+    manifest = AdapterManifest(
+        system="awa",
+        db_name="awa_bench",
+        event_tables=["awa.queue_ring_state", "awa.queue_lanes"],
+        event_indexes=[],
+        extensions=[],
+    )
+    descriptor = {
+        "event_tables": ["awa_qs4.queue_ring_state", "awa_qs4.queue_lanes"],
+        "extensions": [],
+    }
+
+    _check_descriptor_drift(manifest, descriptor)
+
+
+def test_descriptor_drift_rejects_missing_relation_name():
+    manifest = AdapterManifest(
+        system="awa",
+        db_name="awa_bench",
+        event_tables=["awa.queue_ring_state", "awa.queue_lanes"],
+        event_indexes=[],
+        extensions=[],
+    )
+    descriptor = {
+        "event_tables": ["awa_qs4.queue_ring_state"],
+        "extensions": [],
+    }
+
+    with pytest.raises(RuntimeError, match="queue_lanes"):
+        _check_descriptor_drift(manifest, descriptor)
 
 
 def test_format_validation_error_is_readable():

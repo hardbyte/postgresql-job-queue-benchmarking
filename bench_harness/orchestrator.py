@@ -531,8 +531,13 @@ def _check_descriptor_drift(manifest: AdapterManifest, descriptor: dict) -> None
     rt_exts = set(descriptor.get("extensions") or [])
     static_tables = set(manifest.event_tables)
     static_exts = set(manifest.extensions)
-    if not rt_tables.issuperset(static_tables):
-        missing = static_tables - rt_tables
+    rt_relation_names = {_relation_name(table) for table in rt_tables}
+    missing = {
+        table
+        for table in static_tables
+        if table not in rt_tables and _relation_name(table) not in rt_relation_names
+    }
+    if missing:
         raise RuntimeError(
             f"{manifest.system}: runtime descriptor missing event tables "
             f"declared in adapter.json: {sorted(missing)}"
@@ -543,6 +548,10 @@ def _check_descriptor_drift(manifest: AdapterManifest, descriptor: dict) -> None
             f"{manifest.system}: runtime descriptor missing extensions "
             f"declared in adapter.json: {sorted(missing)}"
         )
+
+
+def _relation_name(qualified_name: str) -> str:
+    return qualified_name.rsplit(".", 1)[-1]
 
 
 # Teardown lives on the pool now: `pool.stop_all(timeout_s=...)` walks
