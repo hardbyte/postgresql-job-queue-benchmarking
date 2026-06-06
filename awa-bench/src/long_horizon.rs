@@ -23,6 +23,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::time::{interval_at, MissedTickBehavior};
 
+const PRODUCER_SEQUENCE_STRIDE: i64 = 1_000_000_000_000;
+
 #[derive(Debug, Serialize, Deserialize, JobArgs)]
 pub struct LongHorizonJob {
     pub seq: i64,
@@ -696,7 +698,7 @@ pub async fn run() {
             return;
         }
         let mut token_rx = token_rx;
-        let mut seq: i64 = 0;
+        let mut seq: i64 = i64::from(instance_id()) * PRODUCER_SEQUENCE_STRIDE;
         let mut fixed_rate_credit = 0.0_f64;
         let mut next_tick = tokio::time::Instant::now();
         let mut last_credit_tick = tokio::time::Instant::now();
