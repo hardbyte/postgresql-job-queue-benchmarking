@@ -1294,6 +1294,27 @@ def test_summary_includes_wait_event_block(tmp_path: Path):
             "clean_1", "clean", "cluster", "",
             "pg_notification_queue_usage", "0.125", "0.0",
         ])
+        # WAL counters are cumulative pg_stat_wal values; the summary
+        # should keep ordinary metric medians and expose phase deltas.
+        for elapsed, wal_bytes, wal_records, wal_fpi in [
+            ("10.0", "1000.0", "100.0", "3.0"),
+            ("60.0", "1750.0", "145.0", "5.0"),
+        ]:
+            writer.writerow([
+                "test", "awa", "0", elapsed, "2026-05-01T00:01:01Z",
+                "clean_1", "clean", "cluster", "",
+                "pg_wal_bytes", wal_bytes, "0.0",
+            ])
+            writer.writerow([
+                "test", "awa", "0", elapsed, "2026-05-01T00:01:01Z",
+                "clean_1", "clean", "cluster", "",
+                "pg_wal_records", wal_records, "0.0",
+            ])
+            writer.writerow([
+                "test", "awa", "0", elapsed, "2026-05-01T00:01:01Z",
+                "clean_1", "clean", "cluster", "",
+                "pg_wal_fpi", wal_fpi, "0.0",
+            ])
     phases = [parse_phase_spec("clean_1=clean:60s")]
     summary = compute_summary(
         raw_path, run_id="test", scenario=None, phases=phases
@@ -1310,6 +1331,10 @@ def test_summary_includes_wait_event_block(tmp_path: Path):
     }
     metrics = block["metrics"]
     assert "pg_notification_queue_usage" in metrics
+    assert "pg_wal_bytes" in metrics
+    assert block["pg_wal_bytes_delta"] == 750.0
+    assert block["pg_wal_records_delta"] == 45.0
+    assert block["pg_wal_fpi_delta"] == 2.0
     assert "xact_age_s@{\"query\":\"SELECT 1\"}" not in metrics
 
 

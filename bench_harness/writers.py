@@ -528,6 +528,24 @@ def compute_summary(
                 system=system,
                 phase_label=phase_label,
             )
+            phase_block["pg_wal_bytes_delta"] = _cluster_counter_delta(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_wal_bytes",
+            )
+            phase_block["pg_wal_records_delta"] = _cluster_counter_delta(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_wal_records",
+            )
+            phase_block["pg_wal_fpi_delta"] = _cluster_counter_delta(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_wal_fpi",
+            )
             phase_block["replicas"] = replicas
             wait = _wait_event_summary(
                 rows, system=system, phase_label=phase_label
@@ -878,6 +896,29 @@ def _autovacuum_count_delta(
         if len(values) >= 2
     ]
     return float(sum(deltas)) if deltas else None
+
+
+def _cluster_counter_delta(
+    rows: list[dict], *, system: str, phase_label: str, metric: str
+) -> float | None:
+    values: list[float] = []
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row["subject_kind"] != "cluster"
+        ):
+            continue
+        try:
+            values.append(float(row["value"]))
+        except (TypeError, ValueError):
+            continue
+    if len(values) < 2:
+        return None
+    # pg_stat_wal counters are monotonically non-decreasing. Use max-min so
+    # queue drain ordering cannot make the delta negative.
+    return float(max(values) - min(values))
 
 
 def write_summary(summary: dict, path: Path) -> None:

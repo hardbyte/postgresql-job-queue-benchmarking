@@ -93,6 +93,14 @@ _NOTIFICATION_QUEUE_USAGE_SQL = """
 SELECT pg_notification_queue_usage()::double precision
 """
 
+_PG_STAT_WAL_SQL = """
+SELECT
+  wal_records::double precision,
+  wal_fpi::double precision,
+  wal_bytes::double precision
+FROM pg_stat_wal
+"""
+
 _ACTIVE_XACT_SQL = """
 SELECT
   pid,
@@ -478,6 +486,32 @@ class MetricsDaemon(threading.Thread):
                     subject="",
                     metric="pg_notification_queue_usage",
                     value=float(row[0]),
+                )
+
+            try:
+                cur.execute(_PG_STAT_WAL_SQL)
+                row = cur.fetchone()
+            except psycopg.Error:
+                row = None
+            if row is not None:
+                wal_records, wal_fpi, wal_bytes = row
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_wal_records",
+                    value=float(wal_records),
+                )
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_wal_fpi",
+                    value=float(wal_fpi),
+                )
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_wal_bytes",
+                    value=float(wal_bytes),
                 )
 
             try:
