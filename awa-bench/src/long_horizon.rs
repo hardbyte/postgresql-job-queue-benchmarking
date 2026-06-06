@@ -903,7 +903,7 @@ pub async fn run() {
                     seq = next_seq;
                 }
                 Err(err) => {
-                    eprintln!("[awa] producer insert failed: {err}");
+                    eprintln!("[awa] producer insert failed: {err:?}");
                 }
             }
         }
