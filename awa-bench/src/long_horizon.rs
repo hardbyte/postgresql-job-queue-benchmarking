@@ -335,6 +335,7 @@ async fn wait_for_queue_storage_substrate(pool: &sqlx::PgPool, config: &QueueSto
         "queue_enqueue_heads".to_string(),
         "queue_claim_heads".to_string(),
         "queue_terminal_live_counts".to_string(),
+        "queue_terminal_count_deltas".to_string(),
         "queue_terminal_rollups".to_string(),
         "attempt_state".to_string(),
         "deferred_jobs".to_string(),
@@ -348,6 +349,7 @@ async fn wait_for_queue_storage_substrate(pool: &sqlx::PgPool, config: &QueueSto
         required.push(format!("ready_entries_{slot}"));
         required.push(format!("ready_tombstones_{slot}"));
         required.push(format!("done_entries_{slot}"));
+        required.push(format!("queue_terminal_count_deltas_{slot}"));
     }
     for slot in 0..config.lease_slot_count {
         required.push(format!("leases_{slot}"));
@@ -440,7 +442,8 @@ fn queue_storage_event_tables(
     // Only register child partitions and unpartitioned tables.
     // pgstattuple cannot operate on partitioned parents
     // (`lease_claims`, `lease_claim_closures`, `ready_entries`,
-    // `ready_tombstones`, `done_entries`, `leases`), so registering parents would just
+    // `ready_tombstones`, `done_entries`, `leases`,
+    // `queue_terminal_count_deltas`), so registering parents would just
     // spam the collector with errors and never produce a row.
     // `deferred_jobs`, `dlq_entries`, `attempt_state`, and the
     // queue/lease/claim ring state/slot tables are unpartitioned —
@@ -465,6 +468,7 @@ fn queue_storage_event_tables(
         tables.push(format!("{schema}.ready_entries_{slot}"));
         tables.push(format!("{schema}.ready_tombstones_{slot}"));
         tables.push(format!("{schema}.done_entries_{slot}"));
+        tables.push(format!("{schema}.queue_terminal_count_deltas_{slot}"));
     }
     for slot in 0..lease_slot_count {
         tables.push(format!("{schema}.leases_{slot}"));
