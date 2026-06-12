@@ -18,6 +18,7 @@ CREATE DATABASE absurd_bench;
 
 \connect awa_bench
 CREATE EXTENSION IF NOT EXISTS pgstattuple;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 \connect awa_docker_bench
 CREATE EXTENSION IF NOT EXISTS pgstattuple;

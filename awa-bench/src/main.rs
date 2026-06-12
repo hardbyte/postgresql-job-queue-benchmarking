@@ -8,7 +8,7 @@
 //! - `QUEUE_STORAGE_SCHEMA` — queue_storage schema name (default `awa`)
 //! - `QUEUE_STRIPE_COUNT` — logical queue stripe count (default `1`)
 //! - `QUEUE_SLOT_COUNT` / `LEASE_SLOT_COUNT` / `CLAIM_SLOT_COUNT` — slot sizing (defaults 16 / 8 / 8)
-//! - `QUEUE_ROTATE_MS` / `LEASE_ROTATE_MS` — rotate intervals (defaults 1000 / 250)
+//! - `QUEUE_ROTATE_MS` / `LEASE_ROTATE_MS` — rotate intervals (defaults 1000 / 1000)
 //!
 //! The adapter defaults to the vacuum-aware queue_storage subsystem but can
 //! also run the canonical engine for apples-to-apples comparisons via
@@ -106,7 +106,7 @@ fn lease_rotate_interval() -> Duration {
         std::env::var("LEASE_ROTATE_MS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(250),
+            .unwrap_or(1_000),
     )
 }
 
