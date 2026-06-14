@@ -440,8 +440,10 @@ fn queue_storage_event_tables(
     // Only register child partitions and unpartitioned tables.
     // pgstattuple cannot operate on partitioned parents
     // (`lease_claims`, `lease_claim_closures`, `ready_entries`,
-    // `ready_tombstones`, `done_entries`, `leases`), so registering parents would just
-    // spam the collector with errors and never produce a row.
+    // `ready_tombstones`, `receipt_completion_batches`,
+    // `receipt_completion_tombstones`, `queue_terminal_count_deltas`,
+    // `done_entries`, `leases`), so registering parents would just spam the
+    // collector with errors and never produce a row.
     // `deferred_jobs`, `dlq_entries`, `attempt_state`, and the
     // queue/lease/claim ring state/slot tables are unpartitioned —
     // pgstattuple works on them directly.
@@ -464,6 +466,9 @@ fn queue_storage_event_tables(
     for slot in 0..queue_slot_count {
         tables.push(format!("{schema}.ready_entries_{slot}"));
         tables.push(format!("{schema}.ready_tombstones_{slot}"));
+        tables.push(format!("{schema}.receipt_completion_batches_{slot}"));
+        tables.push(format!("{schema}.receipt_completion_tombstones_{slot}"));
+        tables.push(format!("{schema}.queue_terminal_count_deltas_{slot}"));
         tables.push(format!("{schema}.done_entries_{slot}"));
     }
     for slot in 0..lease_slot_count {
