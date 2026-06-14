@@ -340,6 +340,7 @@ async fn wait_for_queue_storage_substrate(pool: &sqlx::PgPool, config: &QueueSto
         "deferred_jobs".to_string(),
         "dlq_entries".to_string(),
         "ready_entries".to_string(),
+        "ready_claim_attempt_batches".to_string(),
         "ready_tombstones".to_string(),
         "ready_segments".to_string(),
         "done_entries".to_string(),
@@ -347,6 +348,7 @@ async fn wait_for_queue_storage_substrate(pool: &sqlx::PgPool, config: &QueueSto
     ];
     for slot in 0..config.queue_slot_count {
         required.push(format!("ready_entries_{slot}"));
+        required.push(format!("ready_claim_attempt_batches_{slot}"));
         required.push(format!("ready_tombstones_{slot}"));
         required.push(format!("done_entries_{slot}"));
     }
@@ -442,7 +444,8 @@ fn queue_storage_event_tables(
     // Only register child partitions and unpartitioned tables.
     // pgstattuple cannot operate on partitioned parents
     // (`lease_claims`, `lease_claim_closures`,
-    // `lease_claim_closure_batches`, `ready_entries`, `ready_tombstones`,
+    // `lease_claim_closure_batches`, `ready_entries`,
+    // `ready_claim_attempt_batches`, `ready_tombstones`,
     // `receipt_completion_batches`, `receipt_completion_tombstones`,
     // `queue_terminal_count_deltas`, `done_entries`, `leases`), so
     // registering parents would just spam the collector with errors and
@@ -469,6 +472,7 @@ fn queue_storage_event_tables(
     ];
     for slot in 0..queue_slot_count {
         tables.push(format!("{schema}.ready_entries_{slot}"));
+        tables.push(format!("{schema}.ready_claim_attempt_batches_{slot}"));
         tables.push(format!("{schema}.ready_tombstones_{slot}"));
         tables.push(format!("{schema}.receipt_completion_batches_{slot}"));
         tables.push(format!("{schema}.receipt_completion_tombstones_{slot}"));
