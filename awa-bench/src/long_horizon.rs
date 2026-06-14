@@ -355,6 +355,7 @@ async fn wait_for_queue_storage_substrate(pool: &sqlx::PgPool, config: &QueueSto
     for slot in 0..config.claim_slot_count {
         required.push(format!("lease_claims_{slot}"));
         required.push(format!("lease_claim_closures_{slot}"));
+        required.push(format!("lease_claim_closure_batches_{slot}"));
     }
 
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -439,11 +440,12 @@ fn queue_storage_event_tables(
 ) -> Vec<String> {
     // Only register child partitions and unpartitioned tables.
     // pgstattuple cannot operate on partitioned parents
-    // (`lease_claims`, `lease_claim_closures`, `ready_entries`,
-    // `ready_tombstones`, `receipt_completion_batches`,
-    // `receipt_completion_tombstones`, `queue_terminal_count_deltas`,
-    // `done_entries`, `leases`), so registering parents would just spam the
-    // collector with errors and never produce a row.
+    // (`lease_claims`, `lease_claim_closures`,
+    // `lease_claim_closure_batches`, `ready_entries`, `ready_tombstones`,
+    // `receipt_completion_batches`, `receipt_completion_tombstones`,
+    // `queue_terminal_count_deltas`, `done_entries`, `leases`), so
+    // registering parents would just spam the collector with errors and
+    // never produce a row.
     // `deferred_jobs`, `dlq_entries`, `attempt_state`, and the
     // queue/lease/claim ring state/slot tables are unpartitioned —
     // pgstattuple works on them directly.
@@ -477,6 +479,7 @@ fn queue_storage_event_tables(
     for slot in 0..claim_slot_count {
         tables.push(format!("{schema}.lease_claims_{slot}"));
         tables.push(format!("{schema}.lease_claim_closures_{slot}"));
+        tables.push(format!("{schema}.lease_claim_closure_batches_{slot}"));
     }
     tables
 }
