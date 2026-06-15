@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import psycopg
+from psycopg import sql
 
 from .sample import Sample, now_iso
 
@@ -127,6 +128,34 @@ SELECT avg_leaf_density, leaf_fragmentation
 FROM pgstatindex(%s)
 """
 
+_PG_STAT_STATEMENTS_TOP_SQL = """
+SELECT
+  queryid::text,
+  calls::double precision,
+  total_exec_time::double precision,
+  mean_exec_time::double precision,
+  rows::double precision,
+  shared_blks_hit::double precision,
+  shared_blks_read::double precision,
+  shared_blks_dirtied::double precision,
+  shared_blks_written::double precision,
+  temp_blks_read::double precision,
+  temp_blks_written::double precision,
+  wal_records::double precision,
+  wal_bytes::double precision,
+  query
+FROM pg_stat_statements
+WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+  AND query NOT ILIKE '%%pg_stat_statements%%'
+ORDER BY total_exec_time DESC
+LIMIT 20
+"""
+
+_CLAIM_EXPLAIN_QUEUE = "awa_longhorizon_bench"
+_CLAIM_EXPLAIN_BATCH_SIZE = 32
+_CLAIM_EXPLAIN_DEADLINE_SECS = 0.005
+_CLAIM_EXPLAIN_AGING_SECS = 0.0
+
 
 def _is_missing_relation(exc: psycopg.Error) -> bool:
     return exc.sqlstate in {"42P01", "42704"}
@@ -140,6 +169,70 @@ def _compact_query_text(query: object, *, max_len: int = 1000) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 1] + "…"
+
+
+def _compact_json_subject(payload: dict[str, object], *, max_len: int = 1000) -> str:
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+def _infer_queue_storage_schema(event_tables: Iterable[str]) -> str | None:
+    for fq_table in event_tables:
+        schema, _, relname = fq_table.partition(".")
+        if schema and relname == "queue_ring_state":
+            return schema
+    for fq_table in event_tables:
+        schema, _, relname = fq_table.partition(".")
+        if schema and relname.startswith("ready_entries_"):
+            return schema
+    return None
+
+
+def _plan_summary(node: object, *, max_depth: int = 3) -> str:
+    if not isinstance(node, dict):
+        return ""
+    label = str(node.get("Node Type") or "Plan")
+    relation = node.get("Relation Name") or node.get("Function Name") or node.get("Index Name")
+    if relation:
+        label = f"{label}({relation})"
+    children = node.get("Plans") or []
+    if not children or max_depth <= 0:
+        return label
+    child_parts = [
+        _plan_summary(child, max_depth=max_depth - 1)
+        for child in children[:3]
+    ]
+    child_parts = [part for part in child_parts if part]
+    if not child_parts:
+        return label
+    suffix = "" if len(children) <= 3 else ",…"
+    return f"{label}[{','.join(child_parts)}{suffix}]"
+
+
+def _explain_doc(row_value: object) -> dict[str, object] | None:
+    value = row_value
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if isinstance(value, list) and value:
+        first = value[0]
+        return first if isinstance(first, dict) else None
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _float_or_zero(value: object) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def activity_subject(
@@ -283,11 +376,151 @@ class MetricsDaemon(threading.Thread):
                             metric="pgstatindex_leaf_fragmentation",
                             value=float(leaf_frag),
                         )
+                    self._emit_pg_stat_statements_snapshot(cur)
+                self._emit_claim_explain_snapshot(conn)
         except psycopg.Error as exc:
             self._emit_adapter_error(
                 subject="",
                 metric="phase_boundary_error",
                 detail=str(exc)[:120],
+            )
+
+    def _emit_pg_stat_statements_snapshot(self, cur: "psycopg.Cursor") -> None:
+        """Emit top query statistics at phase boundaries.
+
+        The benchmark Postgres image preloads ``pg_stat_statements`` and the
+        Awa database installs the extension. Other adapters may not, so this is
+        intentionally best-effort.
+        """
+        try:
+            cur.execute(_PG_STAT_STATEMENTS_TOP_SQL)
+            rows = cur.fetchall()
+        except psycopg.Error as exc:
+            if exc.sqlstate in {"42P01", "42703", "55000"}:
+                return
+            self._emit_adapter_error(
+                subject="pg_stat_statements",
+                metric="pg_stat_statements_error",
+                detail=str(exc)[:120],
+            )
+            return
+        for rank, row in enumerate(rows, start=1):
+            (
+                queryid,
+                calls,
+                total_exec_time,
+                mean_exec_time,
+                row_count,
+                shared_hit,
+                shared_read,
+                shared_dirtied,
+                shared_written,
+                temp_read,
+                temp_written,
+                wal_records,
+                wal_bytes,
+                query,
+            ) = row
+            subject = _compact_json_subject(
+                {
+                    "rank": rank,
+                    "queryid": queryid,
+                    "query": _compact_query_text(query, max_len=700),
+                },
+                max_len=900,
+            )
+            for metric, value in (
+                ("calls", calls),
+                ("total_exec_time_ms", total_exec_time),
+                ("mean_exec_time_ms", mean_exec_time),
+                ("rows", row_count),
+                ("shared_blks_hit", shared_hit),
+                ("shared_blks_read", shared_read),
+                ("shared_blks_dirtied", shared_dirtied),
+                ("shared_blks_written", shared_written),
+                ("temp_blks_read", temp_read),
+                ("temp_blks_written", temp_written),
+                ("wal_records", wal_records),
+                ("wal_bytes", wal_bytes),
+            ):
+                self._emit(
+                    subject_kind="pg_stat_statement",
+                    subject=subject,
+                    metric=metric,
+                    value=float(value),
+                )
+
+    def _emit_claim_explain_snapshot(self, conn: "psycopg.Connection") -> None:
+        """Run a rollback-wrapped claim function EXPLAIN at phase boundaries."""
+        schema = _infer_queue_storage_schema(self.targets.event_tables)
+        if not schema:
+            return
+        explain_sql = sql.SQL(
+            """
+            EXPLAIN (ANALYZE, BUFFERS, WAL, FORMAT JSON)
+            SELECT *
+            FROM {}.claim_ready_runtime(%s, %s, %s, %s)
+            """
+        ).format(sql.Identifier(schema))
+        try:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute("BEGIN")
+                    cur.execute("SET LOCAL statement_timeout = '5s'")
+                    cur.execute(
+                        explain_sql,
+                        (
+                            _CLAIM_EXPLAIN_QUEUE,
+                            _CLAIM_EXPLAIN_BATCH_SIZE,
+                            _CLAIM_EXPLAIN_DEADLINE_SECS,
+                            _CLAIM_EXPLAIN_AGING_SECS,
+                        ),
+                    )
+                    row = cur.fetchone()
+                finally:
+                    cur.execute("ROLLBACK")
+        except psycopg.Error as exc:
+            if _is_missing_relation(exc):
+                return
+            self._emit_adapter_error(
+                subject=f"{schema}.claim_ready_runtime",
+                metric="claim_explain_error",
+                detail=str(exc)[:120],
+            )
+            return
+        if row is None:
+            return
+        doc = _explain_doc(row[0])
+        if doc is None:
+            return
+        plan = doc.get("Plan") if isinstance(doc.get("Plan"), dict) else {}
+        subject = _compact_json_subject(
+            {
+                "schema": schema,
+                "queue": _CLAIM_EXPLAIN_QUEUE,
+                "batch_size": _CLAIM_EXPLAIN_BATCH_SIZE,
+                "plan": _plan_summary(plan),
+            },
+            max_len=900,
+        )
+        for metric, value in (
+            ("planning_time_ms", doc.get("Planning Time")),
+            ("execution_time_ms", doc.get("Execution Time")),
+            ("actual_rows", plan.get("Actual Rows")),
+            ("shared_hit_blocks", plan.get("Shared Hit Blocks")),
+            ("shared_read_blocks", plan.get("Shared Read Blocks")),
+            ("shared_dirtied_blocks", plan.get("Shared Dirtied Blocks")),
+            ("shared_written_blocks", plan.get("Shared Written Blocks")),
+            ("temp_read_blocks", plan.get("Temp Read Blocks")),
+            ("temp_written_blocks", plan.get("Temp Written Blocks")),
+            ("wal_records", plan.get("WAL Records")),
+            ("wal_bytes", plan.get("WAL Bytes")),
+        ):
+            self._emit(
+                subject_kind="pg_explain",
+                subject=subject,
+                metric=f"claim_ready_runtime_{metric}",
+                value=_float_or_zero(value),
             )
 
     # ── continuous polling ──────────────────────────────────────────────

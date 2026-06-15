@@ -350,6 +350,7 @@ async fn wait_for_queue_storage_substrate(pool: &sqlx::PgPool, config: &QueueSto
         required.push(format!("ready_entries_{slot}"));
         required.push(format!("ready_claim_attempt_batches_{slot}"));
         required.push(format!("ready_tombstones_{slot}"));
+        required.push(format!("ready_segments_{slot}"));
         required.push(format!("done_entries_{slot}"));
     }
     for slot in 0..config.lease_slot_count {
@@ -450,8 +451,8 @@ fn queue_storage_event_tables(
     // `queue_terminal_count_deltas`, `done_entries`, `leases`), so
     // registering parents would just spam the collector with errors and
     // never produce a row.
-    // `ready_segments`, `deferred_jobs`, `dlq_entries`, `attempt_state`,
-    // and the queue/lease/claim ring state/slot tables are unpartitioned —
+    // `deferred_jobs`, `dlq_entries`, `attempt_state`, and the
+    // queue/lease/claim ring state/slot tables are unpartitioned —
     // pgstattuple works on them directly.
     let mut tables = vec![
         format!("{schema}.queue_ring_state"),
@@ -468,12 +469,12 @@ fn queue_storage_event_tables(
         format!("{schema}.attempt_state"),
         format!("{schema}.deferred_jobs"),
         format!("{schema}.dlq_entries"),
-        format!("{schema}.ready_segments"),
     ];
     for slot in 0..queue_slot_count {
         tables.push(format!("{schema}.ready_entries_{slot}"));
         tables.push(format!("{schema}.ready_claim_attempt_batches_{slot}"));
         tables.push(format!("{schema}.ready_tombstones_{slot}"));
+        tables.push(format!("{schema}.ready_segments_{slot}"));
         tables.push(format!("{schema}.receipt_completion_batches_{slot}"));
         tables.push(format!("{schema}.receipt_completion_tombstones_{slot}"));
         tables.push(format!("{schema}.queue_terminal_count_deltas_{slot}"));

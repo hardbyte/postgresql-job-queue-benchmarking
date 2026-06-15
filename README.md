@@ -235,8 +235,10 @@ uv run bench compare results/<run-id>
 
 ## Method reference
 
-Scenarios, phase types, and Postgres-side diagnostics (wait events,
-notification queue usage, active transactions) are documented in
+Scenarios, phase types, and Postgres-side diagnostics (WAL counters,
+dead tuples, wait events, `pg_stat_statements`, rollback-wrapped claim
+EXPLAIN snapshots, notification queue usage, active transactions) are
+documented in
 [`docs/method.md`](docs/method.md).
 
 ## Repo layout

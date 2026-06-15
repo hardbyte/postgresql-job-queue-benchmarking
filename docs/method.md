@@ -77,6 +77,24 @@ Notification queue usage lands in `raw.csv` as the cluster metric
 backend pid, application name, state, `xact_start`, wait event, and
 compacted query text encoded in the subject.
 
+Every metrics tick records `pg_stat_wal` counters as cluster metrics and
+`pg_stat_user_tables` counters for each adapter-declared hot table. Phase
+boundaries additionally run `pgstattuple`/`pgstatindex` snapshots for
+dead/free space and index shape.
+
+When `pg_stat_statements` is available, phase boundaries snapshot the top
+queries by cumulative execution time into `raw.csv` as
+`subject_kind=pg_stat_statement`. The subject carries the query id, rank,
+and compacted query text; metrics include calls, total/mean execution time,
+block counters, temp block counters, and WAL counters.
+
+For Awa queue-storage runs, phase boundaries also run a rollback-wrapped
+`EXPLAIN (ANALYZE, BUFFERS, WAL, FORMAT JSON)` against
+`claim_ready_runtime('awa_longhorizon_bench', 32, 0.005, 0.0)`. These rows
+use `subject_kind=pg_explain` and report planning/execution time, root
+buffer counters, root WAL counters, and returned row count without
+permanently claiming jobs.
+
 Wait-event output lands in `raw.csv` (`subject_kind=wait_event`),
 `summary.json` (top-10 events per phase plus `total_active_samples`), and
 a stacked bar plot per system in `index.html`. Wait-event sampling is on
