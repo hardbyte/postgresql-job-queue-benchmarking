@@ -3,6 +3,7 @@
 A throwaway harness adapter exploring the **deferred v0.7 segment engine** for
 awa (issues #169 / #197): a rotation-first, append-only storage model with a
 **cursor-allocator claim-ledger** that keeps **per-job** claim/ack semantics.
+It is a single-queue minimal floor, not the full Awa storage contract.
 
 This is a SPIKE — not production code, not an awa storage mode. It exists to
 answer the open questions from the original #169 storage spike with numbers on
@@ -17,18 +18,19 @@ the shared harness.
 
 - **Pin-immune (Q2): proven.** Through a 30-min idle-in-tx pin, dead tuples stay
   flat (only the single rotation pointer moves); every append-only ring is 0. The
-  storage shape sidesteps the MVCC dead-tuple pile-up that the per-row model
-  fights.
+  base storage shape sidesteps the MVCC dead-tuple pile-up that the per-row model
+  fights. The full engine still has to cost mutable control planes.
 - **Fast claim (Q1): yes, in short bursts.** A cursor allocator (not the naive
   anti-join) sustains 1–5k/s with latency competitive-to-better than awa at the
-  same 128-worker config — ~8–17× the original spike's anti-join.
+  same 128-worker config — ~8–17× the original spike's anti-join. This proves the
+  allocator is not inherently slow, not that the full v0.7 contract is fast.
 - **Sustained throughput: needs work.** Over 30 min the spike could not hold 3k/s
   (partly host contention during the run, partly a prune-`TRUNCATE`-contention
   maturity gap). Per-job round-trips, one-connection-per-worker, and lock-friendly
   maintenance are the engineering items before it rivals queue_storage.
 - **Recommendation: open the v0.7 RFC** with this as feasibility evidence; the
-  remaining work (the omitted semantics — heartbeats/retries/priorities/DLQ — and
-  the maturity gaps) is design-first.
+  remaining work (fairness, batching, lock-friendly prune, and omitted semantics
+  like heartbeats/retries/priorities/DLQ) is design-first.
 
 ## Run
 
