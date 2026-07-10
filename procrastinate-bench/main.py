@@ -267,7 +267,7 @@ async def scenario_worker_only() -> None:
 
 async def scenario_long_horizon() -> None:
     """Fixed-rate producer + steady consumer with JSONL telemetry every
-    SAMPLE_EVERY_S. Contract: benchmarks/portable/CONTRIBUTING_ADAPTERS.md"""
+    SAMPLE_EVERY_S. Contract: CONTRIBUTING_ADAPTERS.md"""
     import collections
     import datetime as _dt
     import time

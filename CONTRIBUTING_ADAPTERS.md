@@ -11,7 +11,7 @@ in the existing adapters (Rust, Python, Go, Elixir).
 Create a self-contained subdirectory:
 
 ```text
-benchmarks/portable/<system>-bench/
+<system>-bench/
     adapter.json                # static manifest (authoritative for preflight)
     Dockerfile                  # unless the adapter runs natively on the host
     README.md                   # anything the orchestrator CI won't surface
@@ -194,7 +194,7 @@ distributed package), prefer a git submodule over copy-pasting:
 ```bash
 # Pin the upstream repo as a submodule
 git submodule add https://github.com/<org>/<sut>.git \
-  benchmarks/portable/<system>-bench/vendor/<sut>
+  <system>-bench/vendor/<sut>
 
 # Use a local path in your manifest of choice:
 # Go (go.mod):       replace github.com/<org>/<sut> => ./vendor/<sut>
@@ -211,18 +211,18 @@ in the Dockerfile and bake it in at build time) so it's captured in
 
 ## 5. Registration — four touchpoints
 
-1. `benchmarks/portable/<system>-bench/adapter.json` — the static manifest (above).
-2. `benchmarks/portable/init-databases.sql` — `CREATE DATABASE <name>_bench;` (and the stock `CREATE EXTENSION IF NOT EXISTS pgstattuple;` pattern).
-3. `benchmarks/portable/bench_harness/adapters.py` — register your system in
+1. `<system>-bench/adapter.json` — the static manifest (above).
+2. `init-databases.sql` — `CREATE DATABASE <name>_bench;` (and the stock `CREATE EXTENSION IF NOT EXISTS pgstattuple;` pattern).
+3. `bench_harness/adapters.py` — register your system in
    `ADAPTERS` with a builder (how to compile / `docker build`) and a launcher
    (argv + env for `docker run --network host` or native).
-4. `benchmarks/portable/README.md` systems table — one new row.
+4. `README.md` systems table — one new row.
 
 ## 6. Testing before opening a PR
 
 ```bash
 # Standalone run against a throwaway DB
-docker compose -f benchmarks/portable/docker-compose.yml up -d postgres
+docker compose up -d postgres
 DATABASE_URL=postgres://bench:bench@localhost:15555/<name>_bench \
   SCENARIO=long_horizon PRODUCER_MODE=fixed PRODUCER_RATE=100 \
   WORKER_COUNT=8 SAMPLE_EVERY_S=2 \
@@ -256,24 +256,24 @@ The existing adapters are the reference implementations — treat each as a
 working example of the contract in its language:
 
 ### Rust
-`benchmarks/portable/awa-bench/src/long_horizon.rs` — uses
+`awa-bench/src/long_horizon.rs` — uses
 `hdrhistogram` for bounded-memory percentiles, `tokio::signal` for clean
 SIGTERM handling, and aligns the first sample tick to the next wall-clock
 `SAMPLE_EVERY_S` boundary via `SystemTime::now()`.
 
 ### Python
-`benchmarks/portable/awa-python-bench/main.py::scenario_long_horizon` and
-`benchmarks/portable/procrastinate-bench/main.py::scenario_long_horizon`
+`awa-python-bench/main.py::scenario_long_horizon` and
+`procrastinate-bench/main.py::scenario_long_horizon`
 — asyncio producer/sampler/depth tasks, `deque` with a capped `maxlen`
 as a bounded latency ring, `loop.add_signal_handler` for SIGTERM.
 
 ### Go
-`benchmarks/portable/river-bench/main.go::runLongHorizon` — goroutines per
+`river-bench/main.go::runLongHorizon` — goroutines per
 concern (producer / depth poller / sampler), `sync/atomic` for counters,
 `signal.Notify` for SIGTERM.
 
 ### Elixir
-`benchmarks/portable/oban-bench/lib/oban_bench/long_horizon.ex` — three
+`oban-bench/lib/oban_bench/long_horizon.ex` — three
 `spawn_link`'d loops; ETS tables for shared counters and latency ring.
 Relies on Docker SIGTERM → BEAM shutdown (stdout is line-buffered, so
 emitted samples survive).
