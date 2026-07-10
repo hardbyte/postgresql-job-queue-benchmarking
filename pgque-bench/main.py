@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Long-horizon benchmark adapter for pgque (NikolayS/pgque).
 
-Contract: benchmarks/portable/CONTRIBUTING_ADAPTERS.md
+Contract: CONTRIBUTING_ADAPTERS.md
 
 pgque is pure SQL+PL/pgSQL, installed via ``\\i sql/pgque.sql`` (vendored as a
 git submodule under ``vendor/pgque``). This adapter:
@@ -195,8 +195,8 @@ def install_pgque_sync() -> None:
     handles the multi-statement script naturally with ``execute()``."""
     if not PGQUE_SQL.exists():
         # The vendored pgque SQL lives in a git submodule
-        # (`benchmarks/portable/pgque-bench/vendor/pgque`) that has to
-        # be initialised before this adapter runs. Surface a clear
+        # (`pgque-bench/vendor/pgque`) that has to be initialised before
+        # this adapter runs. Surface a clear
         # diagnostic instead of the raw FileNotFoundError so a fresh
         # checkout doesn't leave operators chasing a path that doesn't
         # mean anything to them yet.

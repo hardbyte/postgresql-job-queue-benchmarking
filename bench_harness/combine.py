@@ -10,7 +10,7 @@ Inputs must share the same phase shape (label, type, duration). Each
 system may appear in only one input run.
 
 CLI is wired in `bench.py` as the `combine` subcommand, see
-`benchmarks/portable/README.md`.
+`README.md`.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 //! Long-horizon scenario: fixed-rate producer + steady consumer, with rolling
 //! JSONL telemetry samples emitted every `SAMPLE_EVERY_S`.
 //!
-//! Contract: benchmarks/portable/CONTRIBUTING_ADAPTERS.md
+//! Contract: CONTRIBUTING_ADAPTERS.md
 //!
 //! Startup: emits one descriptor record, then runs indefinitely. SIGTERM
 //! flushes pending samples and exits 0 within 5s.

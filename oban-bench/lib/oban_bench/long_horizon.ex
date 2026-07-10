@@ -4,7 +4,7 @@ defmodule ObanBench.LongHorizon do
 
   Fixed-rate producer + steady consumer with clock-aligned JSONL telemetry
   samples every SAMPLE_EVERY_S seconds. Contract:
-  benchmarks/portable/CONTRIBUTING_ADAPTERS.md
+  CONTRIBUTING_ADAPTERS.md
 
   Lifecycle: emits one descriptor record, runs until the BEAM exits (the
   bench harness sends SIGTERM to the Docker container, which terminates the

@@ -74,8 +74,8 @@ contract.
 - Cross-language consistency depends on adapter authors honouring
   the contract. The harness validates the manifest and sample
   schema but cannot verify that an adapter's "completed job"
-  semantics match another's. `SYSTEM_COMPARISONS.md` documents the
-  semantic gaps explicitly.
+  semantics match another's. The README's feature-comparison table
+  and footnotes document the semantic gaps explicitly.
 
 ## Status
 
