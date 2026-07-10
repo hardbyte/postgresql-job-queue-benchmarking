@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-ARG ABSURD_VERSION=0.3.0
+ARG ABSURD_VERSION=0.4.0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates postgresql-client \
