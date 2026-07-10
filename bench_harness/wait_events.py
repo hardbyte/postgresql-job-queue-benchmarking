@@ -11,7 +11,7 @@ publishes counts to ``raw.csv`` and ``summary.json`` directly).
 Design notes
 ------------
 - ``pg_stat_activity`` is a public catalog view. No SECURITY DEFINER, no
-  superuser. Standard ``postgres:17.2-alpine`` image stays.
+  superuser. Standard ``postgres:18.3-alpine`` image stays.
 - One short SELECT per tick; each sample is well under a millisecond. At
   the default 1 s cadence the overhead is negligible (< 0.1% of one core).
 - The sampler's own backend is filtered out via ``pg_backend_pid()`` so

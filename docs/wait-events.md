@@ -33,7 +33,7 @@ boundaries drain the counter into `raw.csv`:
 
 `pg_stat_activity` is a public catalog view. No `SECURITY DEFINER`,
 no superuser, no extension install — runs against the standard
-`postgres:17.2-alpine` image.
+`postgres:18.3-alpine` image.
 
 ## Reading the histogram
 
