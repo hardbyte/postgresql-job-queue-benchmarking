@@ -433,9 +433,13 @@ def _launch_one_replica(
         tailer.join(timeout=2.0)
         return RuntimeError(message)
 
-    # Wait up to 60s for descriptor to arrive so we can cross-check against
-    # the static manifest. Adapters are expected to emit it promptly.
-    deadline = time.time() + 60
+    # Wait for the descriptor to arrive so we can cross-check against the
+    # static manifest. Adapters emit it after their schema migrations, so
+    # the wait must cover a full fresh-install migration run (which grows
+    # as awa gains substrate-refreshing migrations — v041 pushed it past
+    # the old 60s default on the 4-CPU reference postgres).
+    descriptor_timeout_s = float(os.environ.get("ADAPTER_DESCRIPTOR_TIMEOUT_S", "180"))
+    deadline = time.time() + descriptor_timeout_s
     while "descriptor" not in descriptor_holder and time.time() < deadline:
         if proc.poll() is not None:
             raise _abort(
@@ -447,7 +451,8 @@ def _launch_one_replica(
     if not descriptor:
         raise _abort(
             f"{system} replica {instance_id} did not emit a startup "
-            "descriptor within 60s. The harness requires a descriptor "
+            f"descriptor within {descriptor_timeout_s:.0f}s "
+            "(ADAPTER_DESCRIPTOR_TIMEOUT_S). The harness requires a descriptor "
             "record to cross-check the adapter against its static "
             "manifest; running blind would let drift slip through "
             "unnoticed."
