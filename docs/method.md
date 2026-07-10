@@ -41,6 +41,20 @@ Awa-only experiments:
 | `AWA_QUEUE_CLAIMERS` | `1` | Queue-storage dispatcher/claimer loops per logical queue. Claimers share that queue's worker permits. |
 | `AWA_CLAIM_BATCH_SIZE` | `512` | Maximum jobs each claimer attempts to claim in one database round trip. |
 
+## Adapter version notes
+
+Caveats from upstream version bumps that change benchmark semantics but
+aren't visible from the version number alone:
+
+- **absurd-bench**: `absurd-sdk` 0.4.0 fixed a bug where a task registered
+  without an explicit `max_attempts` didn't correctly fall back to the
+  `AsyncAbsurd` app's `default_max_attempts`. The adapter's
+  `register_task(TASK_NAME)` call has never set `max_attempts` explicitly,
+  so this bump silently changes its effective retry count from whatever the
+  prior buggy fallback resolved to, to the correct `default_max_attempts=5`.
+  No adapter code change needed, but keep this in mind when comparing
+  retry/DLQ behavior against runs from before the 0.4.0 bump.
+
 ## Phase types (compose your own)
 
 | Phase type | What it does |
