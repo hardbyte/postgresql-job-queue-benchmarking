@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-REPO_ROOT = Path("/home/brian/dev/postgresql-job-queue-benchmarking")
+REPO_ROOT = Path(__file__).resolve().parent.parent
 BASELINE = REPO_ROOT / "results" / "2026-05-01-worker-scaling" / "matrix.csv"
 BULK = REPO_ROOT / "results" / "2026-05-01-bulk-everywhere" / "matrix.csv"
 OUT = REPO_ROOT / "results" / "2026-05-01-bulk-everywhere" / "plots" / "peak_baseline_vs_bulk.png"
