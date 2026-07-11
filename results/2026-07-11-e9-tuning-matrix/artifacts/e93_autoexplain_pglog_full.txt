@@ -1,0 +1,400 @@
+postgres-1  | 	    ->  Append  (cost=0.15..130.96 rows=16 width=0) (actual rows=0.00 loops=1)
+postgres-1  | 	          Buffers: shared hit=2
+postgres-1  | 	          Subplans Removed: 15
+postgres-1  | 	          ->  Index Scan using idx_awa_ready_tombstones_3_lane_shard on awa.ready_tombstones_3 tomb_1  (cost=0.15..8.18 rows=1 width=0) (actual rows=0.00 loops=1)
+postgres-1  | 	                Index Cond: ((tomb_1.queue = $1) AND (tomb_1.priority = $34) AND (tomb_1.enqueue_shard = $35) AND (tomb_1.lane_seq = $46))
+postgres-1  | 	                Filter: ((tomb_1.ready_slot = $41) AND (tomb_1.ready_generation = $42))
+postgres-1  | 	                Index Searches: 1
+postgres-1  | 	                Buffers: shared hit=2
+postgres-1  | 	Query Identifier: -7294040431451486817
+postgres-1  | 2026-07-11 08:17:53.894 GMT [599] CONTEXT:  SQL statement "SELECT EXISTS (
+postgres-1  | 	                SELECT 1 FROM awa.ready_tombstones AS tomb
+postgres-1  | 	                WHERE tomb.ready_slot = v_target_slot
+postgres-1  | 	                  AND tomb.ready_generation = v_target_generation
+postgres-1  | 	                  AND tomb.queue = p_queue
+postgres-1  | 	                  AND tomb.priority = v_lane_priority
+postgres-1  | 	                  AND tomb.enqueue_shard = v_lane_shard
+postgres-1  | 	                  AND tomb.lane_seq = v_head_lane_seq
+postgres-1  | 	                LIMIT 1
+postgres-1  | 	            )"
+postgres-1  | 	PL/pgSQL function claim_ready_runtime(text,bigint,double precision,double precision) line 215 at SQL statement
+postgres-1  | 2026-07-11 08:17:53.894 GMT [599] LOG:  duration: 0.009 ms  plan:
+postgres-1  | 	Query Text: SELECT EXISTS (
+postgres-1  | 	                    SELECT 1
+postgres-1  | 	                    FROM awa.ready_claim_attempt_batches AS existing_attempts
+postgres-1  | 	                    WHERE existing_attempts.ready_slot = v_target_slot
+postgres-1  | 	                      AND existing_attempts.ready_generation = v_target_generation
+postgres-1  | 	                      AND existing_attempts.queue = p_queue
+postgres-1  | 	                      AND existing_attempts.priority = v_lane_priority
+postgres-1  | 	                      AND existing_attempts.enqueue_shard = v_lane_shard
+postgres-1  | 	                      AND existing_attempts.first_lane_seq <= v_head_lane_seq
+postgres-1  | 	                      AND existing_attempts.next_lane_seq > v_head_lane_seq
+postgres-1  | 	                      AND existing_attempts.lane_ranges @> int8range(v_head_lane_seq, v_head_lane_seq + 1, '[)')
+postgres-1  | 	                    LIMIT 1
+postgres-1  | 	                )
+postgres-1  | 	Result  (cost=6.06..6.07 rows=1 width=1) (actual rows=1.00 loops=1)
+postgres-1  | 	  Output: (InitPlan 1).col1
+postgres-1  | 	  Buffers: shared hit=3
+postgres-1  | 	  InitPlan 1
+postgres-1  | 	    ->  Index Scan using idx_awa_ready_claim_attempt_batches_3_lane on awa.ready_claim_attempt_batches_3 existing_attempts  (cost=0.28..6.06 rows=1 width=0) (actual rows=1.00 loops=1)
+postgres-1  | 	          Index Cond: ((existing_attempts.ready_generation = '51'::bigint) AND (existing_attempts.queue = 'awa_longhorizon_bench'::text) AND (existing_attempts.priority = '2'::smallint) AND (existing_attempts.enqueue_shard = '0'::smallint) AND (existing_attempts.next_lane_seq > '824438'::bigint) AND (existing_attempts.first_lane_seq <= '824438'::bigint))
+postgres-1  | 	          Filter: ((existing_attempts.lane_ranges @> '[824438,824439)'::int8range) AND (existing_attempts.ready_slot = 3))
+postgres-1  | 	          Index Searches: 1
+postgres-1  | 	          Buffers: shared hit=3
+postgres-1  | 	Query Identifier: 6227177114553860409
+postgres-1  | 2026-07-11 08:17:53.894 GMT [599] CONTEXT:  SQL statement "SELECT EXISTS (
+postgres-1  | 	                    SELECT 1
+postgres-1  | 	                    FROM awa.ready_claim_attempt_batches AS existing_attempts
+postgres-1  | 	                    WHERE existing_attempts.ready_slot = v_target_slot
+postgres-1  | 	                      AND existing_attempts.ready_generation = v_target_generation
+postgres-1  | 	                      AND existing_attempts.queue = p_queue
+postgres-1  | 	                      AND existing_attempts.priority = v_lane_priority
+postgres-1  | 	                      AND existing_attempts.enqueue_shard = v_lane_shard
+postgres-1  | 	                      AND existing_attempts.first_lane_seq <= v_head_lane_seq
+postgres-1  | 	                      AND existing_attempts.next_lane_seq > v_head_lane_seq
+postgres-1  | 	                      AND existing_attempts.lane_ranges @> int8range(v_head_lane_seq, v_head_lane_seq + 1, '[)')
+postgres-1  | 	                    LIMIT 1
+postgres-1  | 	                )"
+postgres-1  | 	PL/pgSQL function claim_ready_runtime(text,bigint,double precision,double precision) line 228 at SQL statement
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] LOG:  duration: 1.027 ms  plan:
+postgres-1  | 	Query Text: WITH selected AS (
+postgres-1  | 	                SELECT
+postgres-1  | 	                    ready.job_id,
+postgres-1  | 	                    ready.run_lease,
+postgres-1  | 	                    ready.lane_seq,
+postgres-1  | 	                    EXISTS (
+postgres-1  | 	                        SELECT 1 FROM awa.ready_tombstones AS tomb
+postgres-1  | 	                        WHERE tomb.ready_slot = v_target_slot
+postgres-1  | 	                          AND tomb.ready_generation = v_target_generation
+postgres-1  | 	                          AND tomb.queue = ready.queue
+postgres-1  | 	                          AND tomb.priority = ready.priority
+postgres-1  | 	                          AND tomb.enqueue_shard = ready.enqueue_shard
+postgres-1  | 	                          AND tomb.lane_seq = ready.lane_seq
+postgres-1  | 	                    ) AS is_tombstone
+postgres-1  | 	                FROM awa.ready_entries AS ready
+postgres-1  | 	                WHERE ready.queue = p_queue
+postgres-1  | 	                  AND ready.priority = v_lane_priority
+postgres-1  | 	                  AND ready.enqueue_shard = v_lane_shard
+postgres-1  | 	                  AND ready.ready_slot = v_target_slot
+postgres-1  | 	                  AND ready.ready_generation = v_target_generation
+postgres-1  | 	                  AND ready.lane_seq >= v_lane_claim_seq
+postgres-1  | 	                ORDER BY ready.lane_seq ASC
+postgres-1  | 	                LIMIT v_claim_limit
+postgres-1  | 	            ),
+postgres-1  | 	            selected_with_spent AS (
+postgres-1  | 	                SELECT
+postgres-1  | 	                    selected.*,
+postgres-1  | 	                    (
+postgres-1  | 	                        selected.is_tombstone
+postgres-1  | 	                        OR EXISTS (
+postgres-1  | 	                            SELECT 1
+postgres-1  | 	                            FROM awa.ready_claim_attempt_batches AS existing_attempts
+postgres-1  | 	                            WHERE existing_attempts.ready_slot = v_target_slot
+postgres-1  | 	                              AND existing_attempts.ready_generation = v_target_generation
+postgres-1  | 	                              AND existing_attempts.queue = p_queue
+postgres-1  | 	                              AND existing_attempts.priority = v_lane_priority
+postgres-1  | 	                              AND existing_attempts.enqueue_shard = v_lane_shard
+postgres-1  | 	                              AND existing_attempts.first_lane_seq <= selected.lane_seq
+postgres-1  | 	                              AND existing_attempts.next_lane_seq > selected.lane_seq
+postgres-1  | 	                              AND existing_attempts.lane_ranges @> int8range(selected.lane_seq, selected.lane_seq + 1, '[)')
+postgres-1  | 	                        )
+postgres-1  | 	                        OR (
+postgres-1  | 	                            NOT 't'::boolean
+postgres-1  | 	                            AND (
+postgres-1  | 	                                EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.lease_claims AS existing_claims
+postgres-1  | 	                                    WHERE existing_claims.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_claims.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.lease_claim_closures AS existing_closures
+postgres-1  | 	                                    WHERE existing_closures.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_closures.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.receipt_completion_batches AS existing_batches
+postgres-1  | 	                                    WHERE existing_batches.ready_slot = v_target_slot
+postgres-1  | 	                                      AND existing_batches.ready_generation = v_target_generation
+postgres-1  | 	                                      AND existing_batches.queue = p_queue
+postgres-1  | 	                                      AND existing_batches.priority = v_lane_priority
+postgres-1  | 	                                      AND existing_batches.enqueue_shard = v_lane_shard
+postgres-1  | 	                                      AND existing_batches.job_ids @> ARRAY[selected.job_id]::bigint[]
+postgres-1  | 	                                      AND EXISTS (
+postgres-1  | 	                                          SELECT 1
+postgres-1  | 	                                          FROM unnest(
+postgres-1  | 	                                              existing_batches.job_ids,
+postgres-1  | 	                                              existing_batches.run_leases
+postgres-1  | 	                                          ) AS completed(job_id, run_lease)
+postgres-1  | 	                                          WHERE completed.job_id = selected.job_id
+postgres-1  | 	                                            AND completed.run_lease = selected.run_lease + 1
+postgres-1  | 	                                      )
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.leases AS existing_leases
+postgres-1  | 	                                    WHERE existing_leases.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_leases.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.done_entries AS existing_done
+postgres-1  | 	                                    WHERE existing_done.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_done.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.deferred_jobs AS existing_deferred
+postgres-1  | 	                                    WHERE existing_deferred.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_deferred.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.dlq_entries AS existing_dlq
+postgres-1  | 	                                    WHERE existing_dlq.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_dlq.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.ready_entries AS existing_ready
+postgres-1  | 	                                    WHERE existing_ready.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_ready.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                            )
+postgres-1  | 	                        )
+postgres-1  | 	                    ) AS attempt_spent
+postgres-1  | 	                FROM selected
+postgres-1  | 	            ),
+postgres-1  | 	            spent_prefix AS (
+postgres-1  | 	                SELECT
+postgres-1  | 	                    selected_with_spent.lane_seq,
+postgres-1  | 	                    selected_with_spent.lane_seq
+postgres-1  | 	                        - row_number() OVER (ORDER BY selected_with_spent.lane_seq)::bigint AS prefix_group
+postgres-1  | 	                FROM selected_with_spent
+postgres-1  | 	                WHERE attempt_spent
+postgres-1  | 	            )
+postgres-1  | 	            SELECT max(spent_prefix.lane_seq) + 1
+postgres-1  | 	                                              FROM spent_prefix
+postgres-1  | 	            WHERE prefix_group = v_lane_claim_seq - 1
+postgres-1  | 	Aggregate  (cost=26.30..26.31 rows=1 width=8) (actual rows=1.00 loops=1)
+postgres-1  | 	  Output: (max(spent_prefix.lane_seq) + 1)
+postgres-1  | 	  Buffers: shared hit=2604
+postgres-1  | 	  ->  Subquery Scan on spent_prefix  (cost=0.41..26.30 rows=1 width=8) (actual rows=512.00 loops=1)
+postgres-1  | 	        Output: spent_prefix.lane_seq, spent_prefix.prefix_group
+postgres-1  | 	        Filter: (spent_prefix.prefix_group = '824437'::bigint)
+postgres-1  | 	        Buffers: shared hit=2604
+postgres-1  | 	        ->  WindowAgg  (cost=0.41..26.29 rows=1 width=16) (actual rows=512.00 loops=1)
+postgres-1  | 	              Output: selected.lane_seq, (selected.lane_seq - row_number() OVER w1)
+postgres-1  | 	              Window: w1 AS (ORDER BY selected.lane_seq ROWS UNBOUNDED PRECEDING)
+postgres-1  | 	              Storage: Memory  Maximum Storage: 17kB
+postgres-1  | 	              Buffers: shared hit=2604
+postgres-1  | 	              ->  Subquery Scan on selected  (cost=0.41..26.27 rows=1 width=8) (actual rows=512.00 loops=1)
+postgres-1  | 	                    Output: selected.lane_seq
+postgres-1  | 	                    Filter: (selected.is_tombstone OR EXISTS(SubPlan 1))
+postgres-1  | 	                    Buffers: shared hit=2604
+postgres-1  | 	                    ->  Limit  (cost=0.41..20.19 rows=1 width=25) (actual rows=512.00 loops=1)
+postgres-1  | 	                          Output: NULL::bigint, NULL::bigint, ready.lane_seq, (EXISTS(SubPlan 2))
+postgres-1  | 	                          Buffers: shared hit=1068
+postgres-1  | 	                          ->  Result  (cost=0.41..20.19 rows=1 width=25) (actual rows=512.00 loops=1)
+postgres-1  | 	                                Output: NULL::bigint, NULL::bigint, ready.lane_seq, EXISTS(SubPlan 2)
+postgres-1  | 	                                Buffers: shared hit=1068
+postgres-1  | 	                                ->  Index Scan using idx_awa_ready_3_lane_shard on awa.ready_entries_3 ready  (cost=0.41..12.00 rows=1 width=50) (actual rows=512.00 loops=1)
+postgres-1  | 	                                      Output: NULL::bigint, NULL::bigint, ready.lane_seq, ready.queue, ready.priority, ready.enqueue_shard
+postgres-1  | 	                                      Index Cond: ((ready.queue = 'awa_longhorizon_bench'::text) AND (ready.priority = '2'::smallint) AND (ready.enqueue_shard = '0'::smallint) AND (ready.lane_seq >= '824438'::bigint))
+postgres-1  | 	                                      Filter: ((ready.ready_slot = 3) AND (ready.ready_generation = '51'::bigint))
+postgres-1  | 	                                      Index Searches: 1
+postgres-1  | 	                                      Buffers: shared hit=44
+postgres-1  | 	                                SubPlan 2
+postgres-1  | 	                                  ->  Index Scan using idx_awa_ready_tombstones_3_lane_shard on awa.ready_tombstones_3 tomb  (cost=0.15..8.18 rows=1 width=0) (actual rows=0.00 loops=512)
+postgres-1  | 	                                        Index Cond: ((tomb.queue = ready.queue) AND (tomb.priority = ready.priority) AND (tomb.enqueue_shard = ready.enqueue_shard) AND (tomb.lane_seq = ready.lane_seq))
+postgres-1  | 	                                        Filter: ((tomb.ready_slot = 3) AND (tomb.ready_generation = '51'::bigint))
+postgres-1  | 	                                        Index Searches: 512
+postgres-1  | 	                                        Buffers: shared hit=1024
+postgres-1  | 	                    SubPlan 1
+postgres-1  | 	                      ->  Index Scan using idx_awa_ready_claim_attempt_batches_3_lane on awa.ready_claim_attempt_batches_3 existing_attempts  (cost=0.28..6.06 rows=1 width=0) (actual rows=1.00 loops=512)
+postgres-1  | 	                            Index Cond: ((existing_attempts.ready_generation = '51'::bigint) AND (existing_attempts.queue = 'awa_longhorizon_bench'::text) AND (existing_attempts.priority = '2'::smallint) AND (existing_attempts.enqueue_shard = '0'::smallint) AND (existing_attempts.next_lane_seq > selected.lane_seq) AND (existing_attempts.first_lane_seq <= selected.lane_seq))
+postgres-1  | 	                            Filter: ((existing_attempts.ready_slot = 3) AND (existing_attempts.lane_ranges @> int8range(selected.lane_seq, (selected.lane_seq + 1), '[)'::text)))
+postgres-1  | 	                            Index Searches: 512
+postgres-1  | 	                            Buffers: shared hit=1536
+postgres-1  | 	Query Identifier: -5614581115563526479
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] CONTEXT:  SQL statement "WITH selected AS (
+postgres-1  | 	                SELECT
+postgres-1  | 	                    ready.job_id,
+postgres-1  | 	                    ready.run_lease,
+postgres-1  | 	                    ready.lane_seq,
+postgres-1  | 	                    EXISTS (
+postgres-1  | 	                        SELECT 1 FROM awa.ready_tombstones AS tomb
+postgres-1  | 	                        WHERE tomb.ready_slot = v_target_slot
+postgres-1  | 	                          AND tomb.ready_generation = v_target_generation
+postgres-1  | 	                          AND tomb.queue = ready.queue
+postgres-1  | 	                          AND tomb.priority = ready.priority
+postgres-1  | 	                          AND tomb.enqueue_shard = ready.enqueue_shard
+postgres-1  | 	                          AND tomb.lane_seq = ready.lane_seq
+postgres-1  | 	                    ) AS is_tombstone
+postgres-1  | 	                FROM awa.ready_entries AS ready
+postgres-1  | 	                WHERE ready.queue = p_queue
+postgres-1  | 	                  AND ready.priority = v_lane_priority
+postgres-1  | 	                  AND ready.enqueue_shard = v_lane_shard
+postgres-1  | 	                  AND ready.ready_slot = v_target_slot
+postgres-1  | 	                  AND ready.ready_generation = v_target_generation
+postgres-1  | 	                  AND ready.lane_seq >= v_lane_claim_seq
+postgres-1  | 	                ORDER BY ready.lane_seq ASC
+postgres-1  | 	                LIMIT v_claim_limit
+postgres-1  | 	            ),
+postgres-1  | 	            selected_with_spent AS (
+postgres-1  | 	                SELECT
+postgres-1  | 	                    selected.*,
+postgres-1  | 	                    (
+postgres-1  | 	                        selected.is_tombstone
+postgres-1  | 	                        OR EXISTS (
+postgres-1  | 	                            SELECT 1
+postgres-1  | 	                            FROM awa.ready_claim_attempt_batches AS existing_attempts
+postgres-1  | 	                            WHERE existing_attempts.ready_slot = v_target_slot
+postgres-1  | 	                              AND existing_attempts.ready_generation = v_target_generation
+postgres-1  | 	                              AND existing_attempts.queue = p_queue
+postgres-1  | 	                              AND existing_attempts.priority = v_lane_priority
+postgres-1  | 	                              AND existing_attempts.enqueue_shard = v_lane_shard
+postgres-1  | 	                              AND existing_attempts.first_lane_seq <= selected.lane_seq
+postgres-1  | 	                              AND existing_attempts.next_lane_seq > selected.lane_seq
+postgres-1  | 	                              AND existing_attempts.lane_ranges @> int8range(selected.lane_seq, selected.lane_seq + 1, '[)')
+postgres-1  | 	                        )
+postgres-1  | 	                        OR (
+postgres-1  | 	                            NOT 't'::boolean
+postgres-1  | 	                            AND (
+postgres-1  | 	                                EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.lease_claims AS existing_claims
+postgres-1  | 	                                    WHERE existing_claims.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_claims.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.lease_claim_closures AS existing_closures
+postgres-1  | 	                                    WHERE existing_closures.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_closures.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.receipt_completion_batches AS existing_batches
+postgres-1  | 	                                    WHERE existing_batches.ready_slot = v_target_slot
+postgres-1  | 	                                      AND existing_batches.ready_generation = v_target_generation
+postgres-1  | 	                                      AND existing_batches.queue = p_queue
+postgres-1  | 	                                      AND existing_batches.priority = v_lane_priority
+postgres-1  | 	                                      AND existing_batches.enqueue_shard = v_lane_shard
+postgres-1  | 	                                      AND existing_batches.job_ids @> ARRAY[selected.job_id]::bigint[]
+postgres-1  | 	                                      AND EXISTS (
+postgres-1  | 	                                          SELECT 1
+postgres-1  | 	                                          FROM unnest(
+postgres-1  | 	                                              existing_batches.job_ids,
+postgres-1  | 	                                              existing_batches.run_leases
+postgres-1  | 	                                          ) AS completed(job_id, run_lease)
+postgres-1  | 	                                          WHERE completed.job_id = selected.job_id
+postgres-1  | 	                                            AND completed.run_lease = selected.run_lease + 1
+postgres-1  | 	                                      )
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.leases AS existing_leases
+postgres-1  | 	                                    WHERE existing_leases.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_leases.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.done_entries AS existing_done
+postgres-1  | 	                                    WHERE existing_done.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_done.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.deferred_jobs AS existing_deferred
+postgres-1  | 	                                    WHERE existing_deferred.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_deferred.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.dlq_entries AS existing_dlq
+postgres-1  | 	                                    WHERE existing_dlq.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_dlq.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                                OR EXISTS (
+postgres-1  | 	                                    SELECT 1
+postgres-1  | 	                                    FROM awa.ready_entries AS existing_ready
+postgres-1  | 	                                    WHERE existing_ready.job_id = selected.job_id
+postgres-1  | 	                                      AND existing_ready.run_lease = selected.run_lease + 1
+postgres-1  | 	                                )
+postgres-1  | 	                            )
+postgres-1  | 	                        )
+postgres-1  | 	                    ) AS attempt_spent
+postgres-1  | 	                FROM selected
+postgres-1  | 	            ),
+postgres-1  | 	            spent_prefix AS (
+postgres-1  | 	                SELECT
+postgres-1  | 	                    selected_with_spent.lane_seq,
+postgres-1  | 	                    selected_with_spent.lane_seq
+postgres-1  | 	                        - row_number() OVER (ORDER BY selected_with_spent.lane_seq)::bigint AS prefix_group
+postgres-1  | 	                FROM selected_with_spent
+postgres-1  | 	                WHERE attempt_spent
+postgres-1  | 	            )
+postgres-1  | 	            SELECT max(spent_prefix.lane_seq) + 1
+postgres-1  | 	                                              FROM spent_prefix
+postgres-1  | 	            WHERE prefix_group = v_lane_claim_seq - 1"
+postgres-1  | 	PL/pgSQL function claim_ready_runtime(text,bigint,double precision,double precision) line 346 at SQL statement
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] LOG:  duration: 0.001 ms  plan:
+postgres-1  | 	Query Text: SELECT pg_advisory_lock(hashtextextended(v_lock_key, 0))
+postgres-1  | 	Result  (cost=0.00..0.01 rows=1 width=4) (actual rows=1.00 loops=1)
+postgres-1  | 	  Output: pg_advisory_lock('2127809322410478831'::bigint)
+postgres-1  | 	Query Identifier: 8522508879713816395
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] CONTEXT:  SQL statement "SELECT pg_advisory_lock(hashtextextended(v_lock_key, 0))"
+postgres-1  | 	PL/pgSQL function awa.set_sequence_next(text,bigint) line 15 at PERFORM
+postgres-1  | 	SQL statement "SELECT awa.set_sequence_next(v_claim_seq_name, v_spent_next_seq)"
+postgres-1  | 	PL/pgSQL function claim_ready_runtime(text,bigint,double precision,double precision) line 475 at PERFORM
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] LOG:  duration: 0.004 ms  plan:
+postgres-1  | 	Query Text: SELECT last_value, is_called FROM awa.queue_claim_seq_7814832c9839df6d8d581917f91ae8fa
+postgres-1  | 	Seq Scan on awa.queue_claim_seq_7814832c9839df6d8d581917f91ae8fa  (cost=0.00..1.01 rows=1 width=9) (actual rows=1.00 loops=1)
+postgres-1  | 	  Output: last_value, is_called
+postgres-1  | 	  Buffers: shared hit=1
+postgres-1  | 	Query Identifier: 2465732080645272220
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] CONTEXT:  SQL statement "SELECT last_value, is_called FROM awa.queue_claim_seq_7814832c9839df6d8d581917f91ae8fa"
+postgres-1  | 	PL/pgSQL function awa.sequence_next_value(text) line 11 at EXECUTE
+postgres-1  | 	PL/pgSQL function awa.set_sequence_next(text,bigint) line 17 at assignment
+postgres-1  | 	SQL statement "SELECT awa.set_sequence_next(v_claim_seq_name, v_spent_next_seq)"
+postgres-1  | 	PL/pgSQL function claim_ready_runtime(text,bigint,double precision,double precision) line 475 at PERFORM
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] LOG:  duration: 0.003 ms  plan:
+postgres-1  | 	Query Text: SELECT setval('awa.queue_claim_seq_7814832c9839df6d8d581917f91ae8fa'::regclass, 824949, true)
+postgres-1  | 	Result  (cost=0.00..0.01 rows=1 width=8) (actual rows=1.00 loops=1)
+postgres-1  | 	  Output: setval('awa.queue_claim_seq_7814832c9839df6d8d581917f91ae8fa'::regclass, '824949'::bigint, true)
+postgres-1  | 	  Buffers: shared hit=1
+postgres-1  | 	Query Identifier: 1944652917404243075
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] CONTEXT:  SQL statement "SELECT setval('awa.queue_claim_seq_7814832c9839df6d8d581917f91ae8fa'::regclass, 824949, true)"
+postgres-1  | 	PL/pgSQL function awa.set_sequence_next(text,bigint) line 25 at EXECUTE
+postgres-1  | 	SQL statement "SELECT awa.set_sequence_next(v_claim_seq_name, v_spent_next_seq)"
+postgres-1  | 	PL/pgSQL function claim_ready_runtime(text,bigint,double precision,double precision) line 475 at PERFORM
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] LOG:  duration: 0.001 ms  plan:
+postgres-1  | 	Query Text: SELECT pg_advisory_unlock(hashtextextended(v_lock_key, 0))
+postgres-1  | 	Result  (cost=0.00..0.01 rows=1 width=1) (actual rows=1.00 loops=1)
+postgres-1  | 	  Output: pg_advisory_unlock('2127809322410478831'::bigint)
+postgres-1  | 	Query Identifier: 3844075543843631239
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] CONTEXT:  SQL statement "SELECT pg_advisory_unlock(hashtextextended(v_lock_key, 0))"
+postgres-1  | 	PL/pgSQL function awa.set_sequence_next(text,bigint) line 35 at PERFORM
+postgres-1  | 	SQL statement "SELECT awa.set_sequence_next(v_claim_seq_name, v_spent_next_seq)"
+postgres-1  | 	PL/pgSQL function claim_ready_runtime(text,bigint,double precision,double precision) line 475 at PERFORM
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] LOG:  duration: 0.102 ms  plan:
+postgres-1  | 	Query Text: SELECT awa.set_sequence_next(v_claim_seq_name, v_spent_next_seq)
+postgres-1  | 	Result  (cost=0.00..0.26 rows=1 width=4) (actual rows=1.00 loops=1)
+postgres-1  | 	  Output: set_sequence_next('queue_claim_seq_7814832c9839df6d8d581917f91ae8fa'::text, '824950'::bigint)
+postgres-1  | 	  Buffers: shared hit=2
+postgres-1  | 	Query Identifier: 7576518588365883990
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] CONTEXT:  SQL statement "SELECT awa.set_sequence_next(v_claim_seq_name, v_spent_next_seq)"
+postgres-1  | 	PL/pgSQL function claim_ready_runtime(text,bigint,double precision,double precision) line 475 at PERFORM
+postgres-1  | 2026-07-11 08:17:53.895 GMT [599] LOG:  duration: 2.790 ms  plan:
+postgres-1  | 	Query Text: SELECT 8 AS exec_no, count(*) AS claimed FROM awa.claim_ready_runtime('awa_longhorizon_bench', 512, 0, 0);
+postgres-1  | 	Aggregate  (cost=12.75..12.76 rows=1 width=12) (actual rows=1.00 loops=1)
+postgres-1  | 	  Output: 8, count(*)
+postgres-1  | 	  Buffers: shared hit=2659
+postgres-1  | 	  ->  Function Scan on awa.claim_ready_runtime  (cost=0.25..10.25 rows=1000 width=0) (actual rows=0.00 loops=1)
+postgres-1  | 	        Output: ready_slot, ready_generation, lane_seq, enqueue_shard, lease_slot, lease_generation, claim_slot, receipt_id, claim_batch_id, claim_batch_index, job_id, kind, queue, args, lane_priority, priority, attempt, run_lease, max_attempts, run_at, heartbeat_at, deadline_at, attempted_at, created_at, unique_key, unique_states, payload
+postgres-1  | 	        Function Call: awa.claim_ready_runtime('awa_longhorizon_bench'::text, '512'::bigint, '0'::double precision, '0'::double precision)
+postgres-1  | 	        Buffers: shared hit=2659
+postgres-1  | 	Query Identifier: -6287656988169457474

@@ -35,9 +35,12 @@ sleep 1
 docker compose down -v >>"$LOG" 2>&1 || true
 # Fixed 8k/W=128 for ~90s builds a deep backlog fast (single-stripe drain
 # ceiling ~5k, so ~3k/s of backlog accrues). Then a short clean tail.
+# 8000/s fixed at W=128 exceeds the single-stripe drain ceiling (~5k), so a
+# deep ready backlog accrues over the clean phase — the deep-table regime we
+# want the planner audited against.
 KEEP_DB=1 uv run bench run --systems awa --replicas 1 \
   --producer-rate 8000 --worker-count 128 \
-  --phase warmup=warmup:20s --phase build=high_load:90s \
+  --phase warmup=warmup:20s --phase clean=clean:90s \
   --skip-build >>"$LOG" 2>&1
 log "  part1 rc=$? (DB left up via KEEP_DB)"
 
@@ -61,22 +64,25 @@ BENCH_QUEUE=$(PSQL -tAc "SELECT queue FROM awa.ready_entries GROUP BY queue ORDE
 log "  driving queue: $BENCH_QUEUE"
 echo "bench_queue=$BENCH_QUEUE" > "$ART/e93_queue.txt"
 
-PSQL -v q="$BENCH_QUEUE" > "$ART/e93_manual_drive.txt" 2>>"$LOG" <<'SQL' || log "  part2 psql rc=$?"
-\timing on
-SET auto_explain.log_min_duration = 0;   -- log every nested statement
-SET auto_explain.log_analyze = on;
--- Show the current generic/custom decision knobs.
-SHOW plan_cache_mode;
--- Drive 8 executions in one session; the 6th+ should use the generic plan.
-DO $$
-DECLARE i INT; n INT;
-BEGIN
-  FOR i IN 1..8 LOOP
-    SELECT count(*) INTO n FROM awa.claim_ready_runtime(:'q', 512, 0, 0);
-    RAISE NOTICE 'exec % claimed % rows', i, n;
-  END LOOP;
-END $$;
-SQL
+# Build the drive SQL with the queue interpolated by the SHELL (psql :var
+# substitution does not reach inside dollar-quoted DO/function bodies). Eight
+# top-level calls in one session: plpgsql caches each inner statement's plan
+# per session and PostgreSQL promotes to a generic plan after 5 executions, so
+# calls 6-8 exercise the generic plan. auto_explain.log_nested_statements logs
+# every inner statement's plan + est/actual rows on each call.
+DRIVE_SQL="/home/brian/.claude/jobs/05a47a78/tmp/e93_drive.sql"
+{
+  echo "\\timing on"
+  echo "SET auto_explain.log_min_duration = 0;"
+  echo "SET auto_explain.log_analyze = on;"
+  echo "SET auto_explain.log_nested_statements = on;"
+  echo "SHOW plan_cache_mode;"
+  for i in $(seq 1 8); do
+    echo "SELECT $i AS exec_no, count(*) AS claimed FROM awa.claim_ready_runtime('$BENCH_QUEUE', 512, 0, 0);"
+  done
+} > "$DRIVE_SQL"
+PSQL > "$ART/e93_manual_drive.txt" 2>>"$LOG" < "$DRIVE_SQL" || log "  part2 psql rc=$?"
+cp "$DRIVE_SQL" "$ART/e93_drive.sql"
 log "  captured manual drive"
 docker compose logs postgres 2>/dev/null | tail -400 > "$ART/e93_autoexplain_pglog_full.txt" 2>/dev/null || true
 

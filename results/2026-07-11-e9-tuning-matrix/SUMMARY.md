@@ -163,7 +163,57 @@ that caveat stated explicitly so it is not mistaken for the structural fix.
 
 ## E9.3 — Plan-cache audit
 
-_(pending)_
+Method: a `KEEP_DB` deep-backlog cell (8000/s, W=128, 90s clean — enqueue
+exceeds the ~5k single-stripe drain so backlog accrues) built **305,019 live
+`ready_entries` rows**, then `claim_ready_runtime('awa_longhorizon_bench',
+512, 0, 0)` was driven 8× in one psql session with
+`auto_explain.log_nested_statements=on`, `log_analyze=on`, `log_min_duration=0`
+— so every inner statement's plan + est/actual rows is logged, and calls 6–8
+cross PostgreSQL's 5-execution custom→generic plan boundary. Artifacts:
+`artifacts/e93_manual_drive.txt`, `artifacts/e93_autoexplain_pglog_full.txt`,
+`artifacts/e93_drive.sql`. **Diagnostic only** — `log_analyze` adds
+EXPLAIN ANALYZE overhead, so timings here are not a throughput verdict.
+
+Per-call timing (claimed count alternates 512/0 with the sealed-generation
+rhythm): 68 / 9 / 56 / 6 / 55 / 18 / 55 / 55 ms. **No cliff at call 6** — the
+generic-plan executions (6–8) time identically to the custom ones (1–5).
+
+The claim CTE inner plan on the 305k-row backlog (`ready_slot` partition 3):
+
+| Node | est rows | actual rows |
+|---|---:|---:|
+| `Index Scan idx_awa_ready_3_lane_shard` on `ready_entries_3` | **1** | **512** |
+| `Limit` → `WindowAgg` → `Subquery Scan selected` | 1 | 512 |
+| `Index Scan idx_awa_ready_tombstones_3_lane_shard` (correlated) | 1 | 0 (×512 loops) |
+| `Index Scan idx_awa_ready_claim_attempt_batches_3_lane` (correlated) | 1 | 1 (×512 loops) |
+
+Findings:
+
+1. **No sequential scans on any hot table.** Every access to `ready_entries`,
+   `ready_tombstones`, and `ready_claim_attempt_batches` is an index scan on
+   the shard-aware composite indexes. The only `Seq Scan` in the whole trace is
+   on a one-row sequence-state table.
+2. **Row estimates *are* badly wrong** — the `ready_entries` index scan
+   estimates 1 row where 512 are read (a 512× underestimate), and it propagates
+   up the Limit/WindowAgg/Aggregate chain as `rows=1`. This is exactly the
+   estimate whipsaw E9.2 anticipated.
+3. **…but the misestimate is operationally inert.** The composite index
+   `(queue, priority, enqueue_shard, lane_seq)` exactly covers the CTE's
+   equality predicates *and* its `ORDER BY lane_seq ASC LIMIT`, so the planner
+   takes an index-ordered scan with early-LIMIT termination **regardless** of
+   the estimated row count — a correct 512-row estimate would pick the byte-for-
+   byte identical plan. The nested EXISTS probes are correlated index scans
+   (the right shape). There is no join-order or scan-method decision here for a
+   better estimate to flip.
+4. **No generic-plan misplanning caught.** Custom and generic executions
+   produced the same plan and the same timing across the 5-execution boundary.
+
+**E9.3 verdict: no `plan_cache_mode` pinning warranted, and no code change.**
+The hot claim path is estimate-insensitive by construction (index-forced by the
+ORDER BY + LIMIT). This is a *positive* structural result — the substrate's
+index design already immunizes the claim path against the generic-plan flip and
+against stale statistics. It also predicts E9.2 will be a null on the claim
+path (below).
 
 ## E9.2 — Statistics bundle (spike branch)
 
