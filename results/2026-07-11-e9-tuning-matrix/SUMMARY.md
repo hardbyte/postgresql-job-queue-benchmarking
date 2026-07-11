@@ -81,7 +81,36 @@ designed; the 5k commit storm is where it can pay off.
 
 ### 5k cell (5000/s, W=128) — interleaved off/500/off/2000/off
 
-_(pending)_
+| Cell | enqueue/s | compl/s | backlog | p50 | p99 | WAL MB | WalSync | WALWrite | samples |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| off #1 | 4990 | 5005 | 718 | 104.1 | 235.0 | 793 | 141 | 82 | 386 |
+| **500µs** | 4992 | 5004 | **32700** | 6572 | 6722 | 796 | 134 | 76 | 387 |
+| off #2 | 4989 | 4989 | 125 | 16.0 | 28.0 | 746 | 75 | 13 | 200 |
+| **2000µs** | 4989 | 5001 | 125 | 15.0 | 27.5 | 740 | 74 | 12 | 239 |
+| off #3 | 5000 | 5000 | 125 | 14.5 | 27.0 | 743 | 47 | 8 | 209 |
+
+5k verdict: **null result — no detectable WalSync amortization; reject.** The
+headline is the variance *within* the off controls: backlog 718 / 125 / 125,
+p99 235 / 28 / 27ms, WalSync 141 / 75 / 47. The 5k/W=128 fixed-rate cell sits
+right at awa's single-stripe drain knee (the #380 / #418 regime), so a cell is
+bistable — a "stressed" run (off #1, ~386 active wait samples) buffers deep,
+a "healthy" run (off #2/#3, ~200 samples) holds backlog at ~125. The two
+group-commit arms land inside that off spread: 2000µs was one of the healthy
+runs (backlog 125, WalSync 74 — indistinguishable from off #2), and the
+500µs blowup to backlog 32,700 is a stressed-run draw, **not** a commit_delay
+effect — if the delay caused it, the 2000µs arm (larger delay) would be worse,
+and it was the opposite. WalSync counts track run health, not commit_delay
+(healthy off #3 = 47; stressed off #1 = 141). commit_delay is inert here
+because awa's completion batcher already coalesces the commit storm — the
+per-commit fsync the knob targets has mostly already been amortized upstream.
+Enqueue rate is a rock-solid 4990–5000/s in every cell (producer never the
+bottleneck), so the whole signal lives in drain/backlog, which the knob
+doesn't touch.
+
+**E9.1 overall: REJECT.** Latency-neutral at the gate (safe to leave off),
+zero measurable benefit at the commit storm. Not worth the added tail-latency
+risk of a non-zero `commit_delay` in production. Recommend documenting *why*
+(the batcher already coalesces) rather than shipping the knob.
 
 ## E9.4a — WAL compression (lz4)
 
