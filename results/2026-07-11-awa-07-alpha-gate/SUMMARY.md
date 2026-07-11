@@ -188,52 +188,50 @@ next section before citing "awa: 4,813/s" or "awa: 3,215/s" as *the*
 number; both are true, of different configurations, and the gap
 between them is the actual finding.
 
-### The awa @ W=128 story — CORRECTED 2026-07-11: a real deep-backlog drain regression, bisected to the rotation ledger
+### The awa @ W=128 story — SECOND CORRECTION (2026-07-11): the "ledger regression" is RETRACTED; measurement-infrastructure artifact
 
-**The first published version of this section was wrong.** It read the
-`completion_rate` medians at face value ("old 2,795/s = enqueue-limited").
-Series-level analysis shows the `completion_rate` samples under-read on some
-adapter builds; ground truth is `enqueue_rate` + backlog boundedness, and by
-that measure:
+**Both prior versions of this section were wrong, in opposite directions.** The first
+misread a sampling artifact as "old was enqueue-limited". The second correctly identified
+that v0.6.0 drains this cell at full rate — but the "regression bisected to the rotation
+ledger" it reported was itself an artifact: an **orphaned bench adapter** (from a killed
+grouped cell) survived harness teardown and re-attached to every subsequent cell's database
+(same DSN). It errored harmlessly against pre-ledger schemas but actively ran against
+ledger-era schemas — 128 phantom workers plus a maintenance loop selectively contaminating
+exactly the ledger cells, which made a clean-looking "bisection" implicate the ledger branch.
 
-- **v0.6.0 (old): enqueued a steady 5,000/s with BOUNDED backlog (≤ ~375
-  rows, repeatedly hitting 0), e2e p50 16ms.** The old engine drains this
-  cell at full offered rate. It is NOT enqueue-limited; the earlier claim to
-  the contrary was a metric artifact.
-- **0.7-alpha integration (single-stripe): enqueued 5,000/s with backlog
-  growing monotonically 80k → 277k over the clean window, e2e p50 32
-  seconds.** Real drain ≈3.2k/s. **This is a genuine regression at this
-  shape**, not a backpressure-visibility story.
-- **Bisection (same cell shape, fresh DB per cell, refs pre-built):**
-  - #409 idle-skip only: backlog flat 0 → **clean** (5k drain)
-  - #410 compact deadlines (incl. visibility fixes): backlog flat ~250 → **clean**
-  - **#415 rotation ledger (+ its #409 base): backlog 64k → 334k → OWNS the regression**
-  - full integration: 80k → 374k (matches #415's signature)
-- **Mechanism (suspected, under investigation):** the regression appears only
-  once the ready backlog spans many sealed ring generations (the queue ring
-  rotates ~1/s under load; the ledger's horizon-gated fold trims to one
-  slot-count wrap). Shallow-backlog shapes — W=256 depth-target-4000
-  (12.9–13.3k/s parity) and 800/s W=32 — stayed clean, which is how the
-  original #415 validation matrix missed it.
-- **Striping (stripes=8) partially compensates: 4,813/s** — still short of
-  the offered 5,000/s and of pg-boss/pgmq/pgque (5,000–5,300/s band), and no
-  substitute for fixing the drain path. The single-stripe-claimer ceiling
-  remains relevant as [hardbyte/awa#380](https://github.com/hardbyte/awa/issues/380),
-  and producer backpressure as
-  [hardbyte/awa#341](https://github.com/hardbyte/awa/issues/341), but neither
-  explains this regression.
+**Orphan-free results (fresh DB per cell, refs pre-built, orphan sweep before each cell):**
 
-**Status: PR [hardbyte/awa#415](https://github.com/hardbyte/awa/pull/415) is
-marked do-not-merge pending a fix; #409 and #410 are unaffected and remain
-merge candidates on their own evidence.** The regression-gate section above
-(ref800 + saturation pairs) used depth-limited shapes and its old-vs-new
-conclusions stand for #409+#410; treat integration-level numbers that include
-#415 as provisional until the drain fix lands.
+| cell (W=128 fixed-rate) | v0.6.0 | 0.7-alpha ledger branch |
+|---|---|---|
+| 4,000/s | — | bounded (backlog ≤100) |
+| 4,500/s | — | bounded (backlog ≤112) |
+| 5,000/s | bounded (backlog 0) | bounded (backlog ~125) |
+| 6,500/s | drain ≈6.46k, backlog creeping | — |
+| 8,000/s | drain 7,199/s, backlog →231k, p99 ~18.6s | **drain 7,641/s, backlog →115k, p99 ~7.9s** |
+| WAL (5k cell) | 1,143 MB | 1,142 MB |
 
-A methodology note now lives with this result: `completion_rate` medians from
-this harness can under-read on some builds; validate against
-`enqueue_rate` + backlog series before citing them (this is how the original
-version of this section went wrong).
+The 0.7-alpha integration also re-passes the reference (802/s, p99 21ms) and saturation
+(10.6k/s, p99 333ms) cells orphan-free. **Verdict: the 0.7-alpha stack is equal or better
+than v0.6.0 at every measured shape.**
+
+**What survives from the investigation (both real, independently verified):**
+- Sustained offered load past the drain knee grows the backlog without bound on BOTH
+  versions and end-to-end latency climbs into seconds — producer backpressure
+  ([hardbyte/awa#341](https://github.com/hardbyte/awa/issues/341)) remains the operative gap.
+  The drain rate itself stays near the healthy ceiling in these cells (7.2–7.6k at 8k
+  offered), NOT the 40%-collapse the contaminated cells suggested.
+- A deterministic seeder shows claim yield is capped at the per-generation slice size
+  (single-generation claim filter), identically on both versions
+  ([hardbyte/awa#418](https://github.com/hardbyte/awa/issues/418)) — a latent ceiling under
+  extreme fragmentation, but not reached by these bench shapes when orphan-free.
+- The investigation also surfaced and fixed a real fold-starvation bug on the ledger branch
+  (over-broad MVCC-horizon check; see PR hardbyte/awa#415).
+
+**Methodology lessons now baked into the harness scripts:** orphan-sweep (`pkill awa-bench`)
+before every cell — a killed harness can orphan its adapter, which silently re-attaches to
+later cells' databases (schema-compatibility makes the contamination selective, perfectly
+mimicking a code regression); validate rates against enqueue series + backlog boundedness,
+never completion_rate medians alone; pre-build every ref before interleaved A/B sequences.
 
 Raw data: [`field-w128/fieldA-7systems/`](field-w128/fieldA-7systems/)
 (river/oban/pgboss/procrastinate/absurd/pgque + the new/single-stripe
