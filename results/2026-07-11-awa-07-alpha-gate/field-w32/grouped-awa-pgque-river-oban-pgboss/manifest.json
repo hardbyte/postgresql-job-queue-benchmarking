@@ -1,0 +1,283 @@
+{
+  "run_id": "custom-20260711T012219Z-ea357e",
+  "scenario": null,
+  "started_at": "2026-07-11T01:51:20+00:00",
+  "cli": [
+    "/home/brian/dev/postgresql-job-queue-benchmarking/.venv/bin/bench",
+    "run",
+    "--systems",
+    "awa,pgque,river,oban,pgboss,pgmq,procrastinate,absurd",
+    "--replicas",
+    "1",
+    "--producer-rate",
+    "800",
+    "--worker-count",
+    "32",
+    "--phase",
+    "warmup=warmup:30s",
+    "--phase",
+    "clean=clean:300s"
+  ],
+  "systems": [
+    "awa",
+    "pgque",
+    "river",
+    "oban",
+    "pgboss"
+  ],
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 30
+    },
+    {
+      "label": "clean",
+      "type": "clean",
+      "duration_s": 300
+    }
+  ],
+  "pg_image": "postgres:18.3-alpine",
+  "postgres": {
+    "version": "PostgreSQL 18.3 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "settings": {
+      "shared_buffers": "256MB",
+      "work_mem": "8MB",
+      "maintenance_work_mem": "128MB",
+      "autovacuum": "on",
+      "autovacuum_naptime": "1min",
+      "autovacuum_vacuum_cost_delay": "2ms",
+      "autovacuum_vacuum_cost_limit": "200",
+      "autovacuum_vacuum_scale_factor": "0.2",
+      "autovacuum_analyze_scale_factor": "0.1",
+      "max_connections": "400",
+      "synchronous_commit": "on",
+      "wal_level": "replica"
+    }
+  },
+  "host": {
+    "os": "Linux-6.18.21-x86_64-with-glibc2.42",
+    "kernel": "6.18.21",
+    "cpu": "x86_64",
+    "cpu_count": 24,
+    "memory_bytes": 98688577536,
+    "python": "3.14.3",
+    "docker": "Docker version 29.3.1, build v29.3.1",
+    "docker_compose": "Docker Compose version 5.0.2"
+  },
+  "adapters": {
+    "awa": {
+      "db_name": "awa_bench",
+      "event_indexes": [],
+      "event_tables": [
+        "awa.queue_ring_state",
+        "awa.queue_ring_slots",
+        "awa.lease_ring_state",
+        "awa.lease_ring_slots",
+        "awa.claim_ring_state",
+        "awa.claim_ring_slots",
+        "awa.queue_lanes",
+        "awa.queue_enqueue_heads",
+        "awa.queue_claim_heads",
+        "awa.queue_terminal_live_counts",
+        "awa.queue_terminal_rollups",
+        "awa.attempt_state",
+        "awa.deferred_jobs",
+        "awa.dlq_entries",
+        "awa.ready_entries_0",
+        "awa.ready_tombstones_0",
+        "awa.done_entries_0",
+        "awa.ready_entries_1",
+        "awa.ready_tombstones_1",
+        "awa.done_entries_1",
+        "awa.ready_entries_2",
+        "awa.ready_tombstones_2",
+        "awa.done_entries_2",
+        "awa.ready_entries_3",
+        "awa.ready_tombstones_3",
+        "awa.done_entries_3",
+        "awa.ready_entries_4",
+        "awa.ready_tombstones_4",
+        "awa.done_entries_4",
+        "awa.ready_entries_5",
+        "awa.ready_tombstones_5",
+        "awa.done_entries_5",
+        "awa.ready_entries_6",
+        "awa.ready_tombstones_6",
+        "awa.done_entries_6",
+        "awa.ready_entries_7",
+        "awa.ready_tombstones_7",
+        "awa.done_entries_7",
+        "awa.ready_entries_8",
+        "awa.ready_tombstones_8",
+        "awa.done_entries_8",
+        "awa.ready_entries_9",
+        "awa.ready_tombstones_9",
+        "awa.done_entries_9",
+        "awa.ready_entries_10",
+        "awa.ready_tombstones_10",
+        "awa.done_entries_10",
+        "awa.ready_entries_11",
+        "awa.ready_tombstones_11",
+        "awa.done_entries_11",
+        "awa.ready_entries_12",
+        "awa.ready_tombstones_12",
+        "awa.done_entries_12",
+        "awa.ready_entries_13",
+        "awa.ready_tombstones_13",
+        "awa.done_entries_13",
+        "awa.ready_entries_14",
+        "awa.ready_tombstones_14",
+        "awa.done_entries_14",
+        "awa.ready_entries_15",
+        "awa.ready_tombstones_15",
+        "awa.done_entries_15",
+        "awa.leases_0",
+        "awa.leases_1",
+        "awa.leases_2",
+        "awa.leases_3",
+        "awa.leases_4",
+        "awa.leases_5",
+        "awa.leases_6",
+        "awa.leases_7",
+        "awa.lease_claims_0",
+        "awa.lease_claim_closures_0",
+        "awa.lease_claims_1",
+        "awa.lease_claim_closures_1",
+        "awa.lease_claims_2",
+        "awa.lease_claim_closures_2",
+        "awa.lease_claims_3",
+        "awa.lease_claim_closures_3",
+        "awa.lease_claims_4",
+        "awa.lease_claim_closures_4",
+        "awa.lease_claims_5",
+        "awa.lease_claim_closures_5",
+        "awa.lease_claims_6",
+        "awa.lease_claim_closures_6",
+        "awa.lease_claims_7",
+        "awa.lease_claim_closures_7"
+      ],
+      "extensions": [],
+      "instance_id": 0,
+      "kind": "descriptor",
+      "schema_version": "current",
+      "started_at": "2026-07-11T01:22:50.176Z",
+      "system": "awa",
+      "version": "0.1.0",
+      "revision": {
+        "source": "awa repo",
+        "git_sha": "e05da28f1b36921a631bbd0b7d1dfa3e08fd3276",
+        "git_short": "e05da28",
+        "git_branch": "HEAD",
+        "git_tag": null,
+        "dirty": false,
+        "benchmark_harness": {
+          "source": "benchmark repo",
+          "git_sha": "cc2debbda61875b648ed47bbbf13686d758f2b24",
+          "git_short": "cc2debb",
+          "git_branch": "main",
+          "git_tag": null,
+          "dirty": true
+        }
+      }
+    },
+    "pgque": {
+      "kind": "descriptor",
+      "system": "pgque",
+      "event_tables": [
+        "pgque.config",
+        "pgque.consumer",
+        "pgque.dead_letter",
+        "pgque.event_1",
+        "pgque.event_1_0",
+        "pgque.event_1_1",
+        "pgque.event_1_2",
+        "pgque.event_template",
+        "pgque.queue",
+        "pgque.retry_queue",
+        "pgque.subscription",
+        "pgque.tick"
+      ],
+      "extensions": [],
+      "version": "0.2.0",
+      "schema_version": "v0.2.0",
+      "db_name": "pgque_bench",
+      "started_at": "2026-07-11T01:28:46.154Z",
+      "instance_id": 0,
+      "revision": {
+        "source": "awa repo + pgque submodule",
+        "git_sha": "e05da28f1b36921a631bbd0b7d1dfa3e08fd3276",
+        "git_short": "e05da28",
+        "git_branch": "HEAD",
+        "git_tag": null,
+        "dirty": false,
+        "benchmark_harness": {
+          "source": "benchmark repo",
+          "git_sha": "cc2debbda61875b648ed47bbbf13686d758f2b24",
+          "git_short": "cc2debb",
+          "git_branch": "main",
+          "git_tag": null,
+          "dirty": true
+        },
+        "pgque_submodule_sha": "55ddc1d1be4deaa345b5c32be77e117819da5303",
+        "pgque_submodule_describe": "v0.2.0-rc.2-58-g55ddc1d"
+      }
+    },
+    "river": {
+      "db_name": "river_bench",
+      "event_tables": [
+        "public.river_job"
+      ],
+      "extensions": [],
+      "instance_id": 0,
+      "kind": "descriptor",
+      "schema_version": "current",
+      "started_at": "2026-07-11T01:34:27.837Z",
+      "system": "river",
+      "version": "0.1.0",
+      "revision": {
+        "source": "river-bench/go.mod",
+        "library": "github.com/riverqueue/river",
+        "pinned_version": "v0.40.0"
+      }
+    },
+    "oban": {
+      "system": "oban",
+      "version": "0.1.0",
+      "started_at": "2026-07-11T01:40:07.866377Z",
+      "extensions": [],
+      "kind": "descriptor",
+      "instance_id": 0,
+      "db_name": "oban_bench",
+      "event_tables": [
+        "public.oban_jobs",
+        "public.oban_peers"
+      ],
+      "schema_version": "current",
+      "revision": {
+        "source": "oban-bench/mix.exs",
+        "library": "oban",
+        "pinned_version_constraint": "~> 2.23"
+      }
+    },
+    "pgboss": {
+      "kind": "descriptor",
+      "system": "pgboss",
+      "event_tables": [
+        "pgboss.queue",
+        "pgboss.j1fb06b442ffa58d0c4bbaad9fddaf25966077885a8ed008e857b159f"
+      ],
+      "extensions": [],
+      "version": "pg-boss@12.15.0",
+      "schema_version": "37",
+      "db_name": "pgboss_bench",
+      "started_at": "2026-07-11T01:45:49.640Z",
+      "instance_id": 0,
+      "revision": {
+        "source": "pgboss-bench/package.json",
+        "library": "pg-boss",
+        "pinned_version": "12.26.0"
+      }
+    }
+  }
+}

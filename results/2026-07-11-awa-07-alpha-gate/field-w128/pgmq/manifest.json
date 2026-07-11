@@ -1,0 +1,90 @@
+{
+  "run_id": "custom-20260711T023754Z-a1cb77",
+  "scenario": null,
+  "started_at": "2026-07-11T02:41:46+00:00",
+  "cli": [
+    "/home/brian/dev/postgresql-job-queue-benchmarking/.venv/bin/bench",
+    "run",
+    "--systems",
+    "pgmq",
+    "--replicas",
+    "1",
+    "--pg-image",
+    "ghcr.io/pgmq/pg18-pgmq:v1.11.1",
+    "--producer-rate",
+    "5000",
+    "--worker-count",
+    "128",
+    "--phase",
+    "warmup=warmup:30s",
+    "--phase",
+    "clean=clean:180s"
+  ],
+  "systems": [
+    "pgmq"
+  ],
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 30
+    },
+    {
+      "label": "clean",
+      "type": "clean",
+      "duration_s": 180
+    }
+  ],
+  "pg_image": "ghcr.io/pgmq/pg18-pgmq:v1.11.1",
+  "postgres": {
+    "version": "PostgreSQL 18.3 (Debian 18.3-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+    "settings": {
+      "shared_buffers": "256MB",
+      "work_mem": "8MB",
+      "maintenance_work_mem": "128MB",
+      "autovacuum": "on",
+      "autovacuum_naptime": "1min",
+      "autovacuum_vacuum_cost_delay": "2ms",
+      "autovacuum_vacuum_cost_limit": "200",
+      "autovacuum_vacuum_scale_factor": "0.2",
+      "autovacuum_analyze_scale_factor": "0.1",
+      "max_connections": "400",
+      "synchronous_commit": "on",
+      "wal_level": "replica"
+    }
+  },
+  "host": {
+    "os": "Linux-6.18.21-x86_64-with-glibc2.42",
+    "kernel": "6.18.21",
+    "cpu": "x86_64",
+    "cpu_count": 24,
+    "memory_bytes": 98688577536,
+    "python": "3.14.3",
+    "docker": "Docker version 29.3.1, build v29.3.1",
+    "docker_compose": "Docker Compose version 5.0.2"
+  },
+  "adapters": {
+    "pgmq": {
+      "kind": "descriptor",
+      "system": "pgmq",
+      "event_tables": [
+        "pgmq.q_long_horizon_bench",
+        "pgmq.a_long_horizon_bench"
+      ],
+      "extensions": [
+        "pgmq"
+      ],
+      "version": "pgmq extension via ghcr.io/pgmq/pg18-pgmq:v1.11.1",
+      "schema_version": "1.11.1",
+      "db_name": "pgmq_bench",
+      "started_at": "2026-07-11T02:38:15.262Z",
+      "instance_id": 0,
+      "revision": {
+        "source": "pgmq-bench/main.py",
+        "library": "pgmq extension",
+        "pg_image": "ghcr.io/pgmq/pg18-pgmq:v1.11.1",
+        "pinned_version": "v1.11.1"
+      }
+    }
+  }
+}
