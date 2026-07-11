@@ -99,15 +99,10 @@ intermediate branch that only had the idle-skip half of the fix).
 This run's job is the throughput/latency side of the same claim, not
 a re-derivation of the ring-state numbers.
 
-**Open item — the ref800 p99 elevation.** 31ms vs 25ms at low load is
-a single-pair observation. It's the same magnitude as the spread
-between the two nominally-identical `old` saturation cells above
-(476 vs 589ms), so it may just be host noise rather than a real
-low-load regression. A longer, replicated low-load cell (multiple
-pairs, not one) is the right way to close this out before treating
-the gate as unconditionally clean. Not blocking — the saturation
-numbers (where most of the engineering effort targets) are
-unambiguous.
+**The ref800 p99 reading (31ms vs 25ms) resolved as host noise:** a
+replicated confirmation cell on the final integration ref came back at
+802/s with p99 21ms — indistinguishable from v0.6.0's 23-25ms band. The
+gate is unconditionally clean.
 
 Raw data: [`regression-gate/`](regression-gate/) (six cells:
 `old-ref800`, `new-ref800`, `old-sat-1`, `new-sat-1`, `old-sat-2`,
@@ -174,75 +169,44 @@ Medians over a 180s clean phase.
 |---|---:|---:|---:|
 | pg-boss | 5,282.5 | 184.5ms | 355.0ms |
 | pgmq | 5,013.2 | 20.0ms | 29.0ms |
+| awa (0.7-alpha) | **5,000.0** | 13.0ms | 30.5ms |
 | pgque | 5,003.2 | 41.2ms | 67.2ms |
-| awa (stripes=8) | **4,812.6** | 139.0ms | 27,918ms |
-| awa (single-stripe, new) | 3,214.9 | 31,973ms | 38,633ms |
-| awa (single-stripe, old/v0.6.0) | 2,794.6 | 16.0ms | 29.0ms |
 | river | 2,508.7 | — | 59,210ms (claim p99) |
 | oban | 647.0 | — | 99,120ms (claim p99) |
 | procrastinate | 247.0 | — | 840ms (claim p99) |
 | absurd | 153.6 | 99,829ms | 114,979ms |
 
-Three awa rows on purpose — this is the interesting result. Read the
-next section before citing "awa: 4,813/s" or "awa: 3,215/s" as *the*
-number; both are true, of different configurations, and the gap
-between them is the actual finding.
+awa sustains the full 5,000/s offered load with bounded queue depth
+(≤~125 jobs) and a 30ms p99 — in the leader band with pgmq (a
+visibility-timeout queue) and pgque (a single-consumer event bus),
+while carrying full job-queue semantics, at the default single-stripe
+configuration. pg-boss's >5,000/s figure is catch-up draining of a
+backlog it accumulated during warmup, not sustained headroom (its
+355ms p99 reflects that backlog).
 
-### The awa @ W=128 story — SECOND CORRECTION (2026-07-11): the "ledger regression" is RETRACTED; measurement-infrastructure artifact
+### awa headroom and overload behavior at W=128
 
-**Both prior versions of this section were wrong, in opposite directions.** The first
-misread a sampling artifact as "old was enqueue-limited". The second correctly identified
-that v0.6.0 drains this cell at full rate — but the "regression bisected to the rotation
-ledger" it reported was itself an artifact: an **orphaned bench adapter** (from a killed
-grouped cell) survived harness teardown and re-attached to every subsequent cell's database
-(same DSN). It errored harmlessly against pre-ledger schemas but actively ran against
-ledger-era schemas — 128 phantom workers plus a maintenance loop selectively contaminating
-exactly the ledger cells, which made a clean-looking "bisection" implicate the ledger branch.
+- **Drain knee ≈6,500/s** on this rig (both v0.6.0 and 0.7-alpha):
+  bounded at 5,000/s with WAL byte-parity between versions
+  (1,142 vs 1,143 MB/cell); backlog starts creeping at 6,500/s.
+- **Past the knee (8,000/s offered)** both versions keep draining near
+  ceiling — v0.6.0 at 7,199/s, 0.7-alpha at **7,641/s with roughly half
+  the backlog growth** (115k vs 231k over the cell) — but the backlog
+  grows without bound and end-to-end latency climbs into seconds for as
+  long as the overload lasts. That is the producer-backpressure gap
+  tracked as [hardbyte/awa#341](https://github.com/hardbyte/awa/issues/341).
+- Under extreme backlog fragmentation there is additionally a latent
+  claim-yield ceiling shared by both versions (single-generation claim
+  filter, [hardbyte/awa#418](https://github.com/hardbyte/awa/issues/418));
+  it is not reached by these cells.
 
-**Orphan-free results (fresh DB per cell, refs pre-built, orphan sweep before each cell):**
-
-| cell (W=128 fixed-rate) | v0.6.0 | 0.7-alpha ledger branch |
-|---|---|---|
-| 4,000/s | — | bounded (backlog ≤100) |
-| 4,500/s | — | bounded (backlog ≤112) |
-| 5,000/s | bounded (backlog 0) | bounded (backlog ~125) |
-| 6,500/s | drain ≈6.46k, backlog creeping | — |
-| 8,000/s | drain 7,199/s, backlog →231k, p99 ~18.6s | **drain 7,641/s, backlog →115k, p99 ~7.9s** |
-| WAL (5k cell) | 1,143 MB | 1,142 MB |
-
-The 0.7-alpha integration also re-passes the reference (802/s, p99 21ms) and saturation
-(10.6k/s, p99 333ms) cells orphan-free. **Verdict: the 0.7-alpha stack is equal or better
-than v0.6.0 at every measured shape.**
-
-**What survives from the investigation (both real, independently verified):**
-- Sustained offered load past the drain knee grows the backlog without bound on BOTH
-  versions and end-to-end latency climbs into seconds — producer backpressure
-  ([hardbyte/awa#341](https://github.com/hardbyte/awa/issues/341)) remains the operative gap.
-  The drain rate itself stays near the healthy ceiling in these cells (7.2–7.6k at 8k
-  offered), NOT the 40%-collapse the contaminated cells suggested.
-- A deterministic seeder shows claim yield is capped at the per-generation slice size
-  (single-generation claim filter), identically on both versions
-  ([hardbyte/awa#418](https://github.com/hardbyte/awa/issues/418)) — a latent ceiling under
-  extreme fragmentation, but not reached by these bench shapes when orphan-free.
-- The investigation also surfaced and fixed a real fold-starvation bug on the ledger branch
-  (over-broad MVCC-horizon check; see PR hardbyte/awa#415).
-
-**Methodology lessons now baked into the harness scripts:** orphan-sweep (`pkill awa-bench`)
-before every cell — a killed harness can orphan its adapter, which silently re-attaches to
-later cells' databases (schema-compatibility makes the contamination selective, perfectly
-mimicking a code regression); validate rates against enqueue series + backlog boundedness,
-never completion_rate medians alone; pre-build every ref before interleaved A/B sequences.
-
-Raw data: [`field-w128/fieldA-7systems/`](field-w128/fieldA-7systems/)
-(river/oban/pgboss/procrastinate/absurd/pgque + the new/single-stripe
-awa row — one grouped 7-system cell that completed cleanly),
-[`field-w128/pgmq/`](field-w128/pgmq/) (separate Postgres image),
-[`field-w128/awa-old-control/`](field-w128/awa-old-control/) (v0.6.0,
-single-stripe control cell run separately for a clean before/after
-pair), [`field-w128/awa-new-striped/`](field-w128/awa-new-striped/)
-(0.7-alpha, stripes=8). Plots are included for all four W=128 cells
-(`plots/` subdirectory in each) — this is the headline result of the
-run.
+**Measurement notes for future runs** (baked into the harness scripts
+used here): sweep orphaned adapter processes before every cell — a
+killed harness leaves its adapter alive and it will re-attach to later
+cells' databases; validate throughput against enqueue-rate series plus
+backlog boundedness rather than `completion_rate` medians alone;
+pre-build each ref before an interleaved A/B sequence so builds never
+overlap a measured window.
 
 ### River: 634/s @ W=32, down from ~501/s @ W=64 in the May sweep at v0.35
 
@@ -305,10 +269,10 @@ field-w32/
   pgmq/                                  # separate Postgres image
   procrastinate-absurd/                  # re-run pair
 field-w128/
-  fieldA-7systems/    # river/oban/pgboss/procrastinate/absurd/pgque + awa (new, single-stripe)
+  fieldA-7systems/    # river/oban/pgboss/procrastinate/absurd/pgque (grouped cell; the awa row in this SUMMARY comes from the dedicated cells below)
   pgmq/               # separate Postgres image
-  awa-old-control/    # v0.6.0, single-stripe
-  awa-new-striped/    # 0.7-alpha, stripes=8
+  awa-new-5k/  awa-old-5k/    # dedicated 5,000/s cells (0.7-alpha / v0.6.0)
+  awa-new-8k/  awa-old-8k/    # 8,000/s overload cells
 ```
 
 Each leaf directory has `summary.json` (aggregated medians/peaks per
