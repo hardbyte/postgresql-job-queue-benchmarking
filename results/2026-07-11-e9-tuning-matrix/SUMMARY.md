@@ -118,7 +118,48 @@ risk of a non-zero `commit_delay` in production. Recommend documenting *why*
 attack on the FPI share of WAL bytes. Verdict = `pg_wal_bytes_delta` /
 FPI-delta reduction with throughput/p99 neutrality.
 
-_(table pending)_
+**GUCs verified**: on cells `wal_compression=lz4`, off cells `off`.
+
+### Gate cell (800/s, W=32) — interleaved off/on/off
+
+| Cell | enqueue/s | compl/s | p50 | p99 | WAL MB | WAL recs | WAL FPI |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| off #1 | 800 | 800 | 12.0 | 20.0 | 158 | 768,330 | 9,416 |
+| **lz4** | 798 | 798 | 12.0 | 21.0 | **148** | 771,414 | 9,380 |
+| off #2 | 798 | 799 | 12.0 | 20.0 | 158 | 769,492 | 9,267 |
+
+Gate verdict: **~6% WAL byte reduction, fully latency-neutral.** 148 MB on vs
+158 MB for both off controls (which agree, so the delta is real, not drift),
+at identical record count (~769k) and identical p50/p99 (12ms / 20–21ms). The
+FPI *count* is unchanged (~9,400) — lz4 shrinks each FPI's bytes, it doesn't
+remove FPIs. 6% is modest here because the gate cell's WAL is
+record-dominated, not FPI-dominated; the FPI share is larger under the 5k
+load below.
+
+### 5k cell (5000/s, W=128) — interleaved off/on/off
+
+| Cell | enqueue/s | compl/s | backlog | p50 | p99 | WAL MB | WAL recs | WAL FPI |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| off #1 | 4989 | 4991 | 0 | 15.0 | 27.0 | 738 | 3,089,487 | 10,716 |
+| **lz4** | 4989 | 4989 | 0 | 16.0 | 28.0 | **722** | 3,100,745 | 11,216 |
+| off #2 | 4990 | 4990 | 61 | 15.0 | 27.0 | 743 | 3,098,153 | 11,079 |
+
+5k verdict: **~2.5% WAL byte reduction, latency-neutral.** 722 MB on vs 738 /
+743 MB for the two off controls (which agree), same record count (~3.1M) and
+same p50/p99 (15–16ms / 27–28ms). FPI *count* is flat across all three
+(10.7k–11.2k) — lz4 shrinks FPI bytes, not FPI count, as expected.
+
+**E9.4a overall: ADOPT (small, free win) — but it is not the WAL diet.** lz4
+is a real, latency-neutral 2–6% WAL byte reduction with negligible CPU, safe
+to recommend as a deployment default. But it is *not* the ~52% lever: the E3
+attribution showed B-tree `INSERT_LEAF` records are ~52% of WAL *bytes*, and
+those are ordinary WAL records, not full-page images — lz4 only touches FPIs,
+which are a minority of steady-state WAL bytes here (the FPI-to-total ratio is
+why the gate cell's 6% is *higher* than the 5k cell's 2.5%: fewer records per
+checkpoint window at the gate makes FPIs a larger share). The ~52% index-WAL
+lever needs an index-avoiding storage design (#295) or BRIN (E9.4b), not
+compression. Recommend `wal_compression=lz4` as an ops-handbook default with
+that caveat stated explicitly so it is not mistaken for the structural fix.
 
 ## E9.3 — Plan-cache audit
 
