@@ -16,7 +16,41 @@ WAL bytes. The hot path is PL/pgSQL, so plan-cache semantics apply.
 
 ## The short version
 
-_(filled after all cells land — see per-experiment verdicts below)_
+Five experiments, four config-only + one spike branch, all A/B'd against the
+0.7-alpha baseline (`e389168`) at the 800/s W=32 gate cell and the 5000/s
+W=128 cell, interleaved off/on/off. Headline: **one small adopt
+(`wal_compression=lz4`), everything else a documented null — and the nulls are
+the interesting finding, because they show the substrate's index design already
+neutralizes the planner problems these knobs target.**
+
+- **E9.1 group commit — REJECT (null).** `commit_delay` 500/2000µs is
+  latency-neutral at the gate and shows *no* WalSync amortization at the 5k
+  commit storm. awa's completion batcher already coalesces commits, so the knob
+  has nothing left to batch. The 5k cell's wild backlog swings (125 → 32,700
+  between "identical" cells) are drain-knee bistability, not a commit_delay
+  effect — the higher-delay arm was one of the *healthy* draws.
+- **E9.4a `wal_compression=lz4` — ADOPT (small, free).** Latency-neutral 2–6%
+  WAL byte reduction. But it is *not* the WAL diet: it only shrinks full-page
+  images, and the ~52% index-maintenance WAL is ordinary `INSERT_LEAF`
+  records, not FPIs. Recommend as an ops default with that caveat stated.
+- **E9.3 plan-cache audit — no pinning, no code change (positive null).** On a
+  305k-row backlog, `claim_ready_runtime`'s inner statements underestimate rows
+  by 512× — but the claim CTE is index-forced by its `ORDER BY lane_seq LIMIT`,
+  so the estimate never changes the plan, and there is no generic-plan
+  misplanning across the 5-execution boundary. The substrate design already
+  immunizes the claim path.
+- **E9.2 statistics bundle (spike) — REJECT (null), as E9.3 predicted.**
+  Extended stats + insert-driven autovacuum verified created and populated, but
+  neutral on throughput/latency: the claim path they'd help is
+  estimate-insensitive.
+- **E9.4b BRIN — design sketch only (rejected on the claim path).** BRIN can't
+  serve the equality-prefix + ordered-LIMIT claim; the only worthwhile BRIN is
+  a follow-up spike on `done_entries` cold indexes.
+
+**Net for v0.7 tuning**: ship `wal_compression=lz4` as a deployment default;
+do not ship group commit, plan_cache_mode pinning, or the statistics bundle.
+The structural WAL lever (#295) and a `done_entries` BRIN spike are the real
+next moves on WAL; none of the planner knobs are.
 
 ## Environment
 
@@ -217,16 +251,149 @@ path (below).
 
 ## E9.2 — Statistics bundle (spike branch)
 
-_(pending)_
+Spike branch `spike/e9-statistics` (commit
+[`290ae31`](https://github.com/hardbyte/awa) — SPIKE, not for merge, no
+tests/TLA) amends `install_queue_storage_substrate` with, per installed schema
+(round-1 scope — no `n_distinct` overrides, no parent-ANALYZE):
+- `CREATE STATISTICS (ndistinct, dependencies, mcv)` on
+  `(queue, priority, enqueue_shard)` per `ready_entries` partition, and
+  `(queue, priority)` on `queue_lanes`;
+- `CREATE STATISTICS (ndistinct, dependencies)` on
+  `(ready_slot, ready_generation)` per `ready_entries` partition;
+- `autovacuum_vacuum_insert_threshold=10000` +
+  `autovacuum_vacuum_insert_scale_factor=0.05` on `ready_entries` /
+  `done_entries` partitions.
 
-## E9.4b — BRIN spike
+The "off" arm is the e389168 baseline (the healthy `gc_*_off` / `lz4_*_off`
+cells); the "on" arm is the spike build. Two on-reps per cell.
 
-_(pending / design sketch)_
+| Cell | enqueue/s | compl/s | backlog | p50 | p99 | WAL MB |
+|---|---:|---:|---:|---:|---:|---:|
+| gate off (baseline ×2) | 798 | 800 | 0 | 12.0 | 20.0–20.5 | 157 |
+| **gate stats on1** | 800 | 799 | 0 | 12.0 | 25.0 | 159 |
+| **gate stats on2** | 798 | 798 | 0 | 13.0 | 23.0 | 158 |
+| 5k off (baseline ×3) | 4989–5000 | — | 0–125 | 14.5–16 | 27–28 | 738–746 |
+| **5k stats on1** | 4989 | 4991 | 0 | 15.0 | 28.0 | 739 |
+| **5k stats on2** | 4990 | 5012 | 151 | 57.5 | 158.1 | 776 |
+
+**Spike verified applied** (`artifacts/e92_stats_verify.txt`): all 33 extended
+statistics objects exist and are **populated** (ndistinct + dependencies + mcv
+present on the 16 `st_ready_N_qpe`; ndistinct + dependencies on the 16
+`st_ready_N_slotgen`), and the insert-driven autovacuum reloptions are set on
+every `ready_entries` / `done_entries` partition. The one exception:
+`st_queue_lanes_qp` exists but is **not populated** — `queue_lanes` is a
+handful of rows, below the analyze threshold, so it never gets built (harmless,
+and a hint that the queue_lanes stat is pointless at this table size).
+
+E9.2 verdict: **null result — neutral, no adopt.** Gate cells are within the
+gate's noise band (p99 23–25ms on vs 20–20.5ms off — compare the off #3
+excursion to 38ms in E9.1, same envelope). 5k on1 is a clean healthy draw
+(backlog 0, p99 28ms, indistinguishable from the off cells); 5k on2 is a
+mildly-stressed knee draw (backlog 151, p99 158ms) that sits inside the same
+drain-knee bistability the E9.1 off controls showed (off #1 = 718 backlog).
+There is no systematic shift. This is the *expected* outcome given E9.3: the
+claim hot path is index-forced by its `ORDER BY lane_seq LIMIT`, so better row
+estimates cannot change its plan — and the claim path is where the load is.
+The statistics are correctly built and populated; they simply have nothing to
+fix on the paths that matter at this workload. **Reject for adoption**; keep
+the spike branch as evidence. (A caveat: at 180s these partitions are freshly
+analyzed anyway; a longer-horizon soak with churn — where the issue's "estimates
+whipsaw" concern actually bites — could still find value, but that is a
+separate, longer experiment, and E9.3 makes it a low-probability bet for the
+claim path specifically.)
+
+## E9.4b — BRIN spike (design sketch)
+
+Not benchmarked (time budget spent on E9.1–E9.3 + E9.2). Design analysis
+against the E3 rmgr attribution and the claim predicate:
+
+The ~52% WAL-btree-maintenance cost is dominated by the per-partition
+`_lane_shard` composite btrees `(queue, priority, enqueue_shard, lane_seq)` on
+`ready_entries`, `done_entries`, `ready_tombstones`, and `leases`. The
+tempting BRIN target is `lane_seq`: it is monotone within a
+`(queue, priority, enqueue_shard)` lane and jobs land in a `ready_slot`
+partition in roughly enqueue (≈ lane_seq) order, so heap-page order correlates
+with `lane_seq` — the precondition BRIN needs.
+
+**But BRIN cannot replace these btrees**, for two structural reasons:
+
+1. **The claim predicate is an equality prefix + ordered range + LIMIT.**
+   `WHERE queue=? AND priority=? AND enqueue_shard=? AND ready_slot=? AND
+   ready_generation=? AND lane_seq>=? ORDER BY lane_seq ASC LIMIT n`. The btree
+   serves this as a single index-ordered scan that stops after `n` rows
+   (E9.3 confirmed: `Index Scan … LIMIT`, 512 rows read, early termination).
+   BRIN offers neither the equality lookup nor ordered retrieval — it returns
+   candidate block ranges, forcing a heap scan + sort to satisfy the ORDER BY,
+   which destroys the LIMIT early-out. On a 300k-row backlog partition that is
+   a full-partition scan per claim.
+2. **Multiple lanes interleave in one partition.** `queue`, `priority`,
+   `enqueue_shard` are low-cardinality and *not* correlated with heap order, so
+   BRIN can prune on `lane_seq` range only — it cannot isolate one lane's rows.
+   With many queues/priorities sharing a `ready_slot`, the overlapping-range
+   block set is most of the partition.
+
+**Where BRIN *could* pay** without touching the claim hot path: a
+**secondary** BRIN on `done_entries(created_at)` or `done_entries(job_id)` for
+the cold compatibility-deletion / audit scans, replacing the
+`idx_%s_done_%s_job` btree there — `done_entries` is append-only and never
+claim-scanned, so losing ordered/point lookup is cheap, and a BRIN is
+~1000× smaller with near-zero maintenance WAL. Estimated WAL saving: the
+`done` job-index INSERT_LEAF records are a slice of the 52% btree share
+(roughly a third of the ready/done/tombstone index writes); a BRIN there would
+remove most of that slice's per-insert WAL. This is the only BRIN worth a real
+spike, and it is a follow-up, not part of this matrix.
+
+**Recommendation**: reject BRIN on the claim-path `_lane_shard` indexes
+(structurally incompatible with the ordered-LIMIT claim). File a separate spike
+for a BRIN on the `done_entries` cold indexes as a WAL-diet follow-up to #295.
 
 ## Recommendations
 
-_(pending)_
+| Item | Verdict | Action |
+|---|---|---|
+| `wal_compression=lz4` | **Adopt** | Deployment default; ops-handbook entry (#379) + `awa doctor` advisory check (#373). Not a substitute for #295. |
+| `commit_delay` / `commit_siblings` | **Reject** | Leave at defaults (0 / 5). Document *why* (batcher already coalesces) so it is not re-proposed. |
+| `plan_cache_mode` pinning | **Reject** | No change — claim path is estimate-insensitive by index design (E9.3). |
+| Extended statistics bundle (E9.2) | **Reject** | Do not merge the spike. Neutral at this workload; revisit only if a long-horizon churn soak shows estimate whipsaw on a *non-claim* path. |
+| Insert-driven autovacuum on ready/done partitions | **Reject for now** | Bundled into the E9.2 null; no measured VM/index-only-scan win at 180s. Could re-test in isolation on a long soak. |
+| BRIN on claim-path `_lane_shard` indexes | **Reject** | Structurally incompatible with the ordered-LIMIT claim. |
+| BRIN on `done_entries` cold indexes | **Needs-more** | File a follow-up WAL-diet spike (companion to #295). |
 
 ## For the ops handbook (#379) / awa doctor (#373)
 
-_(pending)_
+- **`wal_compression=lz4` as a recommended deployment default.** Latency-
+  neutral, 2–6% WAL byte reduction on this workload, negligible CPU. Frame it
+  honestly: it compresses full-page images only, so the win is modest and it is
+  *not* a fix for index-maintenance WAL volume — that is the #295 territory. An
+  `awa doctor` check could advise enabling it when `SHOW wal_compression` is
+  `off` (informational, not a hard failure).
+- **`commit_delay` is a trap for this engine.** If an operator reaches for
+  group commit to cut WAL fsyncs, the handbook should note that awa's
+  completion batcher already coalesces the commit storm, so `commit_delay` adds
+  tail latency for no fsync reduction — measured here. Recommend leaving it 0.
+- **Do not pin `plan_cache_mode`.** The claim path's plans are forced by the
+  substrate's composite `(queue, priority, enqueue_shard, lane_seq)` indexes +
+  `ORDER BY … LIMIT`; row-estimate errors (even 512×) don't change them. A
+  well-meaning `plan_cache_mode=force_custom_plan` would only add per-call
+  planning cost with no benefit.
+- **`random_page_cost` / `effective_io_concurrency` (E9.5, not measured here):**
+  the bench box reports `random_page_cost=4`, `effective_io_concurrency=16`.
+  For NVMe production, `random_page_cost≈1.1` is the standard guidance; it was
+  out of scope for this config-only matrix (the canonical `postgres.conf` stays
+  conservative for run-over-run comparability) but belongs in the handbook as a
+  deployment note. No awa-specific measurement was taken.
+
+## Reproducing / artifacts
+
+- `run_cell.sh` — per-cell runner (orphan sweep + `down -v` + `--skip-build` +
+  GUC capture + summary/manifest archive).
+- `overrides/` — exact compose override per experiment (the GUC diff).
+- `drive_config_matrix.sh`, `drive_e92_spike.sh`, `e93_planaudit.sh` — the
+  three drivers.
+- `extract.py` — pulls the verdict row (enqueue/backlog/latency/WAL/wait
+  counts) from a cell's `summary.json`.
+- `cells/<cell>/` — `summary.json`, `manifest.json`, `docker-compose.override.yml`,
+  `gucs.txt`, `run_dir.txt` per cell.
+- `artifacts/` — E9.3 plan-audit (`e93_manual_drive.txt`,
+  `e93_autoexplain_pglog_full.txt`, `e93_drive.sql`, `e93_backlog.txt`) and
+  E9.2 spike verification (`e92_stats_verify.txt`).

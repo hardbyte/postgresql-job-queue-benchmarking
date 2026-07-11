@@ -22,8 +22,11 @@ GATE_PH="--phase warmup=warmup:30s --phase clean=clean:180s"
 FIVEK_PH="--phase warmup=warmup:30s --phase clean=clean:180s"
 
 mlog "======== E9.2 SPIKE START ========"
-mlog "switching primary checkout $AWA -> spike/e9-statistics"
-git -C "$AWA" checkout spike/e9-statistics >>"$MASTER" 2>&1 || { mlog "FATAL checkout"; exit 3; }
+# The spike branch is checked out in a worktree, so detach the primary to the
+# spike commit (same tree) rather than checking out the branch name.
+SPIKE_SHA=$(git -C "$AWA" rev-parse spike/e9-statistics)
+mlog "detaching primary checkout $AWA -> $SPIKE_SHA (spike/e9-statistics tree)"
+git -C "$AWA" checkout --detach "$SPIKE_SHA" >>"$MASTER" 2>&1 || { mlog "FATAL checkout"; exit 3; }
 git -C "$AWA" log --oneline -1 | tee -a "$MASTER"
 
 mlog "pre-building awa-bench against spike (heavy, once)"

@@ -1,0 +1,89 @@
+=== extended statistics objects (pg_statistic_ext) ===
+       stxname       | stxkeys | stxkind 
+---------------------+---------+---------
+ st_queue_lanes_qp   | 1 2     | {d,f,m}
+ st_ready_0_qpe      | 5 7 12  | {d,f,m}
+ st_ready_0_slotgen  | 1 2     | {d,f}
+ st_ready_10_qpe     | 5 7 12  | {d,f,m}
+ st_ready_10_slotgen | 1 2     | {d,f}
+ st_ready_11_qpe     | 5 7 12  | {d,f,m}
+ st_ready_11_slotgen | 1 2     | {d,f}
+ st_ready_12_qpe     | 5 7 12  | {d,f,m}
+ st_ready_12_slotgen | 1 2     | {d,f}
+ st_ready_13_qpe     | 5 7 12  | {d,f,m}
+ st_ready_13_slotgen | 1 2     | {d,f}
+ st_ready_14_qpe     | 5 7 12  | {d,f,m}
+ st_ready_14_slotgen | 1 2     | {d,f}
+ st_ready_15_qpe     | 5 7 12  | {d,f,m}
+ st_ready_15_slotgen | 1 2     | {d,f}
+ st_ready_1_qpe      | 5 7 12  | {d,f,m}
+ st_ready_1_slotgen  | 1 2     | {d,f}
+ st_ready_2_qpe      | 5 7 12  | {d,f,m}
+ st_ready_2_slotgen  | 1 2     | {d,f}
+ st_ready_3_qpe      | 5 7 12  | {d,f,m}
+ st_ready_3_slotgen  | 1 2     | {d,f}
+ st_ready_4_qpe      | 5 7 12  | {d,f,m}
+ st_ready_4_slotgen  | 1 2     | {d,f}
+ st_ready_5_qpe      | 5 7 12  | {d,f,m}
+ st_ready_5_slotgen  | 1 2     | {d,f}
+ st_ready_6_qpe      | 5 7 12  | {d,f,m}
+ st_ready_6_slotgen  | 1 2     | {d,f}
+ st_ready_7_qpe      | 5 7 12  | {d,f,m}
+ st_ready_7_slotgen  | 1 2     | {d,f}
+ st_ready_8_qpe      | 5 7 12  | {d,f,m}
+ st_ready_8_slotgen  | 1 2     | {d,f}
+ st_ready_9_qpe      | 5 7 12  | {d,f,m}
+ st_ready_9_slotgen  | 1 2     | {d,f}
+(33 rows)
+
+=== are they populated? (pg_statistic_ext_data present) ===
+       stxname       | has_ndistinct | has_deps | has_mcv 
+---------------------+---------------+----------+---------
+ st_queue_lanes_qp   | f             | f        | f
+ st_ready_0_qpe      | t             | t        | t
+ st_ready_0_slotgen  | t             | t        | f
+ st_ready_10_qpe     | t             | t        | t
+ st_ready_10_slotgen | t             | t        | f
+ st_ready_11_qpe     | t             | t        | t
+ st_ready_11_slotgen | t             | t        | f
+ st_ready_12_qpe     | t             | t        | t
+ st_ready_12_slotgen | t             | t        | f
+ st_ready_13_qpe     | t             | t        | t
+ st_ready_13_slotgen | t             | t        | f
+ st_ready_14_qpe     | t             | t        | t
+ st_ready_14_slotgen | t             | t        | f
+ st_ready_15_qpe     | t             | t        | t
+ st_ready_15_slotgen | t             | t        | f
+ st_ready_1_qpe      | t             | t        | t
+ st_ready_1_slotgen  | t             | t        | f
+ st_ready_2_qpe      | t             | t        | t
+ st_ready_2_slotgen  | t             | t        | f
+ st_ready_3_qpe      | t             | t        | t
+ st_ready_3_slotgen  | t             | t        | f
+ st_ready_4_qpe      | t             | t        | t
+ st_ready_4_slotgen  | t             | t        | f
+ st_ready_5_qpe      | t             | t        | t
+ st_ready_5_slotgen  | t             | t        | f
+ st_ready_6_qpe      | t             | t        | t
+ st_ready_6_slotgen  | t             | t        | f
+ st_ready_7_qpe      | t             | t        | t
+ st_ready_7_slotgen  | t             | t        | f
+ st_ready_8_qpe      | t             | t        | t
+ st_ready_8_slotgen  | t             | t        | f
+ st_ready_9_qpe      | t             | t        | t
+ st_ready_9_slotgen  | t             | t        | f
+(33 rows)
+
+=== insert-driven autovacuum storage params on ready/done partitions ===
+     relname     |                                      reloptions                                       
+-----------------+---------------------------------------------------------------------------------------
+ done_entries_0  | {autovacuum_vacuum_insert_threshold=10000,autovacuum_vacuum_insert_scale_factor=0.05}
+ done_entries_1  | {autovacuum_vacuum_insert_threshold=10000,autovacuum_vacuum_insert_scale_factor=0.05}
+ done_entries_10 | {autovacuum_vacuum_insert_threshold=10000,autovacuum_vacuum_insert_scale_factor=0.05}
+ done_entries_11 | {autovacuum_vacuum_insert_threshold=10000,autovacuum_vacuum_insert_scale_factor=0.05}
+ done_entries_12 | {autovacuum_vacuum_insert_threshold=10000,autovacuum_vacuum_insert_scale_factor=0.05}
+ done_entries_13 | {autovacuum_vacuum_insert_threshold=10000,autovacuum_vacuum_insert_scale_factor=0.05}
+ done_entries_14 | {autovacuum_vacuum_insert_threshold=10000,autovacuum_vacuum_insert_scale_factor=0.05}
+ done_entries_15 | {autovacuum_vacuum_insert_threshold=10000,autovacuum_vacuum_insert_scale_factor=0.05}
+(8 rows)
+
