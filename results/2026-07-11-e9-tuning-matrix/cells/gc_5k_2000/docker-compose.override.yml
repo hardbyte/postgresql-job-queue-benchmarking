@@ -1,0 +1,16 @@
+# E9.1 group commit — commit_delay=2000us, commit_siblings=5.
+# See e91_groupcommit_500.yml; this is the higher-delay arm.
+services:
+  postgres:
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "commit_delay=2000"
+      - "-c"
+      - "commit_siblings=5"

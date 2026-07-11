@@ -1,0 +1,12 @@
+# LOCAL ONLY — do not commit. Enables pg_stat_statements for bottleneck
+# diagnostics during the 2026-07 local perf investigation.
+services:
+  postgres:
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"

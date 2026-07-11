@@ -1,0 +1,42 @@
+[08:20:44] ======== E9.2 SPIKE START ========
+[08:20:44] detaching primary checkout /home/brian/dev/awa -> 290ae31e7d70f6c7bb0f406c8313f534adf44377 (spike/e9-statistics tree)
+290ae31 spike(e9.2): extended statistics + insert-driven autovacuum on hot tables
+[08:20:44] pre-building awa-bench against spike (heavy, once)
+[08:21:05] build OK
+[08:21:05] >>> stats_gate_on1
+[08:21:05]   activated override: /home/brian/dev/postgresql-job-queue-benchmarking/results/2026-07-11-e9-tuning-matrix/overrides/baseline.yml -> docker-compose.override.yml
+[08:21:05] === CELL stats_gate_on1 : sweeping orphans + tearing down ===
+[08:21:06]   RUN rate=800 W=32 mode=fixed phases=--phase warmup=warmup:30s --phase clean=clean:180s env=[] keep_db=0
+[08:25:03]   cell rc=0
+[08:25:03]   captured GUCs
+[08:25:03]   archived from /home/brian/dev/postgresql-job-queue-benchmarking/results/custom-20260711T082106Z-bd26d1
+[08:25:03] === CELL stats_gate_on1 done rc=0 ===
+[08:25:03] <<< stats_gate_on1 OK
+[08:25:03] >>> stats_5k_on1
+[08:25:03]   activated override: /home/brian/dev/postgresql-job-queue-benchmarking/results/2026-07-11-e9-tuning-matrix/overrides/baseline.yml -> docker-compose.override.yml
+[08:25:03] === CELL stats_5k_on1 : sweeping orphans + tearing down ===
+[08:25:04]   RUN rate=5000 W=128 mode=fixed phases=--phase warmup=warmup:30s --phase clean=clean:180s env=[] keep_db=0
+[08:29:03]   cell rc=0
+[08:29:03]   captured GUCs
+[08:29:03]   archived from /home/brian/dev/postgresql-job-queue-benchmarking/results/custom-20260711T082504Z-77502e
+[08:29:03] === CELL stats_5k_on1 done rc=0 ===
+[08:29:03] <<< stats_5k_on1 OK
+[08:29:03] >>> stats_gate_on2
+[08:29:03]   activated override: /home/brian/dev/postgresql-job-queue-benchmarking/results/2026-07-11-e9-tuning-matrix/overrides/baseline.yml -> docker-compose.override.yml
+[08:29:03] === CELL stats_gate_on2 : sweeping orphans + tearing down ===
+[08:29:04]   RUN rate=800 W=32 mode=fixed phases=--phase warmup=warmup:30s --phase clean=clean:180s env=[] keep_db=0
+[08:33:04]   cell rc=0
+[08:33:04]   captured GUCs
+[08:33:04]   archived from /home/brian/dev/postgresql-job-queue-benchmarking/results/custom-20260711T082905Z-457fe9
+[08:33:04] === CELL stats_gate_on2 done rc=0 ===
+[08:33:04] <<< stats_gate_on2 OK
+[08:33:04] >>> stats_5k_on2
+[08:33:04]   activated override: /home/brian/dev/postgresql-job-queue-benchmarking/results/2026-07-11-e9-tuning-matrix/overrides/baseline.yml -> docker-compose.override.yml
+[08:33:04] === CELL stats_5k_on2 : sweeping orphans + tearing down ===
+[08:33:05]   RUN rate=5000 W=128 mode=fixed phases=--phase warmup=warmup:30s --phase clean=clean:180s env=[] keep_db=0
+[08:37:03]   cell rc=0
+[08:37:03]   captured GUCs
+[08:37:03]   archived from /home/brian/dev/postgresql-job-queue-benchmarking/results/custom-20260711T083305Z-b0f5ba
+[08:37:03] === CELL stats_5k_on2 done rc=0 ===
+[08:37:03] <<< stats_5k_on2 OK
+[08:37:03] ======== E9.2 SPIKE DONE ========
