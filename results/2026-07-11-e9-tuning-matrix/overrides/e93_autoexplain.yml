@@ -1,0 +1,29 @@
+# E9.3 plan-cache audit — auto_explain + pg_stat_statements.
+# auto_explain must be in shared_preload_libraries (restart-only), hence in
+# the compose command. Logs nested (PL/pgSQL inner) statements above
+# log_min_duration with row estimates, so we can catch a generic-plan flip
+# in claim_ready_runtime's inner statements misplanning on a deep backlog.
+services:
+  postgres:
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements,auto_explain"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "auto_explain.log_min_duration=50ms"
+      - "-c"
+      - "auto_explain.log_nested_statements=on"
+      - "-c"
+      - "auto_explain.log_analyze=on"
+      - "-c"
+      - "auto_explain.log_buffers=on"
+      - "-c"
+      - "auto_explain.log_timing=off"
+      - "-c"
+      - "auto_explain.log_verbose=on"
+      - "-c"
+      - "auto_explain.log_format=text"

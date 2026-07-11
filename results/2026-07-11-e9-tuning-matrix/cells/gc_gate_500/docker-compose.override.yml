@@ -1,0 +1,19 @@
+# E9.1 group commit — commit_delay=500us, commit_siblings=5.
+# commit_delay is in MICROseconds. A leader with >=commit_siblings active
+# transactions sleeps commit_delay before flushing, coalescing concurrent
+# commits into fewer WAL fsyncs (fewer IO:WalSync waits) at the cost of
+# added latency on the delayed commits.
+services:
+  postgres:
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "commit_delay=500"
+      - "-c"
+      - "commit_siblings=5"

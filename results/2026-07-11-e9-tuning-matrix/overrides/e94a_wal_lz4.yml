@@ -1,0 +1,17 @@
+# E9.4a WAL diet — wal_compression=lz4.
+# Compresses full-page images (FPI) written to WAL after a checkpoint. The
+# hypothesis: index maintenance FPIs are ~52% of WAL bytes; lz4 should cut
+# wal_bytes with negligible CPU. Verdict = pg_wal_bytes_delta (FPI share)
+# reduction with throughput/p99 neutrality.
+services:
+  postgres:
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "wal_compression=lz4"
