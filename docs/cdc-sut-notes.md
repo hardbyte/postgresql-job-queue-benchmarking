@@ -27,8 +27,17 @@ Operational facts gathered 2026-07-17 for the three external systems, so the nex
 - Events: `Event::{Begin,Commit,Insert,Update,Delete,…}`, each with `commit_lsn`/`start_lsn`/`tx_ordinal`; rows are positional `Vec<Cell>` (bigint = `Cell::I64`) mapped to names via `ReplicatedTableSchema`. Our destination converts to canonical envelope and POSTs to the receiver (one pipeline per consumer = slot-per-consumer arm).
 - Initial table copy is on by default, publication-driven, no documented off-switch — harmless here because the source table is empty at pipeline start; check `TableSyncCopyConfig` if that changes.
 
-## Harness status
+## Harness status (updated 2026-07-17, second session)
 
-- Registry: `cdc_harness/adapters.py` (`pgoutput-raw`, `debezium-server`). Readiness = declared slots appear in `pg_replication_slots`.
-- Receiver decodes `ENVELOPE` ∈ canonical | debezium | sequin (sequin decoder written from docs, untested against a live instance).
-- Smoke: `uv run --extra dev pytest -m cdc_smoke` (pgoutput-raw); Debezium: `uv run cdc --system debezium-server --scenario smoke --rate 100 --profiles 4xfast --drain-timeout-s 90`.
+- Registry: `cdc_harness/adapters.py` — `pgoutput-raw`, `debezium-server`, `sequin`, `supabase-etl` all pass the smoke scenario (debezium needs `--profiles Nxfast`, see its known issue above).
+- Sequin gotchas found empirically: sink `batch: true` is not a valid YAML key (use `batch_size` only, `initial_backfill` also rejected); its slot-create call cancels on a short client timeout → preflight pre-creates `sequin_slot`; `VAULT_KEY` must be deterministic because a persisted `sequin_config` DB encrypted under an old key crashes boot (preflight now recreates SUT extra databases each run). Post-outage recovery shows a redelivery window (dups + per-key seq regressions) — at-least-once replay, correctly counted by the receiver.
+- Supabase ETL gotchas: concurrent `Pipeline::start()` races on `CREATE SCHEMA etl` (start sequentially); each pipeline uses ~2 slots (apply + table sync) and **fails table-sync quietly when the cluster hits max_replication_slots** — preflight now drops stale slots on all `*_bench` DBs and the overlay allows 32; slot names are pipeline-id-derived so readiness uses slot *count*.
+- M3 phases implemented: `big-tx(rows=N)` (single huge tx into an unpublished ballast table — decode reorder-buffer/spill cost without touching the verified stream) and `ddl-change` (ADD COLUMN mid-stream). Scenarios: `big_transaction`, `ddl_mid_stream`, `smoke_m3`. All four systems survive `smoke_m3` at 200k ballast rows; note 200k ≈ 24 MB < 64 MB `logical_decoding_work_mem`, so spill metrics only trigger at the full 1M-row scenario.
+- Smoke: `uv run --extra dev pytest -m cdc_smoke` (~65 s, pgoutput-raw); per-system: `uv run cdc --system <name> --scenario smoke|smoke_m3 --rate 100 --drain-timeout-s 90`.
+
+## Not yet implemented (next sessions)
+
+- Debezium + Kafka Connect arm (broker topology) + receiver Kafka consumer mode; `broker-down` phase.
+- `pgoutput-awa` relay (queue-PG service, awa enqueue/worker glue).
+- Ledger/outbox loadgen modes + tx-integrity (torn-tx windows) and cross-table snapshot-consistency verification; `snapshot` scenario (`SNAPSHOT_MODE=initial` is plumbed but unused).
+- `slot-invalidation` phase (scenario-scoped `max_slot_wal_keep_size`), resource sampler (docker stats), TOAST/REPLICA IDENTITY fidelity cells, plots for the insulation matrix.

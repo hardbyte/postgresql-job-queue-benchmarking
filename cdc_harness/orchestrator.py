@@ -101,6 +101,29 @@ CDC_SCENARIOS: dict[str, list[str]] = {
         "heal=clean:20m",
         "drain=recovery:30m",
     ],
+    "big_transaction": [
+        "warmup=warmup:5m",
+        "clean_1=clean:10m",
+        "bigtx=big-tx(rows=1000000):5m",
+        "post=clean:10m",
+        "drain=recovery:10m",
+    ],
+    "ddl_mid_stream": [
+        "warmup=warmup:5m",
+        "clean_1=clean:10m",
+        "ddl=ddl-change:2m",
+        "post=clean:10m",
+        "drain=recovery:5m",
+    ],
+    # Fast M3 pipe check: big-tx spill + DDL survival at smoke scale.
+    "smoke_m3": [
+        "warmup=warmup:5s",
+        "clean_1=clean:15s",
+        "bigtx=big-tx(rows=200000):15s",
+        "ddl=ddl-change:10s",
+        "post=clean:10s",
+        "drain=recovery:10s",
+    ],
 }
 
 
@@ -370,8 +393,35 @@ class SlotPoller(threading.Thread):
 # ── Phase hooks (consumer chaos via receiver control API) ────────────────
 
 
-def apply_phase_enter(phase: Phase, control_url: str, consumer_count: int) -> None:
-    if phase.type is PhaseType.CONSUMER_DEAD:
+def apply_phase_enter(phase: Phase, control_url: str, consumer_count: int,
+                      db_url: str) -> None:
+    if phase.type is PhaseType.BIG_TX:
+        # One huge transaction into an UNPUBLISHED ballast table: the
+        # decode reorder buffer still processes (and spills) the whole tx
+        # even though the publication filters it out — decode_spill_bytes
+        # from the slot poller shows each system's cost.
+        rows = phase.int_param("rows", 1_000_000)
+        log(f"phase {phase.label}: writing {rows}-row single transaction (ballast)")
+        with psycopg.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("CREATE TABLE IF NOT EXISTS cdc_bench.ballast"
+                            " (id bigint, filler text)")
+                cur.execute(
+                    "INSERT INTO cdc_bench.ballast"
+                    " SELECT g, repeat('x', 100) FROM generate_series(1, %s) g",
+                    (rows,),
+                )
+            conn.commit()
+        log(f"phase {phase.label}: ballast transaction committed")
+    elif phase.type is PhaseType.DDL_CHANGE:
+        column = f"extra_{phase.label}"
+        log(f"phase {phase.label}: ALTER TABLE cdc_bench.events ADD COLUMN {column}")
+        with psycopg.connect(db_url, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"ALTER TABLE cdc_bench.events ADD COLUMN {column} text"
+                )
+    elif phase.type is PhaseType.CONSUMER_DEAD:
         cid = phase.int_param("id", 0)
         http_json(control_url, {"consumer_id": cid, "mode": "dead"})
         log(f"phase {phase.label}: consumer {cid} -> dead")
@@ -611,7 +661,7 @@ def main(argv: list[str] | None = None) -> int:
         for phase in phases:
             tracker.set(phase.label, phase.type.value)
             log(f"phase {phase.label} ({phase.type.value}) for {phase.duration_s}s")
-            apply_phase_enter(phase, control_url, consumer_count)
+            apply_phase_enter(phase, control_url, consumer_count, db_url)
             deadline = time.monotonic() + phase.duration_s
             watched = [(receiver, "receiver"), (loadgen, "loadgen")] + [
                 (m.proc, m.name) for m in adapter_procs

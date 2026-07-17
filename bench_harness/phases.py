@@ -35,6 +35,8 @@ class PhaseType(str, Enum):
     CONSUMER_DEAD = "consumer-dead"
     CONSUMER_SLOW = "consumer-slow"
     SINK_OUTAGE = "sink-outage"
+    BIG_TX = "big-tx"
+    DDL_CHANGE = "ddl-change"
 
 
 # Matplotlib-compatible colour tints. Tuned for the dark "neutral gray" base
@@ -57,6 +59,8 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.CONSUMER_DEAD:    ("#C04A4A", 0.35),
     PhaseType.CONSUMER_SLOW:    ("#D8A03A", 0.30),
     PhaseType.SINK_OUTAGE:      ("#A03030", 0.40),
+    PhaseType.BIG_TX:           ("#A378C8", 0.35),
+    PhaseType.DDL_CHANGE:       ("#6C8FAF", 0.30),
 }
 
 # Whether samples in this phase type feed into summary.json (warmup excluded).
@@ -78,6 +82,8 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.CONSUMER_DEAD:    True,
     PhaseType.CONSUMER_SLOW:    True,
     PhaseType.SINK_OUTAGE:      True,
+    PhaseType.BIG_TX:           True,
+    PhaseType.DDL_CHANGE:       True,
 }
 
 
