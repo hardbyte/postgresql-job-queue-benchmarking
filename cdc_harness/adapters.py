@@ -72,10 +72,20 @@ class CdcAdapter:
     db_name: str
     slot_prefix: str
     launch: Callable[["CdcAdapter", LaunchCtx], list[ManagedProc]]
-    prepare: Callable[["CdcAdapter"], None] = field(default=lambda self: None)
+    prepare: Callable[["CdcAdapter"], object] = field(default=lambda self: None)
     version: Callable[["CdcAdapter"], str] = field(default=lambda self: "in-repo")
+    # Databases the SUT needs on the shared instance beyond db_name
+    # (e.g. Sequin's config store). Created empty at preflight.
+    extra_databases: tuple[str, ...] = ()
+    # Buffer topologies (one shared slot) override the per-consumer default.
+    slots: Callable[[int], list[str]] | None = None
+    # Slots preflight should create with pgoutput before the SUT starts
+    # (e.g. Sequin cancels its own slot-create call on a short timeout).
+    precreate_slots: tuple[str, ...] = ()
 
     def slot_names(self, consumer_count: int) -> list[str]:
+        if self.slots is not None:
+            return self.slots(consumer_count)
         return [f"{self.slot_prefix}{i}" for i in range(consumer_count)]
 
 
@@ -169,6 +179,99 @@ def _launch_debezium_server(adapter: CdcAdapter, ctx: LaunchCtx) -> list[Managed
     return procs
 
 
+# ── sequin: single container + Redis sidecar; ONE shared slot, per-sink
+# cursors — the "buffer" topology. One webhook sink per consumer. ──────────
+
+SEQUIN_IMAGE = os.environ.get("SEQUIN_IMAGE", "sequin/sequin:latest")
+REDIS_IMAGE = "redis:7-alpine"
+SEQUIN_REDIS_PORT = 16379
+
+
+def _sequin_yaml(ctx: LaunchCtx) -> str:
+    endpoints = "\n".join(
+        f'  - name: "consumer-{i}"\n    url: "{ctx.receiver_base}/sink/{i}"'
+        for i in range(ctx.consumer_count)
+    )
+    sinks = "\n".join(
+        f'  - name: "sink-{i}"\n'
+        f'    database: "source"\n'
+        f"    source:\n"
+        f'      include_tables: ["cdc_bench.events"]\n'
+        f"    destination:\n"
+        f'      type: "webhook"\n'
+        f'      http_endpoint: "consumer-{i}"\n'
+        f"    batch_size: 100"
+        for i in range(ctx.consumer_count)
+    )
+    return f"""account:
+  name: "cdc-bench"
+databases:
+  - name: "source"
+    hostname: "{ctx.db_host}"
+    port: {ctx.db_port}
+    database: "{ctx.db_name}"
+    username: "{ctx.db_user}"
+    password: "{ctx.db_password}"
+    slot:
+      name: "sequin_slot"
+      create_if_not_exists: true
+    publication:
+      name: "cdc_pub"
+      create_if_not_exists: false
+http_endpoints:
+{endpoints}
+sinks:
+{sinks}
+"""
+
+
+def _launch_sequin(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedProc]:
+    import base64
+
+    procs: list[ManagedProc] = []
+    subprocess.run(["docker", "rm", "-f", "cdcbench-redis", "cdcbench-sequin"],
+                   capture_output=True)
+    redis = subprocess.Popen(
+        ["docker", "run", "--rm", "--network", "host", "--name", "cdcbench-redis",
+         REDIS_IMAGE, "redis-server", "--port", str(SEQUIN_REDIS_PORT)],
+        stdout=(ctx.logs_dir / "redis.stdout.log").open("w"),
+        stderr=subprocess.STDOUT, text=True,
+    )
+    procs.append(ManagedProc(name="redis", proc=redis, container="cdcbench-redis"))
+
+    config_b64 = base64.b64encode(_sequin_yaml(ctx).encode()).decode()
+    (ctx.logs_dir / "sequin.yaml").write_text(_sequin_yaml(ctx))  # forensics
+    env = {
+        "PG_HOSTNAME": ctx.db_host,
+        "PG_PORT": str(ctx.db_port),
+        "PG_DATABASE": "sequin_config",
+        "PG_USERNAME": ctx.db_user,
+        "PG_PASSWORD": ctx.db_password,
+        "PG_POOL_SIZE": "10",
+        "REDIS_URL": f"redis://{ctx.db_host}:{SEQUIN_REDIS_PORT}",
+        # Deterministic keys: the config DB may outlive a run, and a changed
+        # VAULT_KEY makes Sequin crash decrypting its own stored config.
+        # This is a throwaway bench instance — nothing sensitive is stored.
+        "SECRET_KEY_BASE": base64.b64encode(b"cdc-bench-secret-key-base-0000000000000000000000").decode(),
+        "VAULT_KEY": base64.b64encode(b"cdc-bench-vault-key-000000000000").decode(),
+        "CONFIG_FILE_YAML": config_b64,
+    }
+    argv = ["docker", "run", "--rm", "--network", "host",
+            "--name", "cdcbench-sequin"]
+    for key, value in env.items():
+        argv += ["-e", f"{key}={value}"]
+    argv.append(SEQUIN_IMAGE)
+    sequin = subprocess.Popen(
+        argv,
+        stdout=(ctx.logs_dir / "sequin.stdout.log").open("w"),
+        stderr=(ctx.logs_dir / "sequin.stderr.log").open("w"),
+        text=True,
+    )
+    procs.append(ManagedProc(name="sequin", proc=sequin,
+                             container="cdcbench-sequin"))
+    return procs
+
+
 ADAPTERS: dict[str, CdcAdapter] = {
     "pgoutput-raw": CdcAdapter(
         system="pgoutput-raw",
@@ -187,5 +290,18 @@ ADAPTERS: dict[str, CdcAdapter] = {
         launch=_launch_debezium_server,
         prepare=lambda self: _docker_pull(DEBEZIUM_IMAGE),
         version=lambda self: DEBEZIUM_IMAGE,
+    ),
+    "sequin": CdcAdapter(
+        system="sequin",
+        envelope="sequin",
+        topology="buffer",
+        db_name="sequin_cdc_bench",
+        slot_prefix="sequin_",
+        launch=_launch_sequin,
+        prepare=lambda self: [_docker_pull(i) for i in (SEQUIN_IMAGE, REDIS_IMAGE)] and None,
+        version=lambda self: SEQUIN_IMAGE,
+        extra_databases=("sequin_config",),
+        slots=lambda _n: ["sequin_slot"],
+        precreate_slots=("sequin_slot",),
     ),
 }

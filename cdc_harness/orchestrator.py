@@ -223,9 +223,11 @@ def ensure_postgres(compose: bool) -> None:
     )
 
 
-def preflight(admin_url: str, db_name: str, slot_prefix: str) -> str:
-    """Create the bench DB + source schema + publication; drop stale slots.
-    Returns the per-system DATABASE_URL."""
+def preflight(admin_url: str, db_name: str, slot_prefix: str,
+              extra_databases: tuple[str, ...] = (),
+              precreate_slots: tuple[str, ...] = ()) -> str:
+    """Create the bench DB (+ SUT extra DBs) + source schema + publication;
+    drop stale slots. Returns the per-system DATABASE_URL."""
     with psycopg.connect(f"{admin_url}/postgres", autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute("SHOW wal_level")
@@ -241,6 +243,12 @@ def preflight(admin_url: str, db_name: str, slot_prefix: str) -> str:
             )
             if cur.fetchone() is None:
                 cur.execute(f'CREATE DATABASE "{db_name}"')
+            for name in extra_databases:
+                # SUT state stores are recreated fresh each run — stale
+                # state (e.g. Sequin config encrypted under an old key)
+                # must not leak across runs.
+                cur.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+                cur.execute(f'CREATE DATABASE "{name}"')
     db_url = f"{admin_url}/{db_name}"
     with psycopg.connect(db_url, autocommit=True) as conn:
         with conn.cursor() as cur:
@@ -265,6 +273,11 @@ def preflight(admin_url: str, db_name: str, slot_prefix: str) -> str:
                 )""")
             cur.execute("DROP PUBLICATION IF EXISTS cdc_pub")
             cur.execute("CREATE PUBLICATION cdc_pub FOR TABLE cdc_bench.events")
+            for slot in precreate_slots:
+                cur.execute(
+                    "SELECT pg_create_logical_replication_slot(%s, 'pgoutput')",
+                    (slot,),
+                )
     return db_url
 
 
@@ -501,7 +514,8 @@ def main(argv: list[str] | None = None) -> int:
     receiver_bin = receiver_binary()
     entry.prepare(entry)
     ensure_postgres(compose=not args.skip_pg_setup)
-    db_url = preflight(args.admin_url, entry.db_name, entry.slot_prefix)
+    db_url = preflight(args.admin_url, entry.db_name, entry.slot_prefix,
+                       entry.extra_databases, entry.precreate_slots)
     admin_parts = urllib.parse.urlsplit(args.admin_url)
 
     tracker = PhaseTracker()
