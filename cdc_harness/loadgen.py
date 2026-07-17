@@ -312,6 +312,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sample-every-s", type=float, default=5.0)
     parser.add_argument("--outbox-retention-s", type=float, default=10.0)
     parser.add_argument("--outbox-janitor-every-s", type=float, default=5.0)
+    parser.add_argument("--preload", type=int, default=0,
+                        help="ledger mode: N accounts assumed preloaded "
+                             "(balance 1000, seq 1, tx_id 0)")
+    parser.add_argument("--preload-only", action="store_true",
+                        help="write the preload rows and exit (run before "
+                             "the SUT starts so its snapshot covers them)")
     parser.add_argument("--ledger-out", required=True)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
@@ -330,8 +336,29 @@ def main(argv: list[str] | None = None) -> int:
     rng = random.Random(args.seed)
     ledger = SourceLedger()
     conn = psycopg.connect(args.database_url, autocommit=False)
+
+    if args.preload_only:
+        assert args.mode in ("ledger", "outbox") and args.preload > 0
+        emitted_us = time.time_ns() // 1000
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO cdc_bench.accounts"
+                " (pk, balance, seq, tx_id, emitted_us)"
+                " SELECT g, %s, 1, 0, %s FROM generate_series(1, %s) g",
+                (ACCOUNT_INITIAL_BALANCE, emitted_us, args.preload))
+        conn.commit()
+        conn.close()
+        _log(f"preloaded {args.preload} accounts")
+        return 0
+
     workload = WORKLOADS[args.mode](conn, rng, ledger, args)
     workload.setup()
+    if args.preload > 0 and args.mode == "ledger":
+        # Rows written by a prior --preload-only run; the SUT's snapshot
+        # must deliver them, so seed the verification ledger without writing.
+        for account_id in range(1, args.preload + 1):
+            ledger.upsert(ACCOUNTS_TABLE, account_id, seq=1,
+                          balance=ACCOUNT_INITIAL_BALANCE)
 
     tx_counter = 0
 

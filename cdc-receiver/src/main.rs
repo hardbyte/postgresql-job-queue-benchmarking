@@ -331,8 +331,9 @@ async fn sink(
         }
         // Transaction integrity (ledger mode): only fresh events count, so
         // at-least-once redelivery can't overshoot a tx's expected size.
+        // tx_id 0 marks preload/snapshot rows — not a live transaction.
         if tx_events > 0 && fresh {
-            if let Some(tx_id) = ev.tx_id {
+            if let Some(tx_id) = ev.tx_id.filter(|id| *id > 0) {
                 let count = c.open_txs.entry(tx_id).or_insert(0);
                 *count += 1;
                 if *count >= tx_events {

@@ -115,6 +115,15 @@ CDC_SCENARIOS: dict[str, list[str]] = {
         "post=clean:10m",
         "drain=recovery:5m",
     ],
+    # Cross-table snapshot consistency: run with --mode ledger
+    # --preload 10000000 --snapshot-mode initial. Verifies the snapshot ↔
+    # stream handoff loses/duplicates nothing while writes continue.
+    # (pgoutput-raw has no snapshot support — expected FAIL on the baseline.)
+    "snapshot_consistency": [
+        "warmup=warmup:5m",
+        "clean_1=clean:30m",
+        "drain=recovery:15m",
+    ],
     # Advanced/destructive: verify is EXPECTED to fail if invalidation hits;
     # the interesting output is slot_wal_status + the SUT's heal behaviour.
     "slot_invalidation": [
@@ -714,6 +723,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="consumer set, e.g. 2xfast,4xnormal,2xslow")
     parser.add_argument("--mode", default="events", choices=sorted(MODE_SCHEMAS),
                         help="workload shape: events | ledger | outbox")
+    parser.add_argument("--preload", type=int, default=0,
+                        help="ledger mode: preload N accounts before the SUT "
+                             "starts (pair with --snapshot-mode initial)")
+    parser.add_argument("--snapshot-mode", default="never",
+                        choices=["never", "initial"])
     parser.add_argument("--rate", type=float, default=200.0)
     parser.add_argument("--op-mix", default="70/25/5")
     parser.add_argument("--key-cardinality", type=int, default=5000)
@@ -789,8 +803,19 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("receiver did not become healthy")
         log("receiver healthy")
 
+        if args.preload > 0:
+            log(f"preloading {args.preload} accounts before SUT launch…")
+            subprocess.run(
+                [sys.executable, "-m", "cdc_harness.loadgen",
+                 "--database-url", db_url, "--mode", args.mode,
+                 "--preload", str(args.preload), "--preload-only",
+                 "--ledger-out", "/dev/null"],
+                cwd=REPO_ROOT, check=True,
+            )
+
         ctx = LaunchCtx(
             source_tables=MODE_PUBLISHED_TABLES[args.mode],
+            snapshot_mode=args.snapshot_mode,
             db_url=db_url,
             db_host=admin_parts.hostname or "127.0.0.1",
             db_port=admin_parts.port or 5432,
@@ -825,6 +850,7 @@ def main(argv: list[str] | None = None) -> int:
              "--rate", str(args.rate),
              "--op-mix", args.op_mix,
              "--key-cardinality", str(args.key_cardinality),
+             "--preload", str(args.preload),
              "--payload-bytes", str(args.payload_bytes),
              "--sample-every-s", str(args.sample_every_s),
              "--ledger-out", str(ledger_path)],

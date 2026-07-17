@@ -29,6 +29,7 @@ DEBEZIUM_IMAGE = os.environ.get("DEBEZIUM_IMAGE", "quay.io/debezium/server:3.1.3
 @dataclass
 class LaunchCtx:
     source_tables: list[str]
+    snapshot_mode: str  # never | initial
     db_url: str
     db_host: str
     db_port: int
@@ -146,7 +147,7 @@ def _debezium_env(adapter: CdcAdapter, ctx: LaunchCtx, cid: int) -> dict[str, st
         "DEBEZIUM_SOURCE_PUBLICATION_NAME": "cdc_pub",
         "DEBEZIUM_SOURCE_PUBLICATION_AUTOCREATE_MODE": "disabled",
         "DEBEZIUM_SOURCE_TABLE_INCLUDE_LIST": ",".join(ctx.source_tables),
-        "DEBEZIUM_SOURCE_SNAPSHOT_MODE": "never",
+        "DEBEZIUM_SOURCE_SNAPSHOT_MODE": ctx.snapshot_mode,
         "DEBEZIUM_SOURCE_TOMBSTONES_ON_DELETE": "false",
         "DEBEZIUM_FORMAT_VALUE": "json",
         "DEBEZIUM_FORMAT_VALUE_SCHEMAS_ENABLE": "false",
