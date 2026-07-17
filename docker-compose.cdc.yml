@@ -1,0 +1,15 @@
+# CDC-suite overlay: logical replication on the shared pinned Postgres.
+# Use explicitly (skips docker-compose.override.yml by design):
+#   docker compose -f docker-compose.yml -f docker-compose.cdc.yml up -d postgres
+services:
+  postgres:
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=16"
+      - "-c"
+      - "max_wal_senders=16"

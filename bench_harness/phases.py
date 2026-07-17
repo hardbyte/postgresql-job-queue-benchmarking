@@ -29,6 +29,12 @@ class PhaseType(str, Enum):
     PG_BACKEND_KILL = "pg-backend-kill"
     POOL_EXHAUSTION = "pool-exhaustion"
     REPEATED_KILL = "repeated-kill"
+    # CDC-suite phase types (docs/cdc-harness-design.md §9). Consumer-level
+    # chaos is applied through the receiver's control API, not the replica
+    # pool — the hooks live in cdc_harness, not bench_harness.hooks.
+    CONSUMER_DEAD = "consumer-dead"
+    CONSUMER_SLOW = "consumer-slow"
+    SINK_OUTAGE = "sink-outage"
 
 
 # Matplotlib-compatible colour tints. Tuned for the dark "neutral gray" base
@@ -48,6 +54,9 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.PG_BACKEND_KILL:  ("#D86A3A", 0.30),
     PhaseType.POOL_EXHAUSTION:  ("#C8884A", 0.30),
     PhaseType.REPEATED_KILL:    ("#B04040", 0.35),
+    PhaseType.CONSUMER_DEAD:    ("#C04A4A", 0.35),
+    PhaseType.CONSUMER_SLOW:    ("#D8A03A", 0.30),
+    PhaseType.SINK_OUTAGE:      ("#A03030", 0.40),
 }
 
 # Whether samples in this phase type feed into summary.json (warmup excluded).
@@ -66,6 +75,9 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.PG_BACKEND_KILL:  True,
     PhaseType.POOL_EXHAUSTION:  True,
     PhaseType.REPEATED_KILL:    True,
+    PhaseType.CONSUMER_DEAD:    True,
+    PhaseType.CONSUMER_SLOW:    True,
+    PhaseType.SINK_OUTAGE:      True,
 }
 
 
