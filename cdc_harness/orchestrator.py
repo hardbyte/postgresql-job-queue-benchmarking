@@ -115,6 +115,15 @@ CDC_SCENARIOS: dict[str, list[str]] = {
         "post=clean:10m",
         "drain=recovery:5m",
     ],
+    # Advanced/destructive: verify is EXPECTED to fail if invalidation hits;
+    # the interesting output is slot_wal_status + the SUT's heal behaviour.
+    "slot_invalidation": [
+        "warmup=warmup:5m",
+        "clean_1=clean:10m",
+        "invalidate=slot-invalidation(keep=32MB):15m",
+        "heal=clean:10m",
+        "drain=recovery:10m",
+    ],
     # Consistency cells (run with --mode ledger / --mode outbox).
     "tx_integrity": [
         "warmup=warmup:5m",
@@ -435,6 +444,85 @@ class SlotPoller(threading.Thread):
         conn.close()
 
 
+_MEM_UNITS = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3}
+
+
+def _parse_mem(text: str) -> float | None:
+    # "123.4MiB / 7.629GiB" -> bytes of the usage part
+    usage = text.split("/")[0].strip()
+    for unit, mult in _MEM_UNITS.items():
+        if usage.endswith(unit):
+            try:
+                return float(usage[: -len(unit)]) * mult
+            except ValueError:
+                return None
+    return None
+
+
+class ResourceSampler(threading.Thread):
+    """CPU/RSS per SUT process: docker stats for containers, /proc for
+    native processes. Insulation layers get priced, not hidden (design §7)."""
+
+    def __init__(self, sink: SampleSink, procs: list[ManagedProc],
+                 every_s: float = 10.0) -> None:
+        super().__init__(name="resource-sampler", daemon=True)
+        self.sink = sink
+        self.containers = [m.container for m in procs if m.container]
+        self.native = [(m.name, m.proc.pid) for m in procs if not m.container]
+        self.every_s = every_s
+        self.stop_event = threading.Event()
+        self._clk = os.sysconf("SC_CLK_TCK")
+        self._prev_cpu: dict[str, tuple[float, float]] = {}
+
+    def _sample_containers(self) -> None:
+        if not self.containers:
+            return
+        out = subprocess.run(
+            ["docker", "stats", "--no-stream", "--format",
+             "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}", *self.containers],
+            capture_output=True, text=True,
+        )
+        for line in out.stdout.splitlines():
+            try:
+                name, cpu, mem = line.split("\t")
+                cpu_pct = float(cpu.rstrip("%"))
+            except ValueError:
+                continue
+            self.sink.write(subject_kind="container", subject=name,
+                            metric="cpu_pct", value=cpu_pct, window_s=0)
+            rss = _parse_mem(mem)
+            if rss is not None:
+                self.sink.write(subject_kind="container", subject=name,
+                                metric="rss_bytes", value=rss, window_s=0)
+
+    def _sample_native(self) -> None:
+        for name, pid in self.native:
+            try:
+                statm = Path(f"/proc/{pid}/statm").read_text().split()
+                stat = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            except (OSError, IndexError):
+                continue
+            rss = int(statm[1]) * os.sysconf("SC_PAGE_SIZE")
+            cpu_s = (int(stat[11]) + int(stat[12])) / self._clk  # utime+stime
+            now = time.monotonic()
+            prev = self._prev_cpu.get(name)
+            self._prev_cpu[name] = (now, cpu_s)
+            self.sink.write(subject_kind="container", subject=name,
+                            metric="rss_bytes", value=float(rss), window_s=0)
+            if prev is not None and now > prev[0]:
+                pct = 100.0 * (cpu_s - prev[1]) / (now - prev[0])
+                self.sink.write(subject_kind="container", subject=name,
+                                metric="cpu_pct", value=pct, window_s=0)
+
+    def run(self) -> None:
+        while not self.stop_event.wait(self.every_s):
+            try:
+                self._sample_containers()
+                self._sample_native()
+            except Exception as exc:  # sampling must never kill the run
+                log(f"resource-sampler: {exc}")
+
+
 # ── Phase hooks (consumer chaos via receiver control API) ────────────────
 
 
@@ -466,6 +554,22 @@ def apply_phase_enter(phase: Phase, control_url: str, consumer_count: int,
                 cur.execute(
                     f"ALTER TABLE cdc_bench.events ADD COLUMN {column} text"
                 )
+    elif phase.type is PhaseType.SLOT_INVALIDATION:
+        # Destructive by design: cap slot-retained WAL, take every consumer
+        # down, and let the write load blow past the cap. slot_wal_status
+        # (metrics poller) shows the walk to 'lost'; how the SUT reacts on
+        # heal — detect? resurrect? silently lose? — is the result. The
+        # run's verify step is EXPECTED to fail if the slot was invalidated.
+        keep = phase.param("keep", "32MB")
+        log(f"phase {phase.label}: max_slot_wal_keep_size={keep}, all consumers dead")
+        with psycopg.connect(db_url, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"ALTER SYSTEM SET max_slot_wal_keep_size = '{keep}'"
+                )
+                cur.execute("SELECT pg_reload_conf()")
+        for cid in range(consumer_count):
+            http_json(control_url, {"consumer_id": cid, "mode": "dead"})
     elif phase.type is PhaseType.CONSUMER_DEAD:
         cid = phase.int_param("id", 0)
         http_json(control_url, {"consumer_id": cid, "mode": "dead"})
@@ -482,8 +586,17 @@ def apply_phase_enter(phase: Phase, control_url: str, consumer_count: int,
         log(f"phase {phase.label}: all {consumer_count} consumers -> dead")
 
 
-def apply_phase_exit(phase: Phase, control_url: str, consumer_count: int) -> None:
-    if phase.type in (PhaseType.CONSUMER_DEAD, PhaseType.CONSUMER_SLOW):
+def apply_phase_exit(phase: Phase, control_url: str, consumer_count: int,
+                     db_url: str) -> None:
+    if phase.type is PhaseType.SLOT_INVALIDATION:
+        with psycopg.connect(db_url, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("ALTER SYSTEM RESET max_slot_wal_keep_size")
+                cur.execute("SELECT pg_reload_conf()")
+        for cid in range(consumer_count):
+            http_json(control_url, {"consumer_id": cid, "mode": "ok"})
+        log(f"phase {phase.label}: keep-size reset, consumers -> ok")
+    elif phase.type in (PhaseType.CONSUMER_DEAD, PhaseType.CONSUMER_SLOW):
         cid = phase.int_param("id", 0)
         http_json(control_url, {"consumer_id": cid, "mode": "ok"})
         log(f"phase {phase.label}: consumer {cid} -> ok")
@@ -648,6 +761,7 @@ def main(argv: list[str] | None = None) -> int:
     receiver = loadgen = None
     adapter_procs: list[ManagedProc] = []
     poller = None
+    resources = None
     descriptor: dict = {}
     verdict: dict = {"pass": False, "error": "run did not reach verification"}
     exit_code = 1
@@ -722,6 +836,8 @@ def main(argv: list[str] | None = None) -> int:
 
         poller = SlotPoller(db_url, sink, args.sample_every_s)
         poller.start()
+        resources = ResourceSampler(sink, adapter_procs)
+        resources.start()
 
         for phase in phases:
             tracker.set(phase.label, phase.type.value)
@@ -739,7 +855,7 @@ def main(argv: list[str] | None = None) -> int:
                             f"see {logs_dir}"
                         )
                 time.sleep(0.5)
-            apply_phase_exit(phase, control_url, consumer_count)
+            apply_phase_exit(phase, control_url, consumer_count, db_url)
 
         tracker.set("final_drain", "recovery")
         log("stopping loadgen; waiting for ledger dump…")
@@ -760,6 +876,9 @@ def main(argv: list[str] | None = None) -> int:
         if poller is not None:
             poller.stop_event.set()
             poller.join(timeout=5)
+        if resources is not None:
+            resources.stop_event.set()
+            resources.join(timeout=5)
         sink.flush_close()
 
         summary = compute_summary(

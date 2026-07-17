@@ -37,6 +37,7 @@ class PhaseType(str, Enum):
     SINK_OUTAGE = "sink-outage"
     BIG_TX = "big-tx"
     DDL_CHANGE = "ddl-change"
+    SLOT_INVALIDATION = "slot-invalidation"
 
 
 # Matplotlib-compatible colour tints. Tuned for the dark "neutral gray" base
@@ -61,6 +62,7 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.SINK_OUTAGE:      ("#A03030", 0.40),
     PhaseType.BIG_TX:           ("#A378C8", 0.35),
     PhaseType.DDL_CHANGE:       ("#6C8FAF", 0.30),
+    PhaseType.SLOT_INVALIDATION: ("#802020", 0.45),
 }
 
 # Whether samples in this phase type feed into summary.json (warmup excluded).
@@ -84,6 +86,7 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.SINK_OUTAGE:      True,
     PhaseType.BIG_TX:           True,
     PhaseType.DDL_CHANGE:       True,
+    PhaseType.SLOT_INVALIDATION: True,
 }
 
 
