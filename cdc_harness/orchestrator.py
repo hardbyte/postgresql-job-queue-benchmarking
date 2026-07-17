@@ -253,11 +253,14 @@ def preflight(admin_url: str, db_name: str, slot_prefix: str,
     with psycopg.connect(db_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             # Idempotent reruns: fresh schema, fresh publication, no stale
-            # slots pinning WAL from a previous run.
+            # slots pinning WAL from a previous run. Bench databases all end
+            # in _bench and slots are cluster-visible, so clean up leftovers
+            # from every system — a prior system's stale slots otherwise eat
+            # max_replication_slots headroom (etl needs ~2 per pipeline and
+            # fails its table-sync quietly when the cluster runs out).
             cur.execute(
                 "SELECT slot_name FROM pg_replication_slots"
-                " WHERE database = current_database() AND slot_name LIKE %s",
-                (slot_prefix + "%",),
+                " WHERE database LIKE '%_bench' AND NOT active"
             )
             for (slot,) in cur.fetchall():
                 cur.execute("SELECT pg_drop_replication_slot(%s)", (slot,))
@@ -283,8 +286,11 @@ def preflight(admin_url: str, db_name: str, slot_prefix: str,
 
 def wait_for_slots(db_url: str, slot_names: list[str],
                    procs: list[ManagedProc], *, timeout_s: float,
-                   logs_dir: Path) -> None:
-    """Uniform adapter readiness: every declared replication slot exists."""
+                   logs_dir: Path, min_count: int = 0) -> None:
+    """Uniform adapter readiness: every declared replication slot exists.
+    SUTs with harness-opaque slot names declare none and pass min_count
+    instead (preflight dropped all slots on the bench DB, so a bare count
+    is unambiguous)."""
     deadline = time.monotonic() + timeout_s
     with psycopg.connect(db_url, autocommit=True) as conn:
         while True:
@@ -301,7 +307,10 @@ def wait_for_slots(db_url: str, slot_names: list[str],
                 )
                 present = {row[0] for row in cur.fetchall()}
             missing = [s for s in slot_names if s not in present]
-            if not missing:
+            if slot_names:
+                if not missing:
+                    return
+            elif len(present) >= min_count:
                 return
             if time.monotonic() > deadline:
                 raise SystemExit(
@@ -573,8 +582,9 @@ def main(argv: list[str] | None = None) -> int:
 
         expected_slots = entry.slot_names(consumer_count)
         wait_for_slots(db_url, expected_slots, adapter_procs,
-                       timeout_s=args.adapter_ready_timeout_s, logs_dir=logs_dir)
-        log(f"adapter up: slots={expected_slots}")
+                       timeout_s=args.adapter_ready_timeout_s, logs_dir=logs_dir,
+                       min_count=consumer_count)
+        log(f"adapter up: slots={expected_slots or f'{consumer_count} (names SUT-derived)'}")
         descriptor.setdefault("system", entry.system)
         descriptor.setdefault("slot_names", expected_slots)
         descriptor.setdefault("version", entry.version(entry))

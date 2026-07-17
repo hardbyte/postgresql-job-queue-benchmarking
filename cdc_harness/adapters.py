@@ -179,6 +179,42 @@ def _launch_debezium_server(adapter: CdcAdapter, ctx: LaunchCtx) -> list[Managed
     return procs
 
 
+# ── supabase-etl: in-repo Rust binary embedding the etl crate; one
+# pipeline (and slot) per consumer, custom HTTP destination. ──────────────
+
+
+def _cargo_binary(crate: str) -> Path:
+    import json as _json
+
+    meta = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps",
+         "--manifest-path", str(REPO_ROOT / crate / "Cargo.toml")],
+        capture_output=True, text=True, check=True,
+    )
+    return Path(_json.loads(meta.stdout)["target_directory"]) / "release" / crate
+
+
+def _build_etl(adapter: CdcAdapter) -> None:
+    if not _cargo_binary("etl-cdc-bench").exists():
+        print("[cdc] cargo build --release etl-cdc-bench…", flush=True)
+        subprocess.run(["cargo", "build", "--release"],
+                       cwd=REPO_ROOT / "etl-cdc-bench", check=True)
+
+
+def _launch_etl(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedProc]:
+    proc = subprocess.Popen(
+        [str(_cargo_binary("etl-cdc-bench"))],
+        env={**ctx.env,
+             "DATABASE_URL": ctx.db_url,
+             "SINK_URL": ctx.receiver_base,
+             "CONSUMER_COUNT": str(ctx.consumer_count)},
+        stdout=subprocess.PIPE,
+        stderr=(ctx.logs_dir / "supabase-etl.stderr.log").open("w"),
+        text=True, cwd=REPO_ROOT,
+    )
+    return [ManagedProc(name="supabase-etl", proc=proc)]
+
+
 # ── sequin: single container + Redis sidecar; ONE shared slot, per-sink
 # cursors — the "buffer" topology. One webhook sink per consumer. ──────────
 
@@ -290,6 +326,17 @@ ADAPTERS: dict[str, CdcAdapter] = {
         launch=_launch_debezium_server,
         prepare=lambda self: _docker_pull(DEBEZIUM_IMAGE),
         version=lambda self: DEBEZIUM_IMAGE,
+    ),
+    "supabase-etl": CdcAdapter(
+        system="supabase-etl",
+        envelope="canonical",
+        topology="slot-per-consumer",
+        db_name="etl_cdc_bench",
+        slot_prefix="",  # slot names derive from etl pipeline ids
+        launch=_launch_etl,
+        prepare=_build_etl,
+        version=lambda self: "supabase/etl @ d206d66 (git)",
+        slots=lambda _n: [],  # readiness = slot count (names SUT-derived)
     ),
     "sequin": CdcAdapter(
         system="sequin",
