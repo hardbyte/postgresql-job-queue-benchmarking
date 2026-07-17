@@ -23,11 +23,14 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
+
+from cdc_harness.adapters import ADAPTERS, LaunchCtx, ManagedProc
 
 from bench_harness.phases import Phase, PhaseType, parse_phase_spec
 from bench_harness.sample import Sample, now_iso
@@ -265,6 +268,36 @@ def preflight(admin_url: str, db_name: str, slot_prefix: str) -> str:
     return db_url
 
 
+def wait_for_slots(db_url: str, slot_names: list[str],
+                   procs: list[ManagedProc], *, timeout_s: float,
+                   logs_dir: Path) -> None:
+    """Uniform adapter readiness: every declared replication slot exists."""
+    deadline = time.monotonic() + timeout_s
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        while True:
+            for managed in procs:
+                if managed.proc.poll() is not None:
+                    raise SystemExit(
+                        f"{managed.name} exited during startup "
+                        f"(rc={managed.proc.returncode}); see {logs_dir}"
+                    )
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT slot_name FROM pg_replication_slots"
+                    " WHERE database = current_database()"
+                )
+                present = {row[0] for row in cur.fetchall()}
+            missing = [s for s in slot_names if s not in present]
+            if not missing:
+                return
+            if time.monotonic() > deadline:
+                raise SystemExit(
+                    f"adapter not ready after {timeout_s:.0f}s; "
+                    f"missing slots: {missing} (see {logs_dir})"
+                )
+            time.sleep(1.0)
+
+
 # ── Slot metrics poller ──────────────────────────────────────────────────
 
 
@@ -429,7 +462,7 @@ def terminate(proc: subprocess.Popen | None, name: str, grace_s: float = 10.0) -
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cdc", description=__doc__)
     parser.add_argument("--system", default="pgoutput-raw",
-                        choices=["pgoutput-raw"])
+                        choices=sorted(ADAPTERS))
     parser.add_argument("--scenario", choices=sorted(CDC_SCENARIOS))
     parser.add_argument("--phase", action="append", default=[],
                         help="label=type:duration (repeatable)")
@@ -444,6 +477,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--admin-url", default=DEFAULT_PG_URL)
     parser.add_argument("--results-root", default=str(REPO_ROOT / "results"))
     parser.add_argument("--drain-timeout-s", type=float, default=60.0)
+    parser.add_argument("--adapter-ready-timeout-s", type=float, default=180.0)
     parser.add_argument("--skip-pg-setup", action="store_true",
                         help="assume postgres is already up with wal_level=logical")
     args = parser.parse_args(argv)
@@ -463,9 +497,12 @@ def main(argv: list[str] | None = None) -> int:
         f"({args.profiles}) rate={args.rate}/s")
     log(f"phases: {' → '.join(p.describe() for p in phases)}")
 
+    entry = ADAPTERS[args.system]
     receiver_bin = receiver_binary()
+    entry.prepare(entry)
     ensure_postgres(compose=not args.skip_pg_setup)
-    db_url = preflight(args.admin_url, "cdc_raw_bench", "cdc_raw_")
+    db_url = preflight(args.admin_url, entry.db_name, entry.slot_prefix)
+    admin_parts = urllib.parse.urlsplit(args.admin_url)
 
     tracker = PhaseTracker()
     sink = SampleSink(out_dir / "raw.csv", run_id, args.system, tracker)
@@ -473,7 +510,8 @@ def main(argv: list[str] | None = None) -> int:
     control_url = f"{receiver_base}/control"
     ledger_path = out_dir / "ledger.json"
 
-    receiver = adapter = loadgen = None
+    receiver = loadgen = None
+    adapter_procs: list[ManagedProc] = []
     poller = None
     descriptor: dict = {}
     verdict: dict = {"pass": False, "error": "run did not reach verification"}
@@ -484,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
             env={**os.environ,
                  "CDC_PORT": str(args.port),
                  "CONSUMER_PROFILES": args.profiles,
+                 "ENVELOPE": entry.envelope,
                  "SAMPLE_EVERY_S": str(args.sample_every_s)},
             stdout=subprocess.PIPE,
             stderr=(logs_dir / "receiver.stderr.log").open("w"),
@@ -500,26 +539,32 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("receiver did not become healthy")
         log("receiver healthy")
 
-        descriptor_event = threading.Event()
-
-        def on_descriptor(rec: dict) -> None:
-            descriptor.update(rec)
-            descriptor_event.set()
-
-        adapter = subprocess.Popen(
-            [sys.executable, str(REPO_ROOT / "pgoutput-raw-bench" / "main.py")],
-            env={**os.environ,
-                 "DATABASE_URL": db_url,
-                 "SINK_URL": receiver_base,
-                 "CONSUMER_COUNT": str(consumer_count)},
-            stdout=subprocess.PIPE,
-            stderr=(logs_dir / "adapter.stderr.log").open("w"),
-            text=True, cwd=REPO_ROOT,
+        ctx = LaunchCtx(
+            db_url=db_url,
+            db_host=admin_parts.hostname or "127.0.0.1",
+            db_port=admin_parts.port or 5432,
+            db_user=admin_parts.username or "bench",
+            db_password=admin_parts.password or "bench",
+            db_name=entry.db_name,
+            receiver_base=receiver_base,
+            consumer_count=consumer_count,
+            logs_dir=logs_dir,
+            env=dict(os.environ),
         )
-        tail_jsonl(adapter, sink, "adapter", on_descriptor=on_descriptor)
-        if not descriptor_event.wait(timeout=30):
-            raise SystemExit("adapter did not emit its descriptor within 30s")
-        log(f"adapter up: slots={descriptor.get('slot_names')}")
+        adapter_procs = entry.launch(entry, ctx)
+        for managed in adapter_procs:
+            if managed.proc.stdout is not None:
+                tail_jsonl(managed.proc, sink, managed.name,
+                           on_descriptor=descriptor.update)
+
+        expected_slots = entry.slot_names(consumer_count)
+        wait_for_slots(db_url, expected_slots, adapter_procs,
+                       timeout_s=args.adapter_ready_timeout_s, logs_dir=logs_dir)
+        log(f"adapter up: slots={expected_slots}")
+        descriptor.setdefault("system", entry.system)
+        descriptor.setdefault("slot_names", expected_slots)
+        descriptor.setdefault("version", entry.version(entry))
+        descriptor.setdefault("topology", entry.topology)
 
         loadgen = subprocess.Popen(
             [sys.executable, "-m", "cdc_harness.loadgen",
@@ -544,13 +589,15 @@ def main(argv: list[str] | None = None) -> int:
             log(f"phase {phase.label} ({phase.type.value}) for {phase.duration_s}s")
             apply_phase_enter(phase, control_url, consumer_count)
             deadline = time.monotonic() + phase.duration_s
+            watched = [(receiver, "receiver"), (loadgen, "loadgen")] + [
+                (m.proc, m.name) for m in adapter_procs
+            ]
             while time.monotonic() < deadline:
-                for proc, name in [(receiver, "receiver"), (adapter, "adapter"),
-                                   (loadgen, "loadgen")]:
+                for proc, name in watched:
                     if proc.poll() is not None:
                         raise SystemExit(
                             f"{name} exited unexpectedly (rc={proc.returncode}); "
-                            f"see {logs_dir}/{name}.stderr.log"
+                            f"see {logs_dir}"
                         )
                 time.sleep(0.5)
             apply_phase_exit(phase, control_url, consumer_count)
@@ -568,7 +615,8 @@ def main(argv: list[str] | None = None) -> int:
         exit_code = 0 if verdict["pass"] else 2
     finally:
         terminate(loadgen, "loadgen")
-        terminate(adapter, "adapter")
+        for managed in adapter_procs:
+            managed.stop()
         terminate(receiver, "receiver")
         if poller is not None:
             poller.stop_event.set()

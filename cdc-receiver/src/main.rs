@@ -63,9 +63,128 @@ struct ConsumerState {
     prev_delivered_bytes: u64,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Envelope {
+    /// JSON array of canonical events (in-repo adapters emit this directly).
+    Canonical,
+    /// One Debezium change event per POST (before/after/source/op), with or
+    /// without the schema wrapper; `null` bodies are tombstones to ack.
+    Debezium,
+    /// Sequin webhook sink: single object or {"data": [...]} batch of
+    /// {record, changes, action, metadata}.
+    Sequin,
+}
+
 struct App {
     consumers: Vec<Mutex<ConsumerState>>,
     sample_every_s: f64,
+    envelope: Envelope,
+}
+
+fn field_i64(row: &serde_json::Value, name: &str) -> Option<i64> {
+    row.get(name).and_then(|v| v.as_i64())
+}
+
+fn decode_debezium_one(value: &serde_json::Value) -> Result<Option<Event>, String> {
+    if value.is_null() {
+        return Ok(None); // tombstone — ack with no event
+    }
+    // JsonConverter with schemas enabled wraps as {"schema":…, "payload":…}.
+    let payload = value
+        .get("payload")
+        .filter(|_| value.get("schema").is_some())
+        .unwrap_or(value);
+    if payload.is_null() {
+        return Ok(None);
+    }
+    let op = payload
+        .get("op")
+        .and_then(|v| v.as_str())
+        .ok_or("debezium event missing op")?;
+    let (op_name, row) = match op {
+        "c" | "r" => ("insert", payload.get("after")),
+        "u" => ("update", payload.get("after")),
+        "d" => ("delete", payload.get("before")),
+        other => return Err(format!("unknown debezium op {other:?}")),
+    };
+    let row = row
+        .filter(|r| !r.is_null())
+        .ok_or("debezium event missing row image")?;
+    Ok(Some(Event {
+        pk: field_i64(row, "pk").ok_or("debezium row missing pk")?,
+        seq: field_i64(row, "seq"),
+        op: op_name.to_string(),
+        emitted_us: field_i64(row, "emitted_us"),
+    }))
+}
+
+fn decode_debezium(body: &[u8]) -> Result<Vec<Event>, String> {
+    if body.is_empty() {
+        return Ok(vec![]); // tombstone via http sink: empty body
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| format!("debezium body: {e}"))?;
+    // Batch mode (debezium.sink.http.batch.enabled) posts a JSON array;
+    // elements may themselves be JSON-encoded strings of the value.
+    let items: Vec<serde_json::Value> = match value {
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::String(inner) => {
+                    serde_json::from_str(&inner).map_err(|e| format!("debezium batch item: {e}"))
+                }
+                other => Ok(other),
+            })
+            .collect::<Result<_, String>>()?,
+        single => vec![single],
+    };
+    let mut events = Vec::with_capacity(items.len());
+    for item in &items {
+        if let Some(event) = decode_debezium_one(item)? {
+            events.push(event);
+        }
+    }
+    Ok(events)
+}
+
+fn decode_sequin(body: &[u8]) -> Result<Vec<Event>, String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| format!("sequin body: {e}"))?;
+    let items: Vec<&serde_json::Value> = match value.get("data").and_then(|d| d.as_array()) {
+        Some(batch) => batch.iter().collect(),
+        None => vec![&value],
+    };
+    let mut events = Vec::with_capacity(items.len());
+    for item in items {
+        let action = item
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or("sequin event missing action")?;
+        let op = match action {
+            "insert" | "read" => "insert",
+            "update" => "update",
+            "delete" => "delete",
+            other => return Err(format!("unknown sequin action {other:?}")),
+        };
+        let row = item.get("record").ok_or("sequin event missing record")?;
+        events.push(Event {
+            pk: field_i64(row, "pk").ok_or("sequin record missing pk")?,
+            seq: field_i64(row, "seq"),
+            op: op.to_string(),
+            emitted_us: field_i64(row, "emitted_us"),
+        });
+    }
+    Ok(events)
+}
+
+fn decode_events(envelope: Envelope, body: &[u8]) -> Result<Vec<Event>, String> {
+    match envelope {
+        Envelope::Canonical => {
+            serde_json::from_slice(body).map_err(|e| format!("canonical body: {e}"))
+        }
+        Envelope::Debezium => decode_debezium(body),
+        Envelope::Sequin => decode_sequin(body),
+    }
 }
 
 fn now_us() -> i64 {
@@ -112,9 +231,12 @@ async fn sink(
     if dead {
         return (StatusCode::SERVICE_UNAVAILABLE, "consumer dead (chaos)").into_response();
     }
-    let events: Vec<Event> = match serde_json::from_slice(&body) {
+    let events: Vec<Event> = match decode_events(app.envelope, &body) {
         Ok(events) => events,
-        Err(err) => return (StatusCode::BAD_REQUEST, format!("bad body: {err}")).into_response(),
+        Err(err) => {
+            eprintln!("[receiver] consumer {cid}: undecodable event: {err}");
+            return (StatusCode::BAD_REQUEST, err).into_response();
+        }
     };
     if delay_ms > 0 {
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -287,6 +409,12 @@ async fn main() {
     let profiles_spec =
         std::env::var("CONSUMER_PROFILES").unwrap_or_else(|_| "1xnormal".to_string());
     let profiles = parse_profiles(&profiles_spec);
+    let envelope = match std::env::var("ENVELOPE").as_deref() {
+        Ok("debezium") => Envelope::Debezium,
+        Ok("sequin") => Envelope::Sequin,
+        Ok("canonical") | Err(_) => Envelope::Canonical,
+        Ok(other) => panic!("unknown ENVELOPE {other:?}"),
+    };
 
     let consumers = profiles
         .iter()
@@ -314,6 +442,7 @@ async fn main() {
     let app = Arc::new(App {
         consumers,
         sample_every_s,
+        envelope,
     });
 
     eprintln!(
