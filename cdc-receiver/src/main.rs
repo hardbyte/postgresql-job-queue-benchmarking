@@ -13,7 +13,7 @@
 //! normal 25 ms, slow 250 ms. Chaos modes (dead / slow) layer on top via
 //! /control and are what the consumer-dead / consumer-slow phase hooks call.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -34,7 +34,20 @@ struct Event {
     seq: Option<i64>,
     op: String,
     #[serde(default)]
+    table: Option<String>,
+    #[serde(default)]
+    tx_id: Option<i64>,
+    #[serde(default)]
+    balance: Option<i64>,
+    #[serde(default)]
     emitted_us: Option<i64>,
+}
+
+#[derive(Default)]
+struct KeyState {
+    seq: i64,
+    balance: Option<i64>,
+    deleted: bool,
 }
 
 #[derive(Deserialize)]
@@ -50,8 +63,14 @@ struct ConsumerState {
     profile_latency_ms: u64,
     dead: bool,
     chaos_latency_ms: Option<u64>,
-    last_seq: HashMap<i64, i64>,
-    deleted: HashSet<i64>,
+    // Table-name interning: verifier keys are (table_idx, pk).
+    table_ids: HashMap<String, u16>,
+    keys: HashMap<(u16, i64), KeyState>,
+    // Transaction integrity (ledger mode): tx_id -> fresh events seen.
+    // A tx is "open" (torn) from its first fresh event until TX_EVENTS
+    // events have arrived.
+    open_txs: HashMap<i64, u32>,
+    txs_completed: u64,
     delivered: u64,
     delivered_bytes: u64,
     dups: u64,
@@ -79,6 +98,8 @@ struct App {
     consumers: Vec<Mutex<ConsumerState>>,
     sample_every_s: f64,
     envelope: Envelope,
+    // Expected replicated events per source tx (0 = tx tracking off).
+    tx_events: u32,
 }
 
 fn field_i64(row: &serde_json::Value, name: &str) -> Option<i64> {
@@ -110,10 +131,21 @@ fn decode_debezium_one(value: &serde_json::Value) -> Result<Option<Event>, Strin
     let row = row
         .filter(|r| !r.is_null())
         .ok_or("debezium event missing row image")?;
+    let source = payload.get("source");
+    let table = source.map(|s| {
+        format!(
+            "{}.{}",
+            s.get("schema").and_then(|v| v.as_str()).unwrap_or(""),
+            s.get("table").and_then(|v| v.as_str()).unwrap_or(""),
+        )
+    });
     Ok(Some(Event {
         pk: field_i64(row, "pk").ok_or("debezium row missing pk")?,
         seq: field_i64(row, "seq"),
         op: op_name.to_string(),
+        table,
+        tx_id: field_i64(row, "tx_id"),
+        balance: field_i64(row, "balance"),
         emitted_us: field_i64(row, "emitted_us"),
     }))
 }
@@ -167,10 +199,20 @@ fn decode_sequin(body: &[u8]) -> Result<Vec<Event>, String> {
             other => return Err(format!("unknown sequin action {other:?}")),
         };
         let row = item.get("record").ok_or("sequin event missing record")?;
+        let table = item.get("metadata").map(|m| {
+            format!(
+                "{}.{}",
+                m.get("table_schema").and_then(|v| v.as_str()).unwrap_or(""),
+                m.get("table_name").and_then(|v| v.as_str()).unwrap_or(""),
+            )
+        });
         events.push(Event {
             pk: field_i64(row, "pk").ok_or("sequin record missing pk")?,
             seq: field_i64(row, "seq"),
             op: op.to_string(),
+            table,
+            tx_id: field_i64(row, "tx_id"),
+            balance: field_i64(row, "balance"),
             emitted_us: field_i64(row, "emitted_us"),
         });
     }
@@ -242,6 +284,7 @@ async fn sink(
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
     }
     let arrival_us = now_us();
+    let tx_events = app.tx_events;
     let mut c = slot.lock().unwrap();
     let ring_pos = c.ring_pos;
     for ev in &events {
@@ -250,22 +293,51 @@ async fn sink(
             let e2e = (arrival_us - emitted).max(1) as u64;
             c.ring[ring_pos].record(e2e).ok();
         }
+        let table = ev.table.as_deref().unwrap_or("");
+        let tid = match c.table_ids.get(table) {
+            Some(tid) => *tid,
+            None => {
+                let tid = c.table_ids.len() as u16;
+                c.table_ids.insert(table.to_string(), tid);
+                tid
+            }
+        };
+        let key = (tid, ev.pk);
+        let mut fresh = false;
         match ev.op.as_str() {
             "delete" => {
-                c.deleted.insert(ev.pk);
+                c.keys.entry(key).or_default().deleted = true;
             }
             _ => {
                 if let Some(seq) = ev.seq {
-                    match c.last_seq.get(&ev.pk).copied() {
-                        Some(last) if seq == last => c.dups += 1,
-                        Some(last) if seq < last => {
-                            c.dups += 1;
-                            c.order_violations += 1;
+                    let mut dup = false;
+                    let mut violation = false;
+                    let state = c.keys.entry(key).or_default();
+                    if seq <= state.seq {
+                        dup = true;
+                        violation = seq < state.seq;
+                    } else {
+                        state.seq = seq;
+                        state.deleted = false;
+                        if ev.balance.is_some() {
+                            state.balance = ev.balance;
                         }
-                        _ => {
-                            c.last_seq.insert(ev.pk, seq);
-                        }
+                        fresh = true;
                     }
+                    c.dups += dup as u64;
+                    c.order_violations += violation as u64;
+                }
+            }
+        }
+        // Transaction integrity (ledger mode): only fresh events count, so
+        // at-least-once redelivery can't overshoot a tx's expected size.
+        if tx_events > 0 && fresh {
+            if let Some(tx_id) = ev.tx_id {
+                let count = c.open_txs.entry(tx_id).or_insert(0);
+                *count += 1;
+                if *count >= tx_events {
+                    c.open_txs.remove(&tx_id);
+                    c.txs_completed += 1;
                 }
             }
         }
@@ -306,18 +378,33 @@ async fn ledger(Path(cid): Path<usize>, State(app): State<Arc<App>>) -> impl Int
         return (StatusCode::NOT_FOUND, "no such consumer").into_response();
     };
     let c = slot.lock().unwrap();
+    // Invert the interning: table -> pk -> {seq, balance, deleted}.
+    let mut tables: HashMap<&str, HashMap<i64, serde_json::Value>> = HashMap::new();
+    let names: HashMap<u16, &str> = c
+        .table_ids
+        .iter()
+        .map(|(name, tid)| (*tid, name.as_str()))
+        .collect();
+    for ((tid, pk), state) in &c.keys {
+        tables.entry(names[tid]).or_default().insert(
+            *pk,
+            json!({"seq": state.seq, "balance": state.balance, "deleted": state.deleted}),
+        );
+    }
     Json(json!({
         "profile": c.profile,
         "delivered": c.delivered,
         "dups": c.dups,
         "order_violations": c.order_violations,
-        "last_seq": c.last_seq,
-        "deleted": c.deleted,
+        "open_txs": c.open_txs.len(),
+        "txs_completed": c.txs_completed,
+        "tables": tables,
     }))
     .into_response()
 }
 
 fn emit_samples(app: &App, dt: f64, window_s: f64) {
+    let tx_tracking = app.tx_events > 0;
     let mut stdout_lines = Vec::new();
     for (cid, slot) in app.consumers.iter().enumerate() {
         let mut c = slot.lock().unwrap();
@@ -369,6 +456,10 @@ fn emit_samples(app: &App, dt: f64, window_s: f64) {
         push("delivered_total", c.delivered as f64, 0.0);
         push("dup_events_total", c.dups as f64, 0.0);
         push("order_violations_total", c.order_violations as f64, 0.0);
+        if tx_tracking {
+            push("torn_tx_open", c.open_txs.len() as f64, 0.0);
+            push("txs_completed_total", c.txs_completed as f64, 0.0);
+        }
         c.prev_delivered = c.delivered;
         c.prev_delivered_bytes = c.delivered_bytes;
         let next = (c.ring_pos + 1) % c.ring.len();
@@ -424,8 +515,10 @@ async fn main() {
                 profile_latency_ms: *latency,
                 dead: false,
                 chaos_latency_ms: None,
-                last_seq: HashMap::new(),
-                deleted: HashSet::new(),
+                table_ids: HashMap::new(),
+                keys: HashMap::new(),
+                open_txs: HashMap::new(),
+                txs_completed: 0,
                 delivered: 0,
                 delivered_bytes: 0,
                 dups: 0,
@@ -439,10 +532,15 @@ async fn main() {
             })
         })
         .collect();
+    let tx_events: u32 = std::env::var("TX_EVENTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     let app = Arc::new(App {
         consumers,
         sample_every_s,
         envelope,
+        tx_events,
     });
 
     eprintln!(

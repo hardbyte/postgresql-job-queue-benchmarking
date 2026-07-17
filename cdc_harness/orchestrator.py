@@ -115,6 +115,22 @@ CDC_SCENARIOS: dict[str, list[str]] = {
         "post=clean:10m",
         "drain=recovery:5m",
     ],
+    # Consistency cells (run with --mode ledger / --mode outbox).
+    "tx_integrity": [
+        "warmup=warmup:5m",
+        "clean_1=clean:30m",
+        "dead=consumer-dead(id=2):10m",
+        "heal=clean:10m",
+        "drain=recovery:10m",
+    ],
+    # outbox-vs-WAL: run once with --mode ledger and once with --mode
+    # outbox at the same --rate; compare pg_wal_bytes_delta, e2e lag, and
+    # outbox-table bloat between the two runs.
+    "outbox_vs_wal": [
+        "warmup=warmup:5m",
+        "clean_1=clean:30m",
+        "drain=recovery:10m",
+    ],
     # Fast M3 pipe check: big-tx spill + DDL survival at smoke scale.
     "smoke_m3": [
         "warmup=warmup:5s",
@@ -246,9 +262,41 @@ def ensure_postgres(compose: bool) -> None:
     )
 
 
+_EVENTS_DDL = """CREATE TABLE cdc_bench.events (
+    pk bigint PRIMARY KEY, seq bigint NOT NULL, tx_id bigint NOT NULL,
+    payload bytea NOT NULL, emitted_us bigint NOT NULL)"""
+_ACCOUNTS_DDL = """CREATE TABLE cdc_bench.accounts (
+    pk bigint PRIMARY KEY, balance bigint NOT NULL, seq bigint NOT NULL,
+    tx_id bigint NOT NULL, emitted_us bigint NOT NULL)"""
+_TRANSFERS_DDL = """CREATE TABLE cdc_bench.transfers (
+    pk bigint PRIMARY KEY, from_id bigint NOT NULL, to_id bigint NOT NULL,
+    amount bigint NOT NULL, seq bigint NOT NULL, tx_id bigint NOT NULL,
+    emitted_us bigint NOT NULL)"""
+_OUTBOX_DDL = """CREATE TABLE cdc_bench.outbox (
+    pk bigint PRIMARY KEY, aggregate_id bigint NOT NULL, event_type text NOT NULL,
+    payload jsonb NOT NULL, seq bigint NOT NULL, tx_id bigint NOT NULL,
+    emitted_us bigint NOT NULL)"""
+
+MODE_SCHEMAS = {
+    "events": [_EVENTS_DDL],
+    "ledger": [_ACCOUNTS_DDL, _TRANSFERS_DDL],
+    # Outbox mode: domain tables exist (write amplification is real) but
+    # only the outbox is published.
+    "outbox": [_ACCOUNTS_DDL, _TRANSFERS_DDL, _OUTBOX_DDL],
+}
+MODE_PUBLISHED_TABLES = {
+    "events": ["cdc_bench.events"],
+    "ledger": ["cdc_bench.accounts", "cdc_bench.transfers"],
+    "outbox": ["cdc_bench.outbox"],
+}
+# Fixed replicated-events-per-tx shape, for the receiver's torn-tx tracking.
+MODE_TX_EVENTS = {"events": 0, "ledger": 3, "outbox": 0}
+
+
 def preflight(admin_url: str, db_name: str, slot_prefix: str,
               extra_databases: tuple[str, ...] = (),
-              precreate_slots: tuple[str, ...] = ()) -> str:
+              precreate_slots: tuple[str, ...] = (),
+              mode: str = "events") -> str:
     """Create the bench DB (+ SUT extra DBs) + source schema + publication;
     drop stale slots. Returns the per-system DATABASE_URL."""
     with psycopg.connect(f"{admin_url}/postgres", autocommit=True) as conn:
@@ -289,16 +337,13 @@ def preflight(admin_url: str, db_name: str, slot_prefix: str,
                 cur.execute("SELECT pg_drop_replication_slot(%s)", (slot,))
             cur.execute("DROP SCHEMA IF EXISTS cdc_bench CASCADE")
             cur.execute("CREATE SCHEMA cdc_bench")
-            cur.execute("""
-                CREATE TABLE cdc_bench.events (
-                    pk         bigint PRIMARY KEY,
-                    seq        bigint NOT NULL,
-                    tx_id      bigint NOT NULL,
-                    payload    bytea  NOT NULL,
-                    emitted_us bigint NOT NULL
-                )""")
+            for ddl in MODE_SCHEMAS[mode]:
+                cur.execute(ddl)
             cur.execute("DROP PUBLICATION IF EXISTS cdc_pub")
-            cur.execute("CREATE PUBLICATION cdc_pub FOR TABLE cdc_bench.events")
+            cur.execute(
+                "CREATE PUBLICATION cdc_pub FOR TABLE "
+                + ", ".join(MODE_PUBLISHED_TABLES[mode])
+            )
             for slot in precreate_slots:
                 cur.execute(
                     "SELECT pg_create_logical_replication_slot(%s, 'pgoutput')",
@@ -452,34 +497,48 @@ def apply_phase_exit(phase: Phase, control_url: str, consumer_count: int) -> Non
 
 
 def verify_consumer(source: dict, receiver: dict) -> dict:
-    """Compare the loadgen ledger against one consumer's delivered state."""
-    last_seq = receiver.get("last_seq", {})
-    deleted = set(receiver.get("deleted", []))
+    """Compare the loadgen ledger against one consumer's delivered state.
+
+    Source ledger: tables -> pk -> [seq, balance|None, deleted].
+    Receiver:      tables -> pk -> {seq, balance, deleted}.
+    """
+    got_tables = receiver.get("tables", {})
     lost_events = 0
     lost_keys = 0
     missed_deletes = 0
-    for pk_str, entry in source["keys"].items():
-        pk = int(pk_str)
-        if entry["deleted"]:
-            if pk not in deleted:
-                missed_deletes += 1
-            continue
-        got = last_seq.get(pk_str)
-        if got is None:
-            lost_keys += 1
-            lost_events += entry["seq"]
-        elif got < entry["seq"]:
-            lost_events += entry["seq"] - got
-            lost_keys += 1
+    balance_mismatches = 0
+    for table, entries in source["tables"].items():
+        got = got_tables.get(table, {})
+        for pk_str, (seq, balance, deleted) in entries.items():
+            state = got.get(pk_str)
+            if deleted:
+                if state is None or not state.get("deleted"):
+                    missed_deletes += 1
+                continue
+            if state is None or state.get("deleted"):
+                lost_keys += 1
+                lost_events += seq
+                continue
+            if state["seq"] < seq:
+                lost_keys += 1
+                lost_events += seq - state["seq"]
+            elif balance is not None and state.get("balance") != balance:
+                # Same seq but wrong balance = corrupted/misordered apply.
+                balance_mismatches += 1
+    torn_txs_open = int(receiver.get("open_txs", 0))
     return {
         "profile": receiver.get("profile"),
         "delivered": receiver.get("delivered"),
         "dups": receiver.get("dups"),
         "order_violations": receiver.get("order_violations"),
+        "txs_completed": receiver.get("txs_completed"),
+        "torn_txs_open": torn_txs_open,
         "lost_keys": lost_keys,
         "lost_events": lost_events,
         "missed_deletes": missed_deletes,
-        "pass": lost_keys == 0 and lost_events == 0 and missed_deletes == 0,
+        "balance_mismatches": balance_mismatches,
+        "pass": (lost_keys == 0 and lost_events == 0 and missed_deletes == 0
+                 and balance_mismatches == 0 and torn_txs_open == 0),
     }
 
 
@@ -540,6 +599,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="label=type:duration (repeatable)")
     parser.add_argument("--profiles", default="1xfast,2xnormal,1xslow",
                         help="consumer set, e.g. 2xfast,4xnormal,2xslow")
+    parser.add_argument("--mode", default="events", choices=sorted(MODE_SCHEMAS),
+                        help="workload shape: events | ledger | outbox")
     parser.add_argument("--rate", type=float, default=200.0)
     parser.add_argument("--op-mix", default="70/25/5")
     parser.add_argument("--key-cardinality", type=int, default=5000)
@@ -574,7 +635,8 @@ def main(argv: list[str] | None = None) -> int:
     entry.prepare(entry)
     ensure_postgres(compose=not args.skip_pg_setup)
     db_url = preflight(args.admin_url, entry.db_name, entry.slot_prefix,
-                       entry.extra_databases, entry.precreate_slots)
+                       entry.extra_databases, entry.precreate_slots,
+                       mode=args.mode)
     admin_parts = urllib.parse.urlsplit(args.admin_url)
 
     tracker = PhaseTracker()
@@ -596,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
                  "CDC_PORT": str(args.port),
                  "CONSUMER_PROFILES": args.profiles,
                  "ENVELOPE": entry.envelope,
+                 "TX_EVENTS": str(MODE_TX_EVENTS[args.mode]),
                  "SAMPLE_EVERY_S": str(args.sample_every_s)},
             stdout=subprocess.PIPE,
             stderr=(logs_dir / "receiver.stderr.log").open("w"),
@@ -613,6 +676,7 @@ def main(argv: list[str] | None = None) -> int:
         log("receiver healthy")
 
         ctx = LaunchCtx(
+            source_tables=MODE_PUBLISHED_TABLES[args.mode],
             db_url=db_url,
             db_host=admin_parts.hostname or "127.0.0.1",
             db_port=admin_parts.port or 5432,
@@ -643,6 +707,7 @@ def main(argv: list[str] | None = None) -> int:
         loadgen = subprocess.Popen(
             [sys.executable, "-m", "cdc_harness.loadgen",
              "--database-url", db_url,
+             "--mode", args.mode,
              "--rate", str(args.rate),
              "--op-mix", args.op_mix,
              "--key-cardinality", str(args.key_cardinality),
@@ -731,9 +796,12 @@ def main(argv: list[str] | None = None) -> int:
         log(f"results in {out_dir}")
 
     for cid, res in verdict.get("consumers", {}).items():
+        tx_note = (f" torn_txs={res['torn_txs_open']}"
+                   if res.get("txs_completed") else "")
         log(f"consumer {cid} [{res['profile']}]: delivered={res['delivered']} "
             f"dups={res['dups']} order_violations={res['order_violations']} "
-            f"lost_events={res['lost_events']} -> "
+            f"lost_events={res['lost_events']} "
+            f"balance_mismatches={res['balance_mismatches']}{tx_note} -> "
             f"{'PASS' if res['pass'] else 'FAIL'}")
     log(f"verification: {'PASS' if verdict.get('pass') else 'FAIL'}")
     return exit_code

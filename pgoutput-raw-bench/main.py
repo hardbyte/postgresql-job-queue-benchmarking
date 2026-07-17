@@ -37,7 +37,9 @@ from cdc_harness.pgoutput import UNCHANGED_TOAST, Relation, parse_message  # noq
 
 PUBLICATION = "cdc_pub"
 SLOT_PREFIX = "cdc_raw_"
-SOURCE_TABLE = "cdc_bench.events"
+SOURCE_TABLES = set(
+    os.environ.get("SOURCE_TABLES", "cdc_bench.events").split(",")
+)
 
 stop_event = threading.Event()
 
@@ -47,7 +49,7 @@ def _log(msg: str) -> None:
 
 
 def canonical_event(change) -> dict | None:
-    if change.relation.qualified != SOURCE_TABLE:
+    if change.relation.qualified not in SOURCE_TABLES:
         return None
     values = change.values
 
@@ -63,6 +65,7 @@ def canonical_event(change) -> dict | None:
         "pk": _int("pk"),
         "seq": _int("seq"),
         "tx_id": _int("tx_id"),
+        "balance": _int("balance"),
         "emitted_us": _int("emitted_us"),
     }
 
@@ -152,7 +155,7 @@ def main() -> int:
         "db_name": database_url.rsplit("/", 1)[-1],
         "slot_names": [f"{SLOT_PREFIX}{i}" for i in range(consumer_count)],
         "publication": PUBLICATION,
-        "event_tables": [SOURCE_TABLE],
+        "event_tables": sorted(SOURCE_TABLES),
         "extensions": [],
         "version": f"in-repo sql-poll (poll_ms={poll_ms}, peek_limit={peek_limit})",
         "schema_version": "1",

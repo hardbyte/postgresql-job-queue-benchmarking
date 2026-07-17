@@ -44,6 +44,7 @@ fn row_to_canonical(op: &str, schema: &ReplicatedTableSchema, row: &TableRow) ->
     let mut pk = None;
     let mut seq = None;
     let mut tx_id = None;
+    let mut balance = None;
     let mut emitted_us = None;
     // Positional cells zipped with the replicated column order. A key-only
     // delete image carries just the leading replica-identity columns; `pk`
@@ -53,6 +54,7 @@ fn row_to_canonical(op: &str, schema: &ReplicatedTableSchema, row: &TableRow) ->
             "pk" => pk = cell_i64(cell),
             "seq" => seq = cell_i64(cell),
             "tx_id" => tx_id = cell_i64(cell),
+            "balance" => balance = cell_i64(cell),
             "emitted_us" => emitted_us = cell_i64(cell),
             _ => {}
         }
@@ -63,6 +65,7 @@ fn row_to_canonical(op: &str, schema: &ReplicatedTableSchema, row: &TableRow) ->
         "pk": pk,
         "seq": seq,
         "tx_id": tx_id,
+        "balance": balance,
         "emitted_us": emitted_us,
     })
 }

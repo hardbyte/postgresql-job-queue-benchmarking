@@ -28,6 +28,7 @@ DEBEZIUM_IMAGE = os.environ.get("DEBEZIUM_IMAGE", "quay.io/debezium/server:3.1.3
 
 @dataclass
 class LaunchCtx:
+    source_tables: list[str]
     db_url: str
     db_host: str
     db_port: int
@@ -107,6 +108,7 @@ def _launch_pgoutput_raw(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedPro
         env={**ctx.env,
              "DATABASE_URL": ctx.db_url,
              "SINK_URL": ctx.receiver_base,
+             "SOURCE_TABLES": ",".join(ctx.source_tables),
              "CONSUMER_COUNT": str(ctx.consumer_count)},
         stdout=subprocess.PIPE,
         stderr=(ctx.logs_dir / "pgoutput-raw.stderr.log").open("w"),
@@ -143,7 +145,7 @@ def _debezium_env(adapter: CdcAdapter, ctx: LaunchCtx, cid: int) -> dict[str, st
         "DEBEZIUM_SOURCE_SLOT_NAME": f"{adapter.slot_prefix}{cid}",
         "DEBEZIUM_SOURCE_PUBLICATION_NAME": "cdc_pub",
         "DEBEZIUM_SOURCE_PUBLICATION_AUTOCREATE_MODE": "disabled",
-        "DEBEZIUM_SOURCE_TABLE_INCLUDE_LIST": "cdc_bench.events",
+        "DEBEZIUM_SOURCE_TABLE_INCLUDE_LIST": ",".join(ctx.source_tables),
         "DEBEZIUM_SOURCE_SNAPSHOT_MODE": "never",
         "DEBEZIUM_SOURCE_TOMBSTONES_ON_DELETE": "false",
         "DEBEZIUM_FORMAT_VALUE": "json",
@@ -228,11 +230,12 @@ def _sequin_yaml(ctx: LaunchCtx) -> str:
         f'  - name: "consumer-{i}"\n    url: "{ctx.receiver_base}/sink/{i}"'
         for i in range(ctx.consumer_count)
     )
+    include_tables = ", ".join(f'"{t}"' for t in ctx.source_tables)
     sinks = "\n".join(
         f'  - name: "sink-{i}"\n'
         f'    database: "source"\n'
         f"    source:\n"
-        f'      include_tables: ["cdc_bench.events"]\n'
+        f"      include_tables: [{include_tables}]\n"
         f"    destination:\n"
         f'      type: "webhook"\n'
         f'      http_endpoint: "consumer-{i}"\n'
