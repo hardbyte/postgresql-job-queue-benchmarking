@@ -25,6 +25,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -94,6 +95,20 @@ def post_with_retry(url: str, events: list[dict]) -> None:
 
 def consumer_loop(consumer_id: int, database_url: str, sink_base: str,
                   poll_ms: int, peek_limit: int) -> None:
+    # A crashed consumer thread must kill the whole adapter: the orchestrator's
+    # watchdog only sees process exit, and a silently-dead consumer would
+    # surface at drain as "lost events" — misattributing an adapter bug as
+    # CDC pipeline loss on the baseline arm.
+    try:
+        _consumer_loop(consumer_id, database_url, sink_base, poll_ms, peek_limit)
+    except Exception:
+        _log(f"consumer {consumer_id}: crashed")
+        traceback.print_exc()
+        os._exit(1)
+
+
+def _consumer_loop(consumer_id: int, database_url: str, sink_base: str,
+                   poll_ms: int, peek_limit: int) -> None:
     slot = f"{SLOT_PREFIX}{consumer_id}"
     sink_url = f"{sink_base}/sink/{consumer_id}"
     conn = psycopg.connect(database_url, autocommit=True)

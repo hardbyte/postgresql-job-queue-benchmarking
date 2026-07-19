@@ -280,10 +280,13 @@ async fn sink(
             return (StatusCode::BAD_REQUEST, err).into_response();
         }
     };
+    // Timestamp at receipt, before the simulated handling delay: e2e_* measures
+    // pipeline lag, not the injected stimulus. The delayed 200 below still
+    // exerts backpressure on the sender.
+    let arrival_us = now_us();
     if delay_ms > 0 {
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
     }
-    let arrival_us = now_us();
     let tx_events = app.tx_events;
     let mut c = slot.lock().unwrap();
     let ring_pos = c.ring_pos;

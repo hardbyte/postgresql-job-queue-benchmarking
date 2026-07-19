@@ -13,7 +13,7 @@ Operational facts gathered 2026-07-17 for the three external systems, so the nex
 
 ## Sequin (not yet implemented)
 
-- Image `sequin/sequin:latest` (pin a version tag). Port 7376 (UI/API; readiness = HTTP on it). **Requires Redis** (per-sink cursors live there) + its own config Postgres DB (`PG_HOSTNAME/PG_PORT/PG_DATABASE/PG_USERNAME/PG_PASSWORD`), plus `SECRET_KEY_BASE` (64B b64) and `VAULT_KEY` (32B b64).
+- Image pinned to `sequin/sequin:v0.14.6` (same digest as `latest` at pin time, 2026-07). Port 7376 (UI/API; readiness = HTTP on it). **Requires Redis** (per-sink cursors live there) + its own config Postgres DB (`PG_HOSTNAME/PG_PORT/PG_DATABASE/PG_USERNAME/PG_PASSWORD`), plus `SECRET_KEY_BASE` (64B b64) and `VAULT_KEY` (32B b64).
 - Declarative config via `CONFIG_FILE_YAML` (base64 inline — no volume needed): `databases:` (with `slot: {name, create_if_not_exists: true}`, `publication: {…}`), `http_endpoints:` (one per consumer → `http://127.0.0.1:18080/sink/<i>`), `sinks:` (one per consumer, same `include_tables`, `destination: {type: webhook, http_endpoint: …}`, `batch: true`, `batch_size`, `message_grouping: true` = per-PK ordering, `initial_backfill: false`).
 - **One slot total** regardless of sink count (topology "buffer") — adapter needs a `slots_fn` override instead of `slot_prefix + i`; fan-out cursors are per-sink in Redis.
 - Webhook payload: single `{record, changes, action, metadata}` or batched `{"data": [...]}`; `action` ∈ insert/update/delete/read (read = backfill). Ack = 2xx; retries indefinitely with exp backoff capped ~3 min (good: consumer-dead chaos won't kill it). Receiver's `decode_sequin` already handles both shapes.

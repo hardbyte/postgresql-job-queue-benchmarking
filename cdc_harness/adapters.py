@@ -9,6 +9,7 @@ pg_replication_slots until every declared slot exists.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -84,6 +85,12 @@ class CdcAdapter:
     # Slots preflight should create with pgoutput before the SUT starts
     # (e.g. Sequin cancels its own slot-create call on a short timeout).
     precreate_slots: tuple[str, ...] = ()
+    # What the SUT actually does given the requested --snapshot-mode. SUTs
+    # that can't honor a mode declare their real behaviour so the manifest
+    # records it and cross-system snapshot comparisons stay honest.
+    effective_snapshot_mode: Callable[["CdcAdapter", str], str] = field(
+        default=lambda self, requested: requested
+    )
 
     def slot_names(self, consumer_count: int) -> list[str]:
         if self.slots is not None:
@@ -197,6 +204,20 @@ def _cargo_binary(crate: str) -> Path:
     return Path(_json.loads(meta.stdout)["target_directory"]) / "release" / crate
 
 
+def _etl_version(adapter: CdcAdapter) -> str:
+    """Derive the pinned etl rev from Cargo.lock so the manifest can't
+    drift from what was actually built."""
+    lock = (REPO_ROOT / "etl-cdc-bench" / "Cargo.lock").read_text()
+    match = re.search(
+        r'name = "etl"\nversion = "[^"]+"\n'
+        r'source = "git\+https://github\.com/supabase/etl\?rev=([0-9a-f]+)',
+        lock,
+    )
+    if match is None:
+        return "supabase/etl (rev unknown — see etl-cdc-bench/Cargo.lock)"
+    return f"supabase/etl @ {match.group(1)[:9]} (git)"
+
+
 def _build_etl(adapter: CdcAdapter) -> None:
     if not _cargo_binary("etl-cdc-bench").exists():
         print("[cdc] cargo build --release etl-cdc-bench…", flush=True)
@@ -221,7 +242,9 @@ def _launch_etl(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedProc]:
 # ── sequin: single container + Redis sidecar; ONE shared slot, per-sink
 # cursors — the "buffer" topology. One webhook sink per consumer. ──────────
 
-SEQUIN_IMAGE = os.environ.get("SEQUIN_IMAGE", "sequin/sequin:latest")
+# Pinned like every other SUT image; `latest` resolved to the same digest
+# as v0.14.6 when pinned (2026-07), so behaviour is unchanged.
+SEQUIN_IMAGE = os.environ.get("SEQUIN_IMAGE", "sequin/sequin:v0.14.6")
 REDIS_IMAGE = "redis:7-alpine"
 SEQUIN_REDIS_PORT = 16379
 
@@ -288,7 +311,9 @@ def _launch_sequin(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedProc]:
         "PG_USERNAME": ctx.db_user,
         "PG_PASSWORD": ctx.db_password,
         "PG_POOL_SIZE": "10",
-        "REDIS_URL": f"redis://{ctx.db_host}:{SEQUIN_REDIS_PORT}",
+        # Redis is our host-network sidecar on this machine — always local,
+        # regardless of where --admin-url points the source database.
+        "REDIS_URL": f"redis://127.0.0.1:{SEQUIN_REDIS_PORT}",
         # Deterministic keys: the config DB may outlive a run, and a changed
         # VAULT_KEY makes Sequin crash decrypting its own stored config.
         # This is a throwaway bench instance — nothing sensitive is stored.
@@ -320,6 +345,9 @@ ADAPTERS: dict[str, CdcAdapter] = {
         db_name="cdc_raw_bench",
         slot_prefix="cdc_raw_",
         launch=_launch_pgoutput_raw,
+        # No snapshot support: streams from slot creation only. The
+        # snapshot_consistency cell runs it anyway as the expected-FAIL baseline.
+        effective_snapshot_mode=lambda self, requested: "never",
     ),
     "debezium-server": CdcAdapter(
         system="debezium-server",
@@ -339,8 +367,12 @@ ADAPTERS: dict[str, CdcAdapter] = {
         slot_prefix="",  # slot names derive from etl pipeline ids
         launch=_launch_etl,
         prepare=_build_etl,
-        version=lambda self: "supabase/etl @ d206d66 (git)",
+        version=_etl_version,
         slots=lambda _n: [],  # readiness = slot count (names SUT-derived)
+        # etl runs its initial table copy unconditionally — there is no
+        # never-snapshot knob (docs/cdc-sut-notes.md); requested "never"
+        # would silently behave as "initial", so declare it.
+        effective_snapshot_mode=lambda self, requested: "initial",
     ),
     "sequin": CdcAdapter(
         system="sequin",
@@ -354,5 +386,7 @@ ADAPTERS: dict[str, CdcAdapter] = {
         extra_databases=("sequin_config",),
         slots=lambda _n: ["sequin_slot"],
         precreate_slots=("sequin_slot",),
+        # The generated YAML configures no sink backfill: change stream only.
+        effective_snapshot_mode=lambda self, requested: "never",
     ),
 }

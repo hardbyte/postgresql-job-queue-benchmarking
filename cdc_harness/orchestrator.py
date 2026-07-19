@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import shlex
 import subprocess
@@ -536,7 +537,7 @@ class ResourceSampler(threading.Thread):
 
 
 def apply_phase_enter(phase: Phase, control_url: str, consumer_count: int,
-                      db_url: str) -> None:
+                      db_url: str, mode: str) -> None:
     if phase.type is PhaseType.BIG_TX:
         # One huge transaction into an UNPUBLISHED ballast table: the
         # decode reorder buffer still processes (and spills) the whole tx
@@ -556,20 +557,28 @@ def apply_phase_enter(phase: Phase, control_url: str, consumer_count: int,
             conn.commit()
         log(f"phase {phase.label}: ballast transaction committed")
     elif phase.type is PhaseType.DDL_CHANGE:
+        # DDL mid-stream on a *published* table is what stresses the
+        # decoder; each mode publishes a different table set.
+        table = MODE_PUBLISHED_TABLES[mode][0]
         column = f"extra_{phase.label}"
-        log(f"phase {phase.label}: ALTER TABLE cdc_bench.events ADD COLUMN {column}")
+        log(f"phase {phase.label}: ALTER TABLE {table} ADD COLUMN {column}")
         with psycopg.connect(db_url, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    f"ALTER TABLE cdc_bench.events ADD COLUMN {column} text"
-                )
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} text")
     elif phase.type is PhaseType.SLOT_INVALIDATION:
         # Destructive by design: cap slot-retained WAL, take every consumer
         # down, and let the write load blow past the cap. slot_wal_status
         # (metrics poller) shows the walk to 'lost'; how the SUT reacts on
         # heal — detect? resurrect? silently lose? — is the result. The
         # run's verify step is EXPECTED to fail if the slot was invalidated.
-        keep = phase.param("keep", "32MB")
+        keep = phase.param("keep", "32MB") or "32MB"
+        # `keep` is interpolated into ALTER SYSTEM below — accept only a
+        # plain Postgres memory quantity.
+        if not re.fullmatch(r"\d+(kB|MB|GB|TB)?", keep):
+            raise SystemExit(
+                f"phase {phase.label}: bad keep={keep!r} "
+                "(expected e.g. 32MB, 1GB)"
+            )
         log(f"phase {phase.label}: max_slot_wal_keep_size={keep}, all consumers dead")
         with psycopg.connect(db_url, autocommit=True) as conn:
             with conn.cursor() as cur:
@@ -724,8 +733,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", default="events", choices=sorted(MODE_SCHEMAS),
                         help="workload shape: events | ledger | outbox")
     parser.add_argument("--preload", type=int, default=0,
-                        help="ledger mode: preload N accounts before the SUT "
-                             "starts (pair with --snapshot-mode initial)")
+                        help="ledger/outbox modes: preload N accounts before "
+                             "the SUT starts (pair with --snapshot-mode initial)")
     parser.add_argument("--snapshot-mode", default="never",
                         choices=["never", "initial"])
     parser.add_argument("--rate", type=float, default=200.0)
@@ -758,6 +767,11 @@ def main(argv: list[str] | None = None) -> int:
     log(f"phases: {' → '.join(p.describe() for p in phases)}")
 
     entry = ADAPTERS[args.system]
+    effective_snapshot = entry.effective_snapshot_mode(entry, args.snapshot_mode)
+    if effective_snapshot != args.snapshot_mode:
+        log(f"note: {entry.system} cannot honor --snapshot-mode "
+            f"{args.snapshot_mode}; effective mode is {effective_snapshot!r} "
+            "(recorded in manifest)")
     receiver_bin = receiver_binary()
     entry.prepare(entry)
     ensure_postgres(compose=not args.skip_pg_setup)
@@ -776,7 +790,10 @@ def main(argv: list[str] | None = None) -> int:
     adapter_procs: list[ManagedProc] = []
     poller = None
     resources = None
-    descriptor: dict = {}
+    # Per-instance so multi-process adapters can't interleave partial
+    # descriptors into one dict; merged into the manifest at the end.
+    instance_descriptors: dict[str, dict] = {}
+    expected_slots: list[str] = []
     verdict: dict = {"pass": False, "error": "run did not reach verification"}
     exit_code = 1
     try:
@@ -830,18 +847,17 @@ def main(argv: list[str] | None = None) -> int:
         adapter_procs = entry.launch(entry, ctx)
         for managed in adapter_procs:
             if managed.proc.stdout is not None:
+                def _store_descriptor(rec: dict, name: str = managed.name) -> None:
+                    instance_descriptors[name] = rec
+
                 tail_jsonl(managed.proc, sink, managed.name,
-                           on_descriptor=descriptor.update)
+                           on_descriptor=_store_descriptor)
 
         expected_slots = entry.slot_names(consumer_count)
         wait_for_slots(db_url, expected_slots, adapter_procs,
                        timeout_s=args.adapter_ready_timeout_s, logs_dir=logs_dir,
                        min_count=consumer_count)
         log(f"adapter up: slots={expected_slots or f'{consumer_count} (names SUT-derived)'}")
-        descriptor.setdefault("system", entry.system)
-        descriptor.setdefault("slot_names", expected_slots)
-        descriptor.setdefault("version", entry.version(entry))
-        descriptor.setdefault("topology", entry.topology)
 
         loadgen = subprocess.Popen(
             [sys.executable, "-m", "cdc_harness.loadgen",
@@ -868,7 +884,8 @@ def main(argv: list[str] | None = None) -> int:
         for phase in phases:
             tracker.set(phase.label, phase.type.value)
             log(f"phase {phase.label} ({phase.type.value}) for {phase.duration_s}s")
-            apply_phase_enter(phase, control_url, consumer_count, db_url)
+            apply_phase_enter(phase, control_url, consumer_count, db_url,
+                              args.mode)
             deadline = time.monotonic() + phase.duration_s
             watched = [(receiver, "receiver"), (loadgen, "loadgen")] + [
                 (m.proc, m.name) for m in adapter_procs
@@ -913,6 +930,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         summary["cdc_verify"] = verdict
         write_summary(summary, out_dir / "summary.json")
+
+        # SUT-emitted fields win; harness knowledge fills the gaps.
+        descriptor: dict = {}
+        if len(instance_descriptors) == 1:
+            descriptor.update(next(iter(instance_descriptors.values())))
+        elif instance_descriptors:
+            descriptor["instances"] = instance_descriptors
+        descriptor.setdefault("system", entry.system)
+        descriptor.setdefault("slot_names", expected_slots)
+        descriptor.setdefault("version", entry.version(entry))
+        descriptor.setdefault("topology", entry.topology)
+        descriptor["snapshot_mode_requested"] = args.snapshot_mode
+        descriptor["snapshot_mode_effective"] = effective_snapshot
         manifest = build_manifest(
             run_id=run_id, scenario=args.scenario, phases=phases,
             systems=[args.system], database_url=db_url,
@@ -926,6 +956,9 @@ def main(argv: list[str] | None = None) -> int:
             "op_mix": args.op_mix,
             "key_cardinality": args.key_cardinality,
             "payload_bytes": args.payload_bytes,
+            "mode": args.mode,
+            "snapshot_mode_requested": args.snapshot_mode,
+            "snapshot_mode_effective": effective_snapshot,
         }
         write_manifest(manifest, out_dir / "manifest.json")
         (out_dir / "README.md").write_text(

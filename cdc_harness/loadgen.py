@@ -313,8 +313,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--outbox-retention-s", type=float, default=10.0)
     parser.add_argument("--outbox-janitor-every-s", type=float, default=5.0)
     parser.add_argument("--preload", type=int, default=0,
-                        help="ledger mode: N accounts assumed preloaded "
-                             "(balance 1000, seq 1, tx_id 0)")
+                        help="ledger/outbox modes: N accounts assumed "
+                             "preloaded (balance 1000, seq 1, tx_id 0)")
     parser.add_argument("--preload-only", action="store_true",
                         help="write the preload rows and exit (run before "
                              "the SUT starts so its snapshot covers them)")
@@ -353,9 +353,14 @@ def main(argv: list[str] | None = None) -> int:
 
     workload = WORKLOADS[args.mode](conn, rng, ledger, args)
     workload.setup()
-    if args.preload > 0 and args.mode == "ledger":
-        # Rows written by a prior --preload-only run; the SUT's snapshot
-        # must deliver them, so seed the verification ledger without writing.
+    if args.preload > 0 and args.mode in ("ledger", "outbox"):
+        # Rows written by a prior --preload-only run. Seeding the in-memory
+        # ledger is load-bearing in both modes: _account_write takes the
+        # INSERT path for any account it doesn't know, so an unseeded
+        # preloaded account means a PK conflict on first touch. In ledger
+        # mode the seeded rows are also what drain-verify expects the SUT's
+        # snapshot to deliver; in outbox mode the dump filter drops them
+        # (only the outbox table is published).
         for account_id in range(1, args.preload + 1):
             ledger.upsert(ACCOUNTS_TABLE, account_id, seq=1,
                           balance=ACCOUNT_INITIAL_BALANCE)
@@ -381,7 +386,11 @@ def main(argv: list[str] | None = None) -> int:
     while not stop:
         now = time.monotonic()
         # Normative pacing: credit on real elapsed time, never on nominal
-        # loop period (CONTRIBUTING_ADAPTERS.md "Producer pacing").
+        # loop period (CONTRIBUTING_ADAPTERS.md "Producer pacing"). Credit
+        # accumulates uncapped across stalls, so a source-side hiccup is
+        # followed by a catch-up burst (bounded per iteration by batch_max):
+        # open-loop offered load stays constant against wall time, matching
+        # the queue bench's reference shape ("dispatch up to batch_max").
         rate_credit += args.rate * (now - last_credit_tick)
         last_credit_tick = now
         whole = min(int(rate_credit), args.batch_max)
