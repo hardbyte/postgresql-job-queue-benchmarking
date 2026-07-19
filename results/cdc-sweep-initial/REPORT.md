@@ -1,5 +1,3 @@
-<!-- Rich comparison artifact: https://claude.ai/code/artifact/85079da2-b79b-4e48-bca0-c9a4067f503a -->
-
 # CDC initial sweep — topology comparison
 
 Workload held constant: `4xfast`, rate 150/s. The moving variable is the capture/insulation topology.
