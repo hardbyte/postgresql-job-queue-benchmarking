@@ -913,7 +913,12 @@ def main(argv: list[str] | None = None) -> int:
         exit_code = 0 if verdict["pass"] else 2
     finally:
         terminate(loadgen, "loadgen")
-        for managed in adapter_procs:
+        # Stop in reverse launch order: a consumer process must go down
+        # before the state store it depends on. Sequin appends [redis,
+        # sequin], so stopping forward kills Redis first and Sequin then
+        # floods its log with cursor-commit failures during its own
+        # shutdown (harmless but misleading in forensics).
+        for managed in reversed(adapter_procs):
             managed.stop()
         terminate(receiver, "receiver")
         if poller is not None:

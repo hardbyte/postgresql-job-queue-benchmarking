@@ -316,12 +316,22 @@ async fn sink(
                     let mut dup = false;
                     let mut violation = false;
                     let state = c.keys.entry(key).or_default();
-                    if seq <= state.seq {
+                    if state.deleted {
+                        // A pk is never reused by any workload (events/ledger/
+                        // outbox all allocate monotonically), so an upsert
+                        // arriving after a delete is necessarily a reordered
+                        // redelivery — count it as an out-of-order dup but keep
+                        // the tombstone. Without this, an at-least-once buffer
+                        // that replays a key's delete before its earlier
+                        // upserts (Sequin on sink recovery) would resurrect the
+                        // row and the drain check would report phantom loss.
+                        dup = true;
+                        violation = true;
+                    } else if seq <= state.seq {
                         dup = true;
                         violation = seq < state.seq;
                     } else {
                         state.seq = seq;
-                        state.deleted = false;
                         if ev.balance.is_some() {
                             state.balance = ev.balance;
                         }
