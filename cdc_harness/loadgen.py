@@ -151,13 +151,29 @@ class EventsWorkload(Workload):
             roll = self.rng.randrange(100)
             can_mutate = len(self.keys.live) > 0
             at_capacity = len(self.keys.live) >= self.args.key_cardinality
-            if (roll < self.ins_pct and not at_capacity) or not can_mutate:
+            # Pick the op from the mix, then reconcile with keyspace bounds.
+            # A bounded keyspace can't sustain the insert rate forever, so at
+            # capacity an insert roll becomes a DELETE (not an update) — that
+            # frees a slot and keeps tombstone churn flowing. The old code
+            # folded capacity into the update branch, which made the delete
+            # branch unreachable once the keyspace filled and silently zeroed
+            # the configured delete percentage for the rest of the run.
+            if not can_mutate:
+                op = "insert"
+            elif roll < self.ins_pct:
+                op = "delete" if at_capacity else "insert"
+            elif roll < self.ins_pct + self.upd_pct:
+                op = "update"
+            else:
+                op = "delete"
+
+            if op == "insert":
                 pk = self.next_pk
                 self.next_pk += 1
                 self.keys.add(pk)
                 self.ledger.upsert(EVENTS_TABLE, pk, seq=1)
                 inserts.append((pk, 1, tx_id, self.payload, emitted_us))
-            elif roll < self.ins_pct + self.upd_pct or at_capacity:
+            elif op == "update":
                 pk = self.keys.pick()
                 entry = self.ledger.get(EVENTS_TABLE, pk)
                 entry[0] += 1

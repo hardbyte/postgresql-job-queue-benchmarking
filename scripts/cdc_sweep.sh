@@ -28,6 +28,9 @@ MASTER_LOG="$RESULTS_ROOT/run.log"
 RATE=150
 KEYS=5000
 PROFILES=4xfast
+# Workload shape: events | ledger | outbox. Ledger/outbox exercise the
+# cross-table transaction-integrity + balance-conservation verification.
+MODE="${MODE:-events}"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$MASTER_LOG"; }
 
@@ -36,7 +39,7 @@ log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$MASTER_LOG"; }
 # fanout_steady is the no-chaos baseline.
 phases_for() {
   case "$1" in
-    dead_consumer)
+    dead_consumer|tx_integrity)
       echo "--phase warmup=warmup:20s --phase clean_1=clean:60s --phase dead=consumer-dead(id=1):90s --phase heal=clean:60s --phase drain=recovery:30s" ;;
     fanout_steady)
       echo "--phase warmup=warmup:20s --phase clean_1=clean:120s --phase drain=recovery:30s" ;;
@@ -78,6 +81,7 @@ run_cell() {
   # shellcheck disable=SC2086
   timeout --signal=INT 900 uv run cdc \
     --system "$system" \
+    --mode "$MODE" \
     $(phases_for "$scenario") \
     --profiles "$PROFILES" \
     --rate "$RATE" \
@@ -95,10 +99,11 @@ run_cell() {
   log "END   ${cell_id} rc=${rc} dir=${run_dir##*/}"
 }
 
-SYSTEMS=(pgoutput-raw debezium-server supabase-etl sequin sequin-grouped)
-SCENARIOS=(fanout_steady dead_consumer)
+# Overridable via env: SYSTEMS="pgoutput-raw sequin" SCENARIOS="tx_integrity"
+read -r -a SYSTEMS <<< "${SYSTEMS:-pgoutput-raw debezium-server supabase-etl sequin sequin-grouped}"
+read -r -a SCENARIOS <<< "${SCENARIOS:-fanout_steady dead_consumer}"
 
-log "==== CDC initial sweep: ${#SYSTEMS[@]} systems x ${#SCENARIOS[@]} scenarios ===="
+log "==== CDC sweep (mode=$MODE): ${#SYSTEMS[@]} systems x ${#SCENARIOS[@]} scenarios ===="
 # Ensure Postgres (logical WAL) is up once; cells use --skip-pg-setup.
 docker compose -f docker-compose.yml -f docker-compose.cdc.yml up -d --wait postgres >>"$MASTER_LOG" 2>&1
 

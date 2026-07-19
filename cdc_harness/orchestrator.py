@@ -929,6 +929,20 @@ def main(argv: list[str] | None = None) -> int:
         if resources is not None:
             resources.stop_event.set()
             resources.join(timeout=5)
+        # Defensively restore the cluster WAL-retention cap. The
+        # slot-invalidation phase lowers max_slot_wal_keep_size via ALTER
+        # SYSTEM and only resets it on normal phase exit; if the run aborts
+        # mid-phase (adapter death, verify abort, Ctrl-C) the low cap would
+        # leak into later cells and fake slot loss. RESET is a no-op when the
+        # cap was never touched.
+        if any(p.type is PhaseType.SLOT_INVALIDATION for p in phases):
+            try:
+                with psycopg.connect(db_url, autocommit=True) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("ALTER SYSTEM RESET max_slot_wal_keep_size")
+                        cur.execute("SELECT pg_reload_conf()")
+            except Exception as exc:
+                log(f"cleanup: could not reset max_slot_wal_keep_size: {exc}")
         sink.flush_close()
 
         summary = compute_summary(
