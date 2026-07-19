@@ -75,6 +75,11 @@ def cell_metrics(run_dir: Path) -> dict:
     consumers = verify.get("consumers", {})
     dups = sum(int(c.get("dups") or 0) for c in consumers.values())
     order_v = sum(int(c.get("order_violations") or 0) for c in consumers.values())
+
+    def _sum(field: str) -> int:
+        return sum(int(c.get(field) or 0) for c in consumers.values())
+
+    completed = [int(c.get("txs_completed") or 0) for c in consumers.values()]
     return {
         "verify_pass": verify.get("pass"),
         "e2e_p99_clean_ms": _peak(e2e_clean),
@@ -84,6 +89,12 @@ def cell_metrics(run_dir: Path) -> dict:
         "e2e_p99_heal_ms": _peak(e2e_heal),
         "dups": dups,
         "order_violations": order_v,
+        # tx-integrity (ledger/outbox modes)
+        "txs_completed_min": min(completed) if completed else None,
+        "torn_txs": _sum("torn_txs_open"),
+        "balance_mismatches": _sum("balance_mismatches"),
+        "lost_events": _sum("lost_events"),
+        "missed_deletes": _sum("missed_deletes"),
     }
 
 
@@ -113,10 +124,27 @@ def main() -> int:
     with index.open() as fh:
         cells = list(csv.DictReader(fh, delimiter="\t"))
 
+    # Fallback dir resolution: a relative results-root leaves run_index's dir
+    # column empty (the orchestrator echoes a relative out_dir the driver
+    # can't capture). Map system -> run dir from each cell dir's manifest so
+    # the report still finds its data. Assumes one dir per system per
+    # results-root (true for a single-scenario sweep like the ledger cells).
+    by_system: dict[str, Path] = {}
+    for d in sorted(root.glob("cdc-*")):
+        mf = d / "manifest.json"
+        if not mf.exists():
+            continue
+        try:
+            systems = json.loads(mf.read_text()).get("systems", [])
+        except (json.JSONDecodeError, OSError):
+            continue
+        if systems:
+            by_system[systems[0]] = d
+
     # scenario -> system -> metrics
     grid: dict[str, dict[str, dict]] = defaultdict(dict)
     for c in cells:
-        run_dir = Path(c["run_dir"]) if c["run_dir"] else None
+        run_dir = Path(c["run_dir"]) if c["run_dir"] else by_system.get(c["system"])
         rc = c["exit_code"]
         m = {"rc": rc}
         if run_dir and run_dir.exists():
@@ -139,6 +167,15 @@ def main() -> int:
                 lines.append(f"| `{sys}` | {v} | {_ms(m.get('e2e_p99_clean_ms'))} | "
                              f"{_mb(m.get('slot_wal_dead_peak'))} | {_mb(m.get('rss_peak'))} | "
                              f"{_ms(m.get('e2e_p99_heal_ms'))} | {m.get('dups','—')} | {m.get('order_violations','—')} |")
+        elif scenario == "tx_integrity":
+            lines.append("| system | verify | txs completed | torn txs | balance Δ | lost | missed del | reorder |")
+            lines.append("|---|---|---|---|---|---|---|---|")
+            for sys, m in systems.items():
+                v = "✅" if m.get("verify_pass") else ("❌" if m.get("verify_pass") is False else f"rc={m['rc']}")
+                lines.append(f"| `{sys}` | {v} | {m.get('txs_completed_min','—')} | "
+                             f"{m.get('torn_txs','—')} | {m.get('balance_mismatches','—')} | "
+                             f"{m.get('lost_events','—')} | {m.get('missed_deletes','—')} | "
+                             f"{m.get('order_violations','—')} |")
         else:
             lines.append("| system | verify | e2e p99 (clean) | delivery rate | RSS peak |")
             lines.append("|---|---|---|---|---|")

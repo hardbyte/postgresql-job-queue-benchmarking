@@ -17,7 +17,10 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-RESULTS_ROOT="${1:-$ROOT/results/cdc-sweep-initial}"
+# Resolve to absolute: the orchestrator echoes its out_dir as given, and the
+# run_dir capture below anchors on a leading '/', so a relative results-root
+# would leave the run_index dir column empty.
+RESULTS_ROOT="$(realpath -m "${1:-$ROOT/results/cdc-sweep-initial}")"
 mkdir -p "$RESULTS_ROOT/logs"
 RUN_INDEX="$RESULTS_ROOT/run_index.tsv"
 if [[ ! -f "$RUN_INDEX" ]]; then
