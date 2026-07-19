@@ -454,13 +454,15 @@ class SlotPoller(threading.Thread):
         conn.close()
 
 
-_MEM_UNITS = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3}
+_MEM_UNITS = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
 
 
 def _parse_mem(text: str) -> float | None:
-    # "123.4MiB / 7.629GiB" -> bytes of the usage part
+    # "123.4MiB / 7.629GiB" -> bytes of the usage part. Match the longest
+    # unit first: every KiB/MiB/GiB also ends in "B", so a "B"-first scan
+    # would strip only the trailing B and choke on "123.4Mi".
     usage = text.split("/")[0].strip()
-    for unit, mult in _MEM_UNITS.items():
+    for unit, mult in sorted(_MEM_UNITS.items(), key=lambda kv: -len(kv[0])):
         if usage.endswith(unit):
             try:
                 return float(usage[: -len(unit)]) * mult
