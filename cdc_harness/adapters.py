@@ -91,6 +91,10 @@ class CdcAdapter:
     effective_snapshot_mode: Callable[["CdcAdapter", str], str] = field(
         default=lambda self, requested: requested
     )
+    # Sequin only: emit `message_grouping: true` on each sink (per-PK
+    # ordering). Off by default so the out-of-box recovery-reordering
+    # behaviour is what the baseline arm measures.
+    message_grouping: bool = False
 
     def slot_names(self, consumer_count: int) -> list[str]:
         if self.slots is not None:
@@ -249,12 +253,13 @@ REDIS_IMAGE = "redis:7-alpine"
 SEQUIN_REDIS_PORT = 16379
 
 
-def _sequin_yaml(ctx: LaunchCtx) -> str:
+def _sequin_yaml(ctx: LaunchCtx, message_grouping: bool = False) -> str:
     endpoints = "\n".join(
         f'  - name: "consumer-{i}"\n    url: "{ctx.receiver_base}/sink/{i}"'
         for i in range(ctx.consumer_count)
     )
     include_tables = ", ".join(f'"{t}"' for t in ctx.source_tables)
+    grouping_line = "\n    message_grouping: true" if message_grouping else ""
     sinks = "\n".join(
         f'  - name: "sink-{i}"\n'
         f'    database: "source"\n'
@@ -264,6 +269,7 @@ def _sequin_yaml(ctx: LaunchCtx) -> str:
         f'      type: "webhook"\n'
         f'      http_endpoint: "consumer-{i}"\n'
         f"    batch_size: 100"
+        f"{grouping_line}"
         for i in range(ctx.consumer_count)
     )
     return f"""account:
@@ -302,8 +308,9 @@ def _launch_sequin(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedProc]:
     )
     procs.append(ManagedProc(name="redis", proc=redis, container="cdcbench-redis"))
 
-    config_b64 = base64.b64encode(_sequin_yaml(ctx).encode()).decode()
-    (ctx.logs_dir / "sequin.yaml").write_text(_sequin_yaml(ctx))  # forensics
+    yaml = _sequin_yaml(ctx, adapter.message_grouping)
+    config_b64 = base64.b64encode(yaml.encode()).decode()
+    (ctx.logs_dir / "sequin.yaml").write_text(yaml)  # forensics
     env = {
         "PG_HOSTNAME": ctx.db_host,
         "PG_PORT": str(ctx.db_port),
@@ -388,5 +395,22 @@ ADAPTERS: dict[str, CdcAdapter] = {
         precreate_slots=("sequin_slot",),
         # The generated YAML configures no sink backfill: change stream only.
         effective_snapshot_mode=lambda self, requested: "never",
+    ),
+    # Same as `sequin` but with per-PK ordering enabled — the paired cell
+    # that measures the ordering-vs-throughput tradeoff against the default.
+    "sequin-grouped": CdcAdapter(
+        system="sequin-grouped",
+        envelope="sequin",
+        topology="buffer",
+        db_name="sequin_cdc_bench",
+        slot_prefix="sequin_",
+        launch=_launch_sequin,
+        prepare=lambda self: [_docker_pull(i) for i in (SEQUIN_IMAGE, REDIS_IMAGE)] and None,
+        version=lambda self: f"{SEQUIN_IMAGE} (message_grouping)",
+        extra_databases=("sequin_config",),
+        slots=lambda _n: ["sequin_slot"],
+        precreate_slots=("sequin_slot",),
+        effective_snapshot_mode=lambda self, requested: "never",
+        message_grouping=True,
     ),
 }
