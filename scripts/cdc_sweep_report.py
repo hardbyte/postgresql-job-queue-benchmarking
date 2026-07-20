@@ -68,6 +68,9 @@ def cell_metrics(run_dir: Path) -> dict:
                                   metric="slot_retained_wal_bytes",
                                   phase_label="dead")
     rss_all = phase_samples(rows, subject_kind="container", metric="rss_bytes")
+    # Broker arm: a dead consumer's backlog is Kafka offset lag, not WAL.
+    lag_dead = phase_samples(rows, subject_kind="kafka_consumer",
+                             metric="offset_lag", phase_label="dead")
     # Recovery lag: worst consumer e2e p99 during heal (post-outage catch-up).
     e2e_heal = phase_samples(rows, subject_kind="consumer",
                              metric="e2e_p99_ms", phase_label="heal")
@@ -85,6 +88,7 @@ def cell_metrics(run_dir: Path) -> dict:
         "e2e_p99_clean_ms": _peak(e2e_clean),
         "delivery_rate_mean": _mean(deliv),
         "slot_wal_dead_peak": _peak(slot_wal_dead),
+        "offset_lag_dead_peak": _peak(lag_dead),
         "rss_peak": _peak(rss_all),
         "e2e_p99_heal_ms": _peak(e2e_heal),
         "dups": dups,
@@ -160,13 +164,15 @@ def main() -> int:
         lines.append(f"## {scenario}")
         lines.append("")
         if scenario == "dead_consumer":
-            lines.append("| system | verify | e2e p99 (clean) | slot WAL @dead | RSS peak | e2e p99 (heal) | dups | reorder |")
+            lines.append("| system | verify | e2e p99 (clean) | slot WAL @dead | kafka lag @dead | RSS peak | e2e p99 (heal) | reorder |")
             lines.append("|---|---|---|---|---|---|---|---|")
             for sys, m in systems.items():
                 v = "✅" if m.get("verify_pass") else ("❌" if m.get("verify_pass") is False else f"rc={m['rc']}")
+                lag = m.get("offset_lag_dead_peak")
+                lag_s = f"{int(lag)}" if lag else "—"
                 lines.append(f"| `{sys}` | {v} | {_ms(m.get('e2e_p99_clean_ms'))} | "
-                             f"{_mb(m.get('slot_wal_dead_peak'))} | {_mb(m.get('rss_peak'))} | "
-                             f"{_ms(m.get('e2e_p99_heal_ms'))} | {m.get('dups','—')} | {m.get('order_violations','—')} |")
+                             f"{_mb(m.get('slot_wal_dead_peak'))} | {lag_s} | {_mb(m.get('rss_peak'))} | "
+                             f"{_ms(m.get('e2e_p99_heal_ms'))} | {m.get('order_violations','—')} |")
         elif scenario == "tx_integrity":
             lines.append("| system | verify | txs completed | torn txs | balance Δ | lost | missed del | reorder |")
             lines.append("|---|---|---|---|---|---|---|---|")

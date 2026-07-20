@@ -8,10 +8,15 @@ pg_replication_slots until every declared slot exists.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import secrets
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -51,8 +56,16 @@ class ManagedProc:
     name: str
     proc: subprocess.Popen
     container: str | None = None
+    # Extra teardown (e.g. delete a Kafka Connect connector so its slot is
+    # released). Runs before the process/container is stopped.
+    on_stop: Callable[[], None] | None = None
 
     def stop(self, grace_s: float = 10.0) -> None:
+        if self.on_stop is not None:
+            try:
+                self.on_stop()
+            except Exception:
+                pass
         if self.container is not None:
             subprocess.run(
                 ["docker", "stop", "-t", str(int(grace_s)), self.container],
@@ -344,6 +357,113 @@ def _launch_sequin(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedProc]:
     return procs
 
 
+# ── debezium-kafka: the broker arm. One Debezium connector (single slot,
+# single topic per table) writes to Kafka; fan-out is at the consumer layer
+# — one Kafka consumer group per consumer, bridged to the receiver. A dead
+# consumer's backlog is Kafka offset lag, not source WAL. ─────────────────
+
+KAFKA_COMPOSE = str(REPO_ROOT / "docker-compose.kafka.yml")
+CONNECT_URL = os.environ.get("CONNECT_URL", "http://localhost:8083")
+KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
+KAFKA_CONNECTOR = "cdc-source"
+KAFKA_SLOT = "dbz_kafka"
+# Pinned to match the compose file and the debezium-server engine version.
+KAFKA_IMAGE = "apache/kafka:3.9.0"
+KAFKA_CONNECT_IMAGE = "quay.io/debezium/connect:3.1.3.Final"
+
+
+def _connect_request(method: str, path: str, body: dict | None = None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        f"{CONNECT_URL}{path}", data=data, method=method,
+        headers={"Content-Type": "application/json"} if data else {},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            return resp.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as exc:
+        return exc.code, None
+    except (urllib.error.URLError, OSError):
+        return None, None
+
+
+def _delete_connector() -> None:
+    _connect_request("DELETE", f"/connectors/{KAFKA_CONNECTOR}")
+
+
+def _wait_connect_rest(timeout_s: float) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        status, _ = _connect_request("GET", "/")
+        if status == 200:
+            return
+        time.sleep(2.0)
+    raise SystemExit(f"Kafka Connect REST not ready at {CONNECT_URL}")
+
+
+def _launch_debezium_kafka(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedProc]:
+    # Bring up (idempotent) the broker stack; it persists across cells like
+    # Postgres does. `--wait` blocks on the compose healthchecks.
+    subprocess.run(
+        ["docker", "compose", "-f", KAFKA_COMPOSE, "up", "-d", "--wait"],
+        check=True,
+    )
+    _wait_connect_rest(120.0)
+
+    # Run-scoped topic prefix + consumer groups so a rerun can't replay a
+    # prior run's topic data or resume its committed offsets. Old topics
+    # linger until `docker compose -f docker-compose.kafka.yml down -v`.
+    token = secrets.token_hex(3)
+    topic_prefix = f"cdcbench_{token}"
+    group_prefix = f"cdc-bridge-{token}"
+
+    _delete_connector()  # clear any stale connector, ignore result
+    config = {
+        "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+        "tasks.max": "1",
+        "database.hostname": ctx.db_host,
+        "database.port": str(ctx.db_port),
+        "database.user": ctx.db_user,
+        "database.password": ctx.db_password,
+        "database.dbname": ctx.db_name,
+        "topic.prefix": topic_prefix,
+        "plugin.name": "pgoutput",
+        "slot.name": KAFKA_SLOT,
+        "publication.name": "cdc_pub",
+        "publication.autocreate.mode": "disabled",
+        "snapshot.mode": ctx.snapshot_mode,
+        "table.include.list": ",".join(ctx.source_tables),
+        "tombstones.on.delete": "false",
+        "value.converter.schemas.enable": "false",
+        "key.converter.schemas.enable": "false",
+        "topic.creation.enable": "true",
+        "topic.creation.default.replication.factor": "1",
+        "topic.creation.default.partitions": "1",
+    }
+    status, _ = _connect_request(
+        "PUT", f"/connectors/{KAFKA_CONNECTOR}/config", config
+    )
+    if status not in (200, 201):
+        raise SystemExit(f"connector registration failed (HTTP {status})")
+
+    topic_pattern = rf"{topic_prefix}\.cdc_bench\..*"
+    proc = subprocess.Popen(
+        [sys.executable, str(REPO_ROOT / "kafka-bridge-bench" / "main.py")],
+        env={**ctx.env,
+             "BOOTSTRAP": KAFKA_BOOTSTRAP,
+             "SINK_URL": ctx.receiver_base,
+             "CONSUMER_COUNT": str(ctx.consumer_count),
+             "TOPIC_PATTERN": topic_pattern,
+             "GROUP_PREFIX": group_prefix},
+        stdout=subprocess.PIPE,
+        stderr=(ctx.logs_dir / "kafka-bridge.stderr.log").open("w"),
+        text=True, cwd=REPO_ROOT,
+    )
+    # Deleting the connector on teardown releases the replication slot.
+    return [ManagedProc(name="kafka-bridge", proc=proc, on_stop=_delete_connector)]
+
+
 ADAPTERS: dict[str, CdcAdapter] = {
     "pgoutput-raw": CdcAdapter(
         system="pgoutput-raw",
@@ -412,5 +532,21 @@ ADAPTERS: dict[str, CdcAdapter] = {
         precreate_slots=("sequin_slot",),
         effective_snapshot_mode=lambda self, requested: "never",
         message_grouping=True,
+    ),
+    # The broker arm: single connector/slot, fan-out at the Kafka consumer
+    # layer. Honors snapshot mode like debezium-server (same engine).
+    "debezium-kafka": CdcAdapter(
+        system="debezium-kafka",
+        envelope="debezium",
+        topology="broker",
+        db_name="debezium_kafka_bench",
+        slot_prefix="",
+        launch=_launch_debezium_kafka,
+        prepare=lambda self: [
+            _docker_pull(i) for i in (KAFKA_IMAGE, KAFKA_CONNECT_IMAGE)
+        ] and None,
+        version=lambda self: f"{KAFKA_CONNECT_IMAGE} + {KAFKA_IMAGE}",
+        # Single logical slot regardless of consumer count (buffer/broker).
+        slots=lambda _n: [KAFKA_SLOT],
     ),
 }

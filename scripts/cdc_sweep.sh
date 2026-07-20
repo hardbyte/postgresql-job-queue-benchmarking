@@ -50,11 +50,12 @@ phases_for() {
   esac
 }
 
-# Docker-backed adapters need longer to become ready (JVM x N / Sequin+Redis).
+# Docker-backed adapters need longer to become ready (JVM x N / Sequin+Redis
+# / Kafka+Connect+connector registration).
 ready_timeout_for() {
   case "$1" in
     debezium-server) echo 180 ;;
-    sequin|sequin-grouped) echo 150 ;;
+    sequin|sequin-grouped|debezium-kafka) echo 150 ;;
     *) echo 90 ;;
   esac
 }
@@ -103,7 +104,7 @@ run_cell() {
 }
 
 # Overridable via env: SYSTEMS="pgoutput-raw sequin" SCENARIOS="tx_integrity"
-read -r -a SYSTEMS <<< "${SYSTEMS:-pgoutput-raw debezium-server supabase-etl sequin sequin-grouped}"
+read -r -a SYSTEMS <<< "${SYSTEMS:-pgoutput-raw debezium-server supabase-etl sequin sequin-grouped debezium-kafka}"
 read -r -a SCENARIOS <<< "${SCENARIOS:-fanout_steady dead_consumer}"
 
 log "==== CDC sweep (mode=$MODE): ${#SYSTEMS[@]} systems x ${#SCENARIOS[@]} scenarios ===="
