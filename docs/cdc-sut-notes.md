@@ -27,6 +27,17 @@ Operational facts gathered 2026-07-17 for the three external systems, so the nex
 - Events: `Event::{Begin,Commit,Insert,Update,Delete,…}`, each with `commit_lsn`/`start_lsn`/`tx_ordinal`; rows are positional `Vec<Cell>` (bigint = `Cell::I64`) mapped to names via `ReplicatedTableSchema`. Our destination converts to canonical envelope and POSTs to the receiver (one pipeline per consumer = slot-per-consumer arm).
 - Initial table copy is on by default, publication-driven, no documented off-switch — harmless here because the source table is empty at pipeline start; check `TableSyncCopyConfig` if that changes.
 
+## Debezium + Kafka (implemented + smoke-verified: `--system debezium-kafka`)
+
+- The broker arm: `docker-compose.kafka.yml` runs single-node Kafka (KRaft, `apache/kafka:3.9.0`) + Debezium Kafka Connect (`quay.io/debezium/connect:3.1.3.Final`), host-networked, brought up by the adapter (persists across cells like Postgres). One Debezium PostgresConnector (single slot `dbz_kafka`, one topic per table `<prefix>.<schema>.<table>`) registered via the Connect REST API.
+- Fan-out is at the **consumer layer**: `kafka-bridge-bench/main.py` (kafka-python) runs one consumer group per harness consumer, each reads the table topics and POSTs the Debezium envelopes to the receiver (`--envelope debezium`, same decoder as debezium-server). Blocking retry with no offset commit until acked → a dead consumer's backlog is **Kafka offset lag**, not source WAL.
+- GOTCHA: kafka-python pattern subscription only discovers topics created *after* subscribe if metadata refreshes — set `metadata_max_age_ms=5000` or the bridge sees nothing (Debezium creates the topic on the first row). Also run-scope topic prefix + consumer groups per run (a token) so a rerun can't replay old topic data / resume old offsets. kafka-python 3.0.8 admin API: `list_group_offsets(group)` returns `{group: {TopicPartition: OffsetAndMetadata}}` (not `list_consumer_group_offsets`).
+- FINDING (full decoupling): under a dead consumer the source slot stays **flat (~5.7 MB)** while the dead consumer's offset lag grows (~12.8k events at smoke scale); healthy consumers unaffected. This is the clean control vs Sequin's shared-but-coupled slot (51 MB retained for all). CAVEAT: reported RSS is the bridge only — Kafka+Connect (~1-2 GB) is unattributed shared infra.
+
+## Harness status (updated 2026-07-20, session 4)
+
+- Broker arm `debezium-kafka` added — see its section above. All six arms now pass smoke.
+
 ## Harness status (updated 2026-07-17, second session)
 
 - Registry: `cdc_harness/adapters.py` — `pgoutput-raw`, `debezium-server`, `sequin`, `supabase-etl` all pass the smoke scenario (debezium needs `--profiles Nxfast`, see its known issue above).
