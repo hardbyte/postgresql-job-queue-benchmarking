@@ -151,7 +151,7 @@ def main() -> int:
             m.update(cell_metrics(run_dir))
         grid[c["scenario"]][c["system"]] = m
 
-    lines: list[str] = ["# CDC initial sweep — topology comparison", ""]
+    lines: list[str] = ["# CDC sweep — topology comparison", ""]
     lines.append("Workload held constant: `4xfast`, rate 150/s. The moving "
                  "variable is the capture/insulation topology.")
     lines.append("")
