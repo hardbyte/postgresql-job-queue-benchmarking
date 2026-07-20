@@ -1,56 +1,40 @@
-# CDC sweep — topology comparison
+# CDC sweep - measured comparison
 
-Workload held constant: `4xfast`, rate 150/s. The moving variable is the capture/insulation topology.
+Workload: `events` mode, `4xfast`, target rate 150.0 operations/s.
 
 ## fanout_steady
 
-| system | verify | e2e p99 (clean) | delivery rate | RSS peak |
-|---|---|---|---|---|
-| `pgoutput-raw` | ✅ | 66 ms | 150/s | 57.6 MB |
-| `supabase-etl` | ✅ | 26 ms | 150/s | 12.8 MB |
-| `debezium-server` | ✅ | 990 ms | 150/s | 450.4 MB |
-| `sequin` | ✅ | 8913 ms | 150/s | 613.0 MB |
-| `sequin-grouped` | ✅ | 8962 ms | 150/s | 618.7 MB |
-| `debezium-kafka` | ✅ | 4239 ms | 150/s | 55.7 MB |
+| system | verify | worst-consumer median rolling p99 | median delivery rate / consumer | summed sampled RSS peaks |
+|---|---:|---:|---:|---:|
+| `pgoutput-raw` | PASS (legacy) | 54 ms | 150/s | 57.6 MB |
+| `supabase-etl` | PASS (legacy) | 26 ms | 150/s | 12.8 MB |
+| `debezium-server` | PASS (legacy) | 617 ms | 152/s | 1732.7 MB |
+| `sequin` | PASS (legacy) | 33 ms | 150/s | 625.3 MB |
+| `sequin-grouped` | PASS (legacy) | 33 ms | 150/s | 630.0 MB |
+| `debezium-kafka` | PASS | 955 ms | 152/s | 1815.4 MB |
 
 ## dead_consumer
 
-| system | verify | e2e p99 (clean) | slot WAL @dead | kafka lag @dead | RSS peak | e2e p99 (heal) | reorder |
-|---|---|---|---|---|---|---|---|
-| `pgoutput-raw` | ✅ | 67 ms | 6.2 MB | — | 59.6 MB | 66454 ms | 0 |
-| `debezium-server` | ✅ | 989 ms | 5.6 MB | — | 434.2 MB | 66421 ms | 0 |
-| `supabase-etl` | ✅ | 26 ms | 4.9 MB | — | 19.2 MB | 66454 ms | 0 |
-| `sequin` | ✅ | 8946 ms | 51.1 MB | — | 770.8 MB | 66912 ms | 8522 |
-| `sequin-grouped` | ✅ | 8954 ms | 58.0 MB | — | 783.5 MB | 66912 ms | 8538 |
-| `debezium-kafka` | ✅ | 5243 ms | 5.7 MB | 12837 | 56.6 MB | 67011 ms | 20 |
+| system | verify | worst-consumer median rolling p99 (clean) | slot WAL clean -> dead | Kafka lag peak | summed sampled RSS peaks | peak rolling p99 (heal) | reorder worst consumer |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `pgoutput-raw` | PASS (legacy) | 65 ms | 0.7 MB -> 6.2 MB | - | 59.6 MB | 66454 ms | 0 |
+| `debezium-server` | PASS (legacy) | 964 ms | 0.9 MB -> 5.6 MB | - | 1576.5 MB | 66421 ms | 0 |
+| `supabase-etl` | PASS (legacy) | 25 ms | 0.7 MB -> 4.9 MB | - | 19.2 MB | 66454 ms | 0 |
+| `sequin` | PASS (legacy) | 104 ms | 2.4 MB -> 51.1 MB | - | 781.9 MB | 66912 ms | 8522 |
+| `sequin-grouped` | PASS (legacy) | 112 ms | 2.7 MB -> 58.0 MB | - | 794.7 MB | 66912 ms | 8538 |
+| `debezium-kafka` | PASS | 963 ms | 2.8 MB -> 4.1 MB | 13365 | 1816.5 MB | 66519 ms | 0 |
 
+## Interpretation
 
-## The insulation axis: coupling vs decoupling
+- Slot-per-consumer systems isolate healthy consumers, but a dead consumer leaves its own slot behind. Physical source WAL retention follows the oldest slot; it does not multiply by the number of equally lagged slots.
+- Sequin's shared slot moved substantially from the clean peak to the dead-consumer peak, so this configuration coupled source retention to the slowest sink.
+- Kafka consumer lag grew while the source slot remained bounded in this run. This demonstrates consumer/source decoupling for the measured outage, not zero source WAL usage.
+- RSS is the sum of each sampled process or container's phase peak. It is total runtime memory, not buffered-backlog size, and the component peaks need not be simultaneous.
+- `message_grouping` did not remove Sequin's measured recovery reordering in this run.
 
-The moving variable is **where fan-out happens** and **whether the replication
-slot's commit is coupled to consumer progress**. Under a dead consumer:
+## Method caveats
 
-- **slot-per-consumer** (pgoutput-raw, supabase-etl, debezium-server): the dead
-  consumer pins **its own** slot (~5-6 MB); healthy consumers untouched — but the
-  retention scales with the number of bad consumers.
-- **buffer / shared slot** (sequin): one shared slot is held at the slowest sink's
-  cursor, so one dead consumer pins **51 MB of source WAL for everyone** plus
-  ~770 MB buffered in memory. The buffer *couples* consumers.
-- **broker** (debezium-kafka): the connector commits the slot on write-to-Kafka,
-  independent of any consumer. A dead consumer pins **nothing at the source**
-  (slot flat at ~5.7 MB); its backlog is **~12.8k events of Kafka offset lag**.
-  Fully decoupled — this is the reference insulation architecture.
-
-## Caveats
-
-- **debezium-kafka RSS is the bridge only.** Kafka + Kafka Connect are persistent
-  shared infra (like Postgres) and are not attributed to the run, so the broker's
-  real ~1-2 GB resident footprint is NOT in the RSS column. The insulation is paid
-  in that standing infrastructure, not in per-run memory.
-- Latency ladder (steady state): supabase-etl 26 ms < pgoutput-raw 66 ms <
-  debezium-server ~1 s < debezium-kafka ~4 s < sequin ~9 s. The broker hop adds
-  latency but less than the Sequin buffer.
-- `e2e p99 (heal)` ~66 s is the age of the oldest backlogged event when the sink
-  recovers (scenario-determined: 90 s outage), not a per-system latency.
-- Directional, not publication-grade: single run/cell, 4xfast, scaled durations,
-  decode-spill not exercised.
+- Directional single-run cells at scaled durations; no confidence intervals.
+- The clean latency statistic is the worst consumer's median rolling 30-second p99. The heal statistic is a peak rolling p99 and primarily represents backlog age.
+- Systems differ in capture runtime, batching, polling, and topology. The latency ordering is observational, not a causal estimate of insulation overhead.
+- Cells without `final_state_converged` in their stored summary predate the strengthened verifier. Their PASS verdict used the earlier one-sided final-ledger check; rerun them before making publication-grade correctness claims.

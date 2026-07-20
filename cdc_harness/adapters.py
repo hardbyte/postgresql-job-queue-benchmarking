@@ -56,6 +56,9 @@ class ManagedProc:
     name: str
     proc: subprocess.Popen
     container: str | None = None
+    # Containers sampled as part of this process's topology but not stopped
+    # with it (for example persistent Kafka and Connect infrastructure).
+    resource_containers: tuple[str, ...] = ()
     # Extra teardown (e.g. delete a Kafka Connect connector so its slot is
     # released). Runs before the process/container is stopped.
     on_stop: Callable[[], None] | None = None
@@ -402,6 +405,22 @@ def _wait_connect_rest(timeout_s: float) -> None:
     raise SystemExit(f"Kafka Connect REST not ready at {CONNECT_URL}")
 
 
+def _kafka_container_names() -> tuple[str, ...]:
+    result = subprocess.run(
+        ["docker", "compose", "-f", KAFKA_COMPOSE, "ps", "--format", "json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return tuple(
+        record["Name"]
+        for line in result.stdout.splitlines()
+        if line.strip()
+        for record in [json.loads(line)]
+        if record.get("Service") in {"kafka", "connect"}
+    )
+
+
 def _launch_debezium_kafka(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedProc]:
     # Bring up (idempotent) the broker stack; it persists across cells like
     # Postgres does. `--wait` blocks on the compose healthchecks.
@@ -461,7 +480,12 @@ def _launch_debezium_kafka(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedP
         text=True, cwd=REPO_ROOT,
     )
     # Deleting the connector on teardown releases the replication slot.
-    return [ManagedProc(name="kafka-bridge", proc=proc, on_stop=_delete_connector)]
+    return [ManagedProc(
+        name="kafka-bridge",
+        proc=proc,
+        resource_containers=_kafka_container_names(),
+        on_stop=_delete_connector,
+    )]
 
 
 ADAPTERS: dict[str, CdcAdapter] = {

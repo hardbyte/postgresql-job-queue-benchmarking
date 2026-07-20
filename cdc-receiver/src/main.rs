@@ -66,16 +66,13 @@ struct ConsumerState {
     // Table-name interning: verifier keys are (table_idx, pk).
     table_ids: HashMap<String, u16>,
     keys: HashMap<(u16, i64), KeyState>,
-    // Transaction integrity (ledger mode): tx_id -> fresh events seen.
-    // A tx is "open" (torn) from its first fresh event until TX_EVENTS
-    // events have arrived.
     // tx_id -> distinct (table, pk) keys delivered for that tx. A tx is
     // complete once all `tx_events` of its rows have been seen — counting
     // distinct keys (not fresh events) tolerates at-least-once reordering,
     // where a row can arrive as a stale dup yet must still count toward its
     // transaction. A genuinely partial tx leaves keys missing at drain.
     open_txs: HashMap<i64, HashSet<(u16, i64)>>,
-    txs_completed: u64,
+    completed_tx_ids: HashSet<i64>,
     delivered: u64,
     delivered_bytes: u64,
     dups: u64,
@@ -85,6 +82,24 @@ struct ConsumerState {
     ring_pos: usize,
     prev_delivered: u64,
     prev_delivered_bytes: u64,
+}
+
+fn track_tx_group(
+    open_tx_groups: &mut HashMap<i64, HashSet<(u16, i64)>>,
+    completed_tx_ids: &mut HashSet<i64>,
+    tx_id: i64,
+    key: (u16, i64),
+    expected_rows: usize,
+) {
+    if completed_tx_ids.contains(&tx_id) {
+        return;
+    }
+    let seen = open_tx_groups.entry(tx_id).or_default();
+    seen.insert(key);
+    if seen.len() >= expected_rows {
+        open_tx_groups.remove(&tx_id);
+        completed_tx_ids.insert(tx_id);
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -345,21 +360,23 @@ async fn sink(
                 }
             }
         }
-        // Transaction integrity (ledger mode): a tx is complete once all of
+        // Transaction grouping (ledger mode): a tx is complete once all of
         // its distinct rows have been delivered. Counting distinct keys —
         // rather than fresh events — tolerates at-least-once reordering (a
         // row replayed out of order still counts toward its tx) while a
-        // genuinely partial delivery leaves the set short at drain. A true
-        // atomicity break also shows up in balance drift / lost events.
+        // genuinely partial delivery leaves the set short at drain. This
+        // checks eventual grouping by application tx_id, not atomic visibility.
         // tx_id 0 marks preload/snapshot rows — not a live transaction.
         if tx_events > 0 {
             if let Some(tx_id) = ev.tx_id.filter(|id| *id > 0) {
-                let seen = c.open_txs.entry(tx_id).or_default();
-                seen.insert(key);
-                if seen.len() >= tx_events as usize {
-                    c.open_txs.remove(&tx_id);
-                    c.txs_completed += 1;
-                }
+                let state = &mut *c;
+                track_tx_group(
+                    &mut state.open_txs,
+                    &mut state.completed_tx_ids,
+                    tx_id,
+                    key,
+                    tx_events as usize,
+                );
             }
         }
     }
@@ -412,13 +429,17 @@ async fn ledger(Path(cid): Path<usize>, State(app): State<Arc<App>>) -> impl Int
             json!({"seq": state.seq, "balance": state.balance, "deleted": state.deleted}),
         );
     }
+    let completed_tx_id_min = c.completed_tx_ids.iter().min();
+    let completed_tx_id_max = c.completed_tx_ids.iter().max();
     Json(json!({
         "profile": c.profile,
         "delivered": c.delivered,
         "dups": c.dups,
         "order_violations": c.order_violations,
         "open_txs": c.open_txs.len(),
-        "txs_completed": c.txs_completed,
+        "complete_tx_groups": c.completed_tx_ids.len(),
+        "completed_tx_id_min": completed_tx_id_min,
+        "completed_tx_id_max": completed_tx_id_max,
         "tables": tables,
     }))
     .into_response()
@@ -478,8 +499,12 @@ fn emit_samples(app: &App, dt: f64, window_s: f64) {
         push("dup_events_total", c.dups as f64, 0.0);
         push("order_violations_total", c.order_violations as f64, 0.0);
         if tx_tracking {
-            push("torn_tx_open", c.open_txs.len() as f64, 0.0);
-            push("txs_completed_total", c.txs_completed as f64, 0.0);
+            push("incomplete_tx_groups_current", c.open_txs.len() as f64, 0.0);
+            push(
+                "complete_tx_groups_total",
+                c.completed_tx_ids.len() as f64,
+                0.0,
+            );
         }
         c.prev_delivered = c.delivered;
         c.prev_delivered_bytes = c.delivered_bytes;
@@ -539,7 +564,7 @@ async fn main() {
                 table_ids: HashMap::new(),
                 keys: HashMap::new(),
                 open_txs: HashMap::new(),
-                txs_completed: 0,
+                completed_tx_ids: HashSet::new(),
                 delivered: 0,
                 delivered_bytes: 0,
                 dups: 0,
@@ -594,4 +619,37 @@ async fn main() {
         .unwrap();
     // Final flush so the last partial window isn't lost.
     emit_samples(&app, app.sample_every_s, app.sample_every_s * 6.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_transaction_group_is_not_reopened_or_double_counted() {
+        let mut open = HashMap::new();
+        let mut completed = HashSet::new();
+        for key in [(0, 10), (1, 20), (1, 30)] {
+            track_tx_group(&mut open, &mut completed, 7, key, 3);
+        }
+        assert!(open.is_empty());
+        assert_eq!(completed, HashSet::from([7]));
+
+        for key in [(0, 10), (1, 20), (1, 30)] {
+            track_tx_group(&mut open, &mut completed, 7, key, 3);
+        }
+        assert!(open.is_empty());
+        assert_eq!(completed, HashSet::from([7]));
+    }
+
+    #[test]
+    fn duplicate_key_does_not_complete_transaction_group() {
+        let mut open = HashMap::new();
+        let mut completed = HashSet::new();
+        for _ in 0..3 {
+            track_tx_group(&mut open, &mut completed, 7, (0, 10), 3);
+        }
+        assert_eq!(open.get(&7).map(HashSet::len), Some(1));
+        assert!(completed.is_empty());
+    }
 }

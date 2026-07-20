@@ -1,40 +1,27 @@
-# CDC sweep — topology comparison
+# CDC sweep - measured comparison
 
-Workload held constant: `4xfast`, rate 150/s. The moving variable is the capture/insulation topology.
+Workload: `ledger` mode, `4xfast`, target rate 150.0 operations/s.
 
 ## tx_integrity
 
-| system | verify | txs completed | torn txs | balance Δ | lost | missed del | reorder |
-|---|---|---|---|---|---|---|---|
-| `pgoutput-raw` | ✅ | 38993 | 0 | 0 | 0 | 0 | 0 |
-| `debezium-server` | ✅ | 38995 | 0 | 0 | 0 | 0 | 0 |
-| `supabase-etl` | ✅ | 38990 | 0 | 0 | 0 | 0 | 0 |
-| `sequin` | ✅ | 38994 | 0 | 0 | 0 | 0 | 17843 |
-| `sequin-grouped` | ✅ | 38991 | 0 | 0 | 0 | 0 | 17669 |
+| system | verify | final state converged | complete tx groups (min consumer) | incomplete groups at drain (worst) | balance mismatches (worst) | sequence deficit (worst) | reorder (worst) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `pgoutput-raw` | PASS (legacy) | - | 38993 | 0 | 0 | 0 | 0 |
+| `debezium-server` | PASS (legacy) | - | 38995 | 0 | 0 | 0 | 0 |
+| `supabase-etl` | PASS (legacy) | - | 38990 | 0 | 0 | 0 | 0 |
+| `sequin` | PASS (legacy) | - | 38994 | 0 | 0 | 0 | 17843 |
+| `sequin-grouped` | PASS (legacy) | - | 38991 | 0 | 0 | 0 | 17669 |
+| `debezium-kafka` | PASS | yes | 38989 | 0 | 0 | 0 | 0 |
 
+## Interpretation
 
-## What this cell tests
+The ledger cell checks final-state convergence, final balance agreement, and eventual receipt of three distinct `(table, pk)` rows for each application `tx_id`. It does not prove atomic visibility, transaction-boundary preservation, or receipt of every intermediate row version.
 
-`ledger` mode: every source transaction is INSERT transfer + UPDATE both
-accounts — exactly **3 replicated rows per tx**, and `SUM(balance)` is
-conserved. Scenario is dead-consumer-shaped (one sink dies for 90s, then
-heals). Verification is atomicity + conservation, not just delivery:
+A zero sequence deficit means every live key reached the source ledger's final sequence. Because the ledger stores only the maximum sequence per key, later delivery can mask a missing intermediate update.
 
-- **torn txs** — transactions where the consumer saw some but not all 3 rows.
-- **balance Δ** — accounts whose final balance disagrees with the source ledger.
-- **reorder** — events delivered out of per-key order (at-least-once, benign).
+## Method caveats
 
-## Result
-
-**Every topology holds cross-table transaction integrity through the outage** —
-zero torn transactions, exact balance conservation, zero loss. Sequin's buffer
-replays ~17.8k events out of order on recovery, but still delivers each
-transaction's three rows atomically, so the reorder-tolerant verifier confirms
-no integrity violation. `message_grouping` (sequin-grouped) does not reduce the
-recovery reordering (17669 ≈ 17843).
-
-The torn-tx tracker counts **distinct (table, pk) keys per transaction**, not
-fresh events — an earlier fresh-event count falsely flagged ~9940 "torn"
-transactions on the reordered consumer even though every row landed. Genuine
-partial delivery still fails via balance drift / lost events (the airtight
-invariants).
+- Directional single-run cells at scaled durations; no confidence intervals.
+- The clean latency statistic is the worst consumer's median rolling 30-second p99. The heal statistic is a peak rolling p99 and primarily represents backlog age.
+- Systems differ in capture runtime, batching, polling, and topology. The latency ordering is observational, not a causal estimate of insulation overhead.
+- Cells without `final_state_converged` in their stored summary predate the strengthened verifier. Their PASS verdict used the earlier one-sided final-ledger check; rerun them before making publication-grade correctness claims.

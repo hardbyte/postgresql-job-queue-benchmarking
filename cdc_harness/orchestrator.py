@@ -58,7 +58,9 @@ def receiver_binary(build: bool = True) -> Path:
     )
     target_dir = Path(json.loads(meta.stdout)["target_directory"])
     binary = target_dir / "release" / "cdc-receiver"
-    if not binary.exists() and build:
+    if build:
+        # Cargo's incremental no-op check is cheap and avoids silently running
+        # a stale receiver after its source changed between harness invocations.
         log("building cdc-receiver (cargo build --release)…")
         subprocess.run(
             ["cargo", "build", "--release"], cwd=RECEIVER_CRATE, check=True
@@ -479,7 +481,14 @@ class ResourceSampler(threading.Thread):
                  every_s: float = 10.0) -> None:
         super().__init__(name="resource-sampler", daemon=True)
         self.sink = sink
-        self.containers = [m.container for m in procs if m.container]
+        self.containers = list(dict.fromkeys(
+            container
+            for managed in procs
+            for container in (
+                *((managed.container,) if managed.container else ()),
+                *managed.resource_containers,
+            )
+        ))
         self.native = [(m.name, m.proc.pid) for m in procs if not m.container]
         self.every_s = every_s
         self.stop_event = threading.Event()
@@ -630,48 +639,101 @@ def apply_phase_exit(phase: Phase, control_url: str, consumer_count: int,
 
 
 def verify_consumer(source: dict, receiver: dict) -> dict:
-    """Compare the loadgen ledger against one consumer's delivered state.
+    """Compare final source state with one consumer's materialized state.
 
     Source ledger: tables -> pk -> [seq, balance|None, deleted].
     Receiver:      tables -> pk -> {seq, balance, deleted}.
+
+    This proves final-state convergence, delete-tombstone evidence, and
+    application transaction-group completeness. It cannot prove receipt of
+    every intermediate event because the source ledger retains only max seq.
     """
     got_tables = receiver.get("tables", {})
-    lost_events = 0
-    lost_keys = 0
-    missed_deletes = 0
+    sequence_deficit_at_drain = 0
+    final_state_mismatched_live_keys = 0
+    delete_tombstone_mismatches = 0
     balance_mismatches = 0
+    expected_keys: set[tuple[str, str]] = set()
     for table, entries in source["tables"].items():
         got = got_tables.get(table, {})
         for pk_str, (seq, balance, deleted) in entries.items():
+            expected_keys.add((table, pk_str))
             state = got.get(pk_str)
             if deleted:
                 if state is None or not state.get("deleted"):
-                    missed_deletes += 1
+                    delete_tombstone_mismatches += 1
                 continue
             if state is None or state.get("deleted"):
-                lost_keys += 1
-                lost_events += seq
+                final_state_mismatched_live_keys += 1
+                sequence_deficit_at_drain += seq
                 continue
-            if state["seq"] < seq:
-                lost_keys += 1
-                lost_events += seq - state["seq"]
-            elif balance is not None and state.get("balance") != balance:
-                # Same seq but wrong balance = corrupted/misordered apply.
+            got_seq = int(state["seq"])
+            if got_seq != seq:
+                final_state_mismatched_live_keys += 1
+                sequence_deficit_at_drain += max(seq - got_seq, 0)
+            if balance is not None and state.get("balance") != balance:
                 balance_mismatches += 1
-    torn_txs_open = int(receiver.get("open_txs", 0))
+
+    unexpected_keys = sum(
+        1
+        for table, entries in got_tables.items()
+        for pk_str in entries
+        if (table, pk_str) not in expected_keys
+    )
+    incomplete_tx_groups_at_drain = int(receiver.get("open_txs", 0))
+    complete_tx_groups_observed = int(
+        receiver.get("complete_tx_groups", receiver.get("txs_completed", 0))
+    )
+    expected_tx_groups = (
+        int(source["totals"]["txes"])
+        if source["totals"].get("events_per_tx")
+        else None
+    )
+    missing_complete_tx_groups = (
+        max(expected_tx_groups - complete_tx_groups_observed, 0)
+        if expected_tx_groups is not None
+        else 0
+    )
+    completed_tx_id_min = receiver.get("completed_tx_id_min")
+    completed_tx_id_max = receiver.get("completed_tx_id_max")
+    completed_tx_id_range_matches = (
+        expected_tx_groups is None
+        or (
+            completed_tx_id_min == 1
+            and completed_tx_id_max == expected_tx_groups
+            and complete_tx_groups_observed == expected_tx_groups
+        )
+    )
+    final_state_converged = (
+        final_state_mismatched_live_keys == 0
+        and delete_tombstone_mismatches == 0
+        and balance_mismatches == 0
+        and unexpected_keys == 0
+    )
     return {
         "profile": receiver.get("profile"),
         "delivered": receiver.get("delivered"),
         "dups": receiver.get("dups"),
         "order_violations": receiver.get("order_violations"),
-        "txs_completed": receiver.get("txs_completed"),
-        "torn_txs_open": torn_txs_open,
-        "lost_keys": lost_keys,
-        "lost_events": lost_events,
-        "missed_deletes": missed_deletes,
+        "complete_tx_groups_observed": complete_tx_groups_observed,
+        "expected_tx_groups": expected_tx_groups,
+        "missing_complete_tx_groups": missing_complete_tx_groups,
+        "completed_tx_id_min": completed_tx_id_min,
+        "completed_tx_id_max": completed_tx_id_max,
+        "completed_tx_id_range_matches": completed_tx_id_range_matches,
+        "incomplete_tx_groups_at_drain": incomplete_tx_groups_at_drain,
+        "final_state_mismatched_live_keys": final_state_mismatched_live_keys,
+        "sequence_deficit_at_drain": sequence_deficit_at_drain,
+        "delete_tombstone_mismatches": delete_tombstone_mismatches,
         "balance_mismatches": balance_mismatches,
-        "pass": (lost_keys == 0 and lost_events == 0 and missed_deletes == 0
-                 and balance_mismatches == 0 and torn_txs_open == 0),
+        "unexpected_keys": unexpected_keys,
+        "final_state_converged": final_state_converged,
+        "pass": (
+            final_state_converged
+            and incomplete_tx_groups_at_drain == 0
+            and missing_complete_tx_groups == 0
+            and completed_tx_id_range_matches
+        ),
     }
 
 
@@ -995,11 +1057,14 @@ def main(argv: list[str] | None = None) -> int:
         log(f"results in {out_dir}")
 
     for cid, res in verdict.get("consumers", {}).items():
-        tx_note = (f" torn_txs={res['torn_txs_open']}"
-                   if res.get("txs_completed") else "")
+        tx_note = (
+            f" incomplete_tx_groups={res['incomplete_tx_groups_at_drain']}"
+            if res.get("expected_tx_groups") is not None
+            else ""
+        )
         log(f"consumer {cid} [{res['profile']}]: delivered={res['delivered']} "
             f"dups={res['dups']} order_violations={res['order_violations']} "
-            f"lost_events={res['lost_events']} "
+            f"sequence_deficit={res['sequence_deficit_at_drain']} "
             f"balance_mismatches={res['balance_mismatches']}{tx_note} -> "
             f"{'PASS' if res['pass'] else 'FAIL'}")
     log(f"verification: {'PASS' if verdict.get('pass') else 'FAIL'}")

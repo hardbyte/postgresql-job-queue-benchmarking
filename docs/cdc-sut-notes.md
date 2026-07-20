@@ -14,7 +14,7 @@ Operational facts gathered 2026-07-17 for the three external systems, so the nex
 ## Sequin (implemented + smoke-verified: `--system sequin`)
 
 - Image pinned to `sequin/sequin:v0.14.6` (same digest as `latest` at pin time, 2026-07). Port 7376 (UI/API; readiness = HTTP on it). **Requires Redis** (per-sink cursors live there) + its own config Postgres DB (`PG_HOSTNAME/PG_PORT/PG_DATABASE/PG_USERNAME/PG_PASSWORD`), plus `SECRET_KEY_BASE` (64B b64) and `VAULT_KEY` (32B b64).
-- Declarative config via `CONFIG_FILE_YAML` (base64 inline — no volume needed): `databases:` (with `slot: {name, create_if_not_exists: true}`, `publication: {…}`), `http_endpoints:` (one per consumer → `http://127.0.0.1:18080/sink/<i>`), `sinks:` (one per consumer, same `include_tables`, `destination: {type: webhook, http_endpoint: …}`, `batch: true`, `batch_size`, `message_grouping: true` = per-PK ordering, `initial_backfill: false`).
+- Declarative config via `CONFIG_FILE_YAML` (base64 inline): `databases:`, one `http_endpoint` and sink per consumer, and `batch_size`. The grouped arm enables `message_grouping`; it is intended to provide per-PK grouping, but measured recovery reordering remained in v0.14.6.
 - **One slot total** regardless of sink count (topology "buffer") — adapter needs a `slots_fn` override instead of `slot_prefix + i`; fan-out cursors are per-sink in Redis.
 - Webhook payload: single `{record, changes, action, metadata}` or batched `{"data": [...]}`; `action` ∈ insert/update/delete/read (read = backfill). Ack = 2xx; retries indefinitely with exp backoff capped ~3 min (good: consumer-dead chaos won't kill it). Receiver's `decode_sequin` already handles both shapes.
 - Sequin's config-DB state tables should join the metrics poll set (design: its buffer growth is the backlog-location metric).
@@ -32,11 +32,11 @@ Operational facts gathered 2026-07-17 for the three external systems, so the nex
 - The broker arm: `docker-compose.kafka.yml` runs single-node Kafka (KRaft, `apache/kafka:3.9.0`) + Debezium Kafka Connect (`quay.io/debezium/connect:3.1.3.Final`), host-networked, brought up by the adapter (persists across cells like Postgres). One Debezium PostgresConnector (single slot `dbz_kafka`, one topic per table `<prefix>.<schema>.<table>`) registered via the Connect REST API.
 - Fan-out is at the **consumer layer**: `kafka-bridge-bench/main.py` (kafka-python) runs one consumer group per harness consumer, each reads the table topics and POSTs the Debezium envelopes to the receiver (`--envelope debezium`, same decoder as debezium-server). Blocking retry with no offset commit until acked → a dead consumer's backlog is **Kafka offset lag**, not source WAL.
 - GOTCHA: kafka-python pattern subscription only discovers topics created *after* subscribe if metadata refreshes — set `metadata_max_age_ms=5000` or the bridge sees nothing (Debezium creates the topic on the first row). Also run-scope topic prefix + consumer groups per run (a token) so a rerun can't replay old topic data / resume old offsets. kafka-python 3.0.8 admin API: `list_group_offsets(group)` returns `{group: {TopicPartition: OffsetAndMetadata}}` (not `list_consumer_group_offsets`).
-- FINDING (full decoupling): under a dead consumer the source slot stays **flat (~5.7 MB)** while the dead consumer's offset lag grows (~12.8k events at smoke scale); healthy consumers unaffected. This is the clean control vs Sequin's shared-but-coupled slot (51 MB retained for all). CAVEAT: reported RSS is the bridge only — Kafka+Connect (~1-2 GB) is unattributed shared infra.
+- FINDING (measured decoupling): in the rerun, source slot peak moved from 2.8 MB clean to 4.1 MB during a dead consumer while offset lag reached 13,365 records; healthy consumers continued. Total sampled RSS across Kafka, Connect, and bridge was about 1.82 GB. This is bounded source retention in this cell, not zero WAL usage.
 
 ## Harness status (updated 2026-07-20, session 4)
 
-- Broker arm `debezium-kafka` added — see its section above. All six arms now pass smoke.
+- Broker arm `debezium-kafka` added. All six arms have been smoke-verified manually; automated smoke pytest covers `pgoutput-raw`.
 
 ## Harness status (updated 2026-07-17, second session)
 
@@ -56,10 +56,9 @@ Operational facts gathered 2026-07-17 for the three external systems, so the nex
 - **Resource sampler**: cpu_pct/rss_bytes per SUT process (docker stats / /proc), `subject_kind=container`.
 - **`slot-invalidation(keep=N)` phase + scenario**: ALTER SYSTEM cap + all consumers dead; verify-failure is the expected outcome when invalidation hits; machinery validated at smoke scale.
 
-## Not yet implemented (next sessions)
+## Remaining gaps
 
-- Debezium + Kafka Connect arm (broker topology) + receiver Kafka consumer mode; `broker-down` phase. Until then Debezium is measured only in its no-broker Server shape.
 - `pgoutput-awa` relay (queue-PG service, awa enqueue/worker glue).
-- Sequin coverage gaps: ledger/outbox/snapshot modes untested on Sequin (its YAML rejected `initial_backfill` alongside `batch` — needs a Management-API-triggered backfill for the snapshot cell); Debezium untested on ledger mode (expect fine, but `--profiles Nxfast` still required).
-- Full-scale scenario sweep (the smoke-scale cells all pass; the 1M-row big-tx spill, real slot invalidation, and multi-hour fanout runs haven't been executed).
-- TOAST / REPLICA IDENTITY FULL fidelity cells; insulation-matrix plots (`plots.py` renders generic metrics but no dedicated per-topology chart yet).
+- Outbox and snapshot coverage across all arms. Sequin needs a Management-API-triggered backfill because its YAML rejected `initial_backfill`.
+- `broker-down`, full-scale 1M-row big transaction, real slot invalidation, and multi-hour fan-out runs.
+- TOAST / `REPLICA IDENTITY FULL` fidelity cells.

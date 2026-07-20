@@ -1,6 +1,6 @@
 # CDC benchmarking harness — design
 
-Status: draft for review — not yet implemented.
+Status: original design proposal. The implementation has diverged in places; use `docs/cdc-handover.md` and the code for current behaviour.
 
 A sibling harness to the job-queue bench for comparing **PostgreSQL change-data-capture pipelines** under realistic, long-horizon workloads.
 
@@ -70,8 +70,8 @@ bench_harness/ (extended)
 
 cdc_harness/ (new)
   loadgen.py          # shared source-write workload (owns pacing + source ledger)
-  receiver/           # Rust binary: N consumer endpoints (HTTP server + Kafka
-                      #   consumer groups), verifier, JSONL metrics, chaos control API
+cdc-receiver/         # Rust binary: N HTTP consumer endpoints, verifier,
+                      # JSONL metrics, chaos control API
   envelopes.py        # per-system envelope → canonical event decoders + golden tests
 ```
 
@@ -82,7 +82,7 @@ Per-run process topology:
 - **Queue Postgres** — second pinned Postgres container, started only for the `pgoutput-awa` topology (via `requires_services`), sampled like the broker (backlog-location metric).
 - **Loadgen** — harness process writing the source schema; rate-credit paced on real elapsed time; keeps the source-side ledger.
 - **SUT** — launched via `replica_pool` like a queue adapter, SIGKILL-able. For slot-per-consumer systems, each pipeline is a pool instance, so existing `kill-worker(instance=N)` chaos addresses individual pipelines.
-- **Receiver** — one Rust process hosting **N logical consumers** (`consumer_id` 0..N-1). Each is either an HTTP endpoint (`/sink/<system>/<consumer_id>`) or a Kafka consumer-group reader, selected by the manifest. The consumer set is **heterogeneous by default** — real fleets aren't uniform: `--consumer-profiles 2xfast,4xnormal,2xslow` (fast = 0 ms added handling time, normal = 25 ms, slow = 250 ms; recorded in `manifest.json`). Per-consumer verifier state and per-consumer chaos controls (dead / erroring / extra latency / stop-polling for Kafka) via a control API the hooks call — no toxiproxy, consistent with the existing harness's no-external-chaos-tooling approach.
+- **Receiver** — one Rust process hosting **N logical HTTP consumers** (`consumer_id` 0..N-1). Kafka fan-out is implemented by `kafka-bridge-bench`, with one consumer group per logical consumer posting batches to these endpoints. The current CLI option is `--profiles` (default `1xfast,2xnormal,1xslow`).
 
 ## 4. Canonical event envelope
 
@@ -199,16 +199,16 @@ Plus fan-out aggregates: `healthy_consumer_lag_p99` — lag across consumers *ex
 
 ### Resource sampler (new, per 10 s)
 
-`docker stats`–based CPU/RSS per SUT container **including Kafka and the queue PG** (`subject_kind=container`). The JVM+broker vs BEAM vs Rust footprint is a headline result; insulation layers get priced, not hidden.
+`docker stats`–based CPU/RSS per SUT container (`subject_kind=container`) plus `/proc` sampling for native processes. Current Kafka runs include Kafka, Connect, and the bridge; report tables sum per-component phase peaks and label that statistic explicitly.
 
 ## 8. Correctness verification
 
 Delivery-semantics claims (each system's exact promise recorded in the feature table) are verified per consumer, with bounded memory (per-key last-seq arrays; ~16 MB per consumer at 1 M keys):
 
-- **Loss** — at final drain, every key's max delivered `seq` equals the source ledger's, per consumer. Non-zero loss is a headline finding.
+- **Final-state convergence** — at final drain, every live key's max delivered `seq` and balance equal the source ledger, expected deletions retain tombstone evidence, and no unexpected keys remain. This cannot prove receipt of every intermediate row version because the source ledger retains only each key's maximum sequence.
 - **Duplicates** — counted online, attributed to phase (crash-resume duplicate-burst size is a comparison point, not just pass/fail).
 - **Ordering** — per-key `seq` non-decreasing per consumer; hot-key-skew scenarios stress this under each system's parallelism.
-- **Transaction integrity (ledger mode)** — the receiver applies events to a local materialized copy per consumer and tracks `tx_id` completeness: a source transaction's three writes should be deliverable as an atomic unit. Reported as (a) `tx_boundary_support` — does the system expose transaction markers/metadata at all (Debezium: transaction metadata topic; Sequin/ETL/awa relay: recorded as measured); (b) `torn_tx_windows` — samples where a transaction was partially applied and the balance-sum invariant was violated, and for how long.
+- **Transaction-group completeness (ledger mode)** — the receiver tracks distinct `(table, pk)` rows by application `tx_id` and requires all three rows to arrive by drain. This measures eventual group completeness, not transaction-boundary preservation or atomic visibility.
 - **Cross-table snapshot consistency (ledger mode)** — preload the ledger, start capture with `SNAPSHOT_MODE=initial` **while writes continue**, let the stream catch up, then verify the materialized copy: (a) exact match with the source at drain (snapshot↔stream handoff loses/duplicates nothing); (b) whether the snapshot itself was one consistent cut across tables (single-tx snapshot à la Debezium) or per-table cuts reconciled only eventually (typical per-table backfill) — measured as invariant violations during the catch-up window, not assumed from docs.
 - **Fidelity cells** — TOAST columns on updates (unchanged-toast placeholder behaviour), `REPLICA IDENTITY FULL` vs `DEFAULT`, delete tombstones, DDL mid-stream (new column appears, or pipeline errors loudly — either is a result; silent wrongness is the bug).
 

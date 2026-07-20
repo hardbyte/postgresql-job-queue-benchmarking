@@ -58,7 +58,12 @@ def test_verification_passes(smoke_run: Path) -> None:
     assert verdict["pass"], f"ledger verification failed: {verdict}"
     assert verdict["source_totals"]["ops"] > 0
     for cid, res in verdict["consumers"].items():
-        assert res["lost_events"] == 0, f"consumer {cid} lost events: {res}"
+        assert res["final_state_converged"], (
+            f"consumer {cid} final state did not converge: {res}"
+        )
+        assert res["sequence_deficit_at_drain"] == 0
+        assert res["delete_tombstone_mismatches"] == 0
+        assert res["unexpected_keys"] == 0
         assert res["order_violations"] == 0, f"consumer {cid} reordered: {res}"
 
 

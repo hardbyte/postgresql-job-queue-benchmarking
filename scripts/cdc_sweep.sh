@@ -72,8 +72,8 @@ cleanup_orphans() {
 run_cell() {
   local scenario="$1" system="$2"
   local cell_id="${scenario}__${system}"
-  if awk -F '\t' -v s="$scenario" -v y="$system" \
-       '$1==s && $2==y {found=1; exit} END{exit !found}' "$RUN_INDEX" 2>/dev/null; then
+  if [[ "${RERUN:-0}" != "1" ]] && awk -F '\t' -v s="$scenario" -v y="$system" \
+       '$1==s && $2==y && $5==0 {found=1; exit} END{exit !found}' "$RUN_INDEX" 2>/dev/null; then
     log "SKIP ${cell_id} (already in run_index)"
     return 0
   fi
@@ -97,7 +97,13 @@ run_cell() {
   local rc=$?
   local ended; ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   cleanup_orphans
-  local run_dir; run_dir=$(grep -oE '/[^[:space:]]*/results/[^[:space:]]*/cdc-[0-9TZ]+-[a-f0-9]+' "$logfile" | tail -1 || echo "")
+  local run_dir
+  run_dir=$(while IFS= read -r line; do
+    case "$line" in
+      "[cdc] results in "*) printf '%s\n' "${line#"[cdc] results in "}" ;;
+    esac
+  done < "$logfile")
+  run_dir="${run_dir##*/}"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$scenario" "$system" "$cell_id" "$run_dir" "$rc" "$started" "$ended" >> "$RUN_INDEX"
   log "END   ${cell_id} rc=${rc} dir=${run_dir##*/}"
