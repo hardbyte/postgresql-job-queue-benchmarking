@@ -13,7 +13,7 @@
 //! normal 25 ms, slow 250 ms. Chaos modes (dead / slow) layer on top via
 //! /control and are what the consumer-dead / consumer-slow phase hooks call.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -69,7 +69,12 @@ struct ConsumerState {
     // Transaction integrity (ledger mode): tx_id -> fresh events seen.
     // A tx is "open" (torn) from its first fresh event until TX_EVENTS
     // events have arrived.
-    open_txs: HashMap<i64, u32>,
+    // tx_id -> distinct (table, pk) keys delivered for that tx. A tx is
+    // complete once all `tx_events` of its rows have been seen — counting
+    // distinct keys (not fresh events) tolerates at-least-once reordering,
+    // where a row can arrive as a stale dup yet must still count toward its
+    // transaction. A genuinely partial tx leaves keys missing at drain.
+    open_txs: HashMap<i64, HashSet<(u16, i64)>>,
     txs_completed: u64,
     delivered: u64,
     delivered_bytes: u64,
@@ -306,7 +311,6 @@ async fn sink(
             }
         };
         let key = (tid, ev.pk);
-        let mut fresh = false;
         match ev.op.as_str() {
             "delete" => {
                 c.keys.entry(key).or_default().deleted = true;
@@ -335,21 +339,24 @@ async fn sink(
                         if ev.balance.is_some() {
                             state.balance = ev.balance;
                         }
-                        fresh = true;
                     }
                     c.dups += dup as u64;
                     c.order_violations += violation as u64;
                 }
             }
         }
-        // Transaction integrity (ledger mode): only fresh events count, so
-        // at-least-once redelivery can't overshoot a tx's expected size.
+        // Transaction integrity (ledger mode): a tx is complete once all of
+        // its distinct rows have been delivered. Counting distinct keys —
+        // rather than fresh events — tolerates at-least-once reordering (a
+        // row replayed out of order still counts toward its tx) while a
+        // genuinely partial delivery leaves the set short at drain. A true
+        // atomicity break also shows up in balance drift / lost events.
         // tx_id 0 marks preload/snapshot rows — not a live transaction.
-        if tx_events > 0 && fresh {
+        if tx_events > 0 {
             if let Some(tx_id) = ev.tx_id.filter(|id| *id > 0) {
-                let count = c.open_txs.entry(tx_id).or_insert(0);
-                *count += 1;
-                if *count >= tx_events {
+                let seen = c.open_txs.entry(tx_id).or_default();
+                seen.insert(key);
+                if seen.len() >= tx_events as usize {
                     c.open_txs.remove(&tx_id);
                     c.txs_completed += 1;
                 }
