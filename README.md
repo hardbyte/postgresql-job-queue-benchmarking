@@ -1,56 +1,52 @@
 # postgresql-job-queue-benchmarking
 
-A benchmarking harness for comparing PostgreSQL-backed job queue systems
-under realistic, long-horizon workloads.
+Benchmarking harnesses for two families of PostgreSQL-backed infrastructure:
 
-The goal is a **fair, reproducible, public-API-only** comparison of how
-different queue libraries behave when you push them past warm-up — focusing
-on the things that show up in production: latency tail, throughput stability,
-table bloat, and recovery from chaos.
+- **[Job queues](#the-job-queue-bench)** — eight Postgres-backed queue systems compared on throughput, latency tail, bloat, and chaos recovery.
+- **[Change data capture](#the-cdc-bench)** — six CDC pipeline topologies (Debezium, Sequin, Supabase ETL, raw pgoutput, Kafka) compared on fan-out latency, WAL insulation from bad consumers, and recovery behaviour.
 
-## What the latest run found
+Both share the same philosophy: **fair, reproducible, public-API-only**. Each system is integrated the way a real consumer would use it, pinned to specific versions, run against the same pinned Postgres, and pushed past warm-up into the long-horizon territory where production failure modes actually appear — latency drift, table bloat, WAL retention, duplicate storms, recovery from chaos.
 
-Eight Postgres-backed queues, same hardware, same harness. Three
-contracts in the lineup — event bus, job queue, visibility-timeout
-queue — so the throughput list isn't a single ranking. The
-[2026-05-09 sweep](results/2026-05-09-full-sweep/SUMMARY.md) has the
-per-cell numbers, chaos behaviour, and bloat resistance.
+**Author bias:** this repo is owned by the author of [awa](https://github.com/hardbyte/awa), one of the job-queue systems benchmarked. Numbers are reproducible — re-run on your hardware and check.
+
+---
+
+## The job-queue bench
+
+A closed-loop harness: producers enqueue at a controlled rate, workers claim and complete, the harness measures the loop under steady state, sustained pressure, and chaos.
+
+### What the latest run found
+
+Eight Postgres-backed queues, same hardware, same harness. Three contracts in the lineup — event bus, job queue, visibility-timeout queue — so the throughput list isn't a single ranking. The [2026-05-09 sweep](results/2026-05-09-full-sweep/SUMMARY.md) has the per-cell numbers, chaos behaviour, and bloat resistance.
 
 ![Peak throughput by queue contract](results/2026-05-09-full-sweep/plots/headline_throughput.png)
 
 ![Tail latency at each system's peak throughput](results/2026-05-09-full-sweep/plots/latency_at_peak.png)
 
-Headline comparisons from that run:
+| System | Contract | Peak (jobs/s) | Chaos recovery | Pressure cells | Notable caveat |
+|---|---|---:|---:|---:|---|
+| **pgque** *(single-consumer mode)* | event bus | **39,898** | 5/5 | 4/4 | Batched success ack is a different contract (see below). |
+| **awa** | job queue | **14,158** | 5/5 | 4/4 | Full job-queue feature surface; fastest job queue in this run. |
+| pgmq | visibility-timeout | 11,277 | 3/5 | 2/4 | Anti-scales past 16 workers; active-readers cliff ([audit](results/2026-05-09-full-sweep/audit_pgmq.md)). |
+| pg-boss | job queue | 2,387 | 3/5 | 2/4 | Postgres-level chaos exits the worker; times out in two pressure cells. |
+| river | job queue | 501 | 5/5 | 2/4 | Times out in two sustained-pressure cells. |
+| absurd | job queue | 410 | 3/5 | 2/4 | Shutdown timeout under pressure. |
+| oban | job queue | 284 | 4/5 | 4/4 | Handles pressure cells; lower throughput in this run. |
+| procrastinate | job queue | 269 | 3/5 | 2/4 | Weak repeated-kill recovery; times out in two pressure cells. |
 
-- **Peak clean throughput:** pgque 39.9 k jobs/s in single-consumer
-  event-bus mode; awa 14.2 k as the fastest full job queue; pgmq
-  11.3 k as a visibility-timeout queue before anti-scaling at higher
-  worker counts.
-- **Chaos recovery:** awa, pgque, and river recover from every
-  scenario. The other five adapters either hit zero or fail to
-  produce recovery samples in at least one chaos cell.
-- **Bloat / pressure:** five adapters time out under at least one
-  sustained-pressure cell; only awa, oban, and pgque complete all
-  four pressure scenarios.
+Three systems (awa, pgque, river) recover from every chaos scenario; the other five hit zero or produce no recovery samples in at least one cell. Only awa, oban, and pgque complete all four sustained-pressure scenarios.
 
-| System | Contract | Chaos recovery | Pressure cells | Notable caveat |
-|---|---|---:|---:|---|
-| awa | job queue | 5/5 | 4/4 | Full job-queue feature surface; fastest job queue in this run. |
-| pgque | event/message bus | 5/5 | 4/4 | Single-consumer mode; batched success ack is a different contract. |
-| river | job queue | 5/5 | 2/4 | Times out in two sustained-pressure cells. |
-| oban | job queue | 4/5 | 4/4 | Handles pressure cells but has lower throughput in this run. |
-| pg-boss | job queue | 3/5 | 2/4 | Postgres-level chaos exits the worker; times out in two pressure cells. |
-| absurd | job queue | 3/5 | 2/4 | Shutdown timeout under pressure. |
-| procrastinate | job queue | 3/5 | 2/4 | Weak repeated-kill recovery; times out in two pressure cells. |
-| pgmq | visibility-timeout queue | 3/5 | 2/4 | Anti-scales past 16 workers and has the active-readers cliff. |
+### The three contracts
 
-## Feature comparison
+**Job queues** — send a job, a worker runs it, the queue tracks retries and dead-lettering: awa, pg-boss, river, oban, absurd, procrastinate.
 
-Throughput is one shape of the question. The other shape is **what
-each system actually gives you**. This table captures the documented
-feature surface — things you'd reach for in real applications. Cells
-reflect what's available out of the box on the default open-source
-distribution.
+**Visibility-timeout queue** — pgmq. Send / read with timeout / ack-or-redeliver. No per-job retry counter, no scheduling, no DLQ beyond an archive table.
+
+**Event/message bus** — pgque (PgQ lineage). Append-only event log, ticker forms batch boundaries, multiple consumer groups each track a cursor over the shared log. This bench drives it in single-consumer competing-consumers mode: `receive` returns a batch and `ack(batch_id)` finishes the batch in one row update; failure handling stays per-message via `nack`. Cheap idempotent events are comfortable with that; long-running side-effecting jobs prefer the per-job ack the six job queues give you.
+
+### Feature comparison
+
+Throughput is one shape of the question; the other is what each system actually gives you out of the box. Cells reflect the documented feature surface of the default open-source distribution.
 
 | | awa | Absurd | pg-boss | pgmq | pgque | Oban | Procrastinate | River |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -88,126 +84,9 @@ distribution.
 [^oban-web]: Oban Web is part of Oban Pro.
 [^procrastinate-third-party-ui]: Procrastinate has community/third-party admin surfaces rather than a bundled official UI.
 
-Dashes indicate "not provided as a documented feature out of the box",
-not "impossible". pgmq / pgque in particular are intentionally minimal
-— you build the worker, you choose the lifecycle. If you spot something
-wrong, please open a PR — corrections welcome from the maintainers of
-any of the systems listed.
+Dashes indicate "not provided as a documented feature out of the box", not "impossible" — pgmq and pgque are intentionally minimal. Corrections welcome from the maintainers of any system listed.
 
-## What's in the lineup
-
-Each system maps onto one of three application contracts.
-
-**Job queues** — send a job, a worker runs it, the queue tracks
-retries and dead-lettering: awa, pg-boss, river, oban, absurd,
-procrastinate.
-
-**Visibility-timeout queue** — pgmq. Send / read with timeout /
-ack-or-redeliver. No per-job retry counter, no scheduling, no DLQ
-beyond an archive table.
-
-**Event/message bus** — pgque (PgQ lineage). Append-only event log,
-ticker forms batch boundaries, multiple consumer groups each track
-a cursor over the shared log
-([upstream](https://github.com/NikolayS/pgque#what-genuinely-differentiates-pgque)
-calls it Kafka-shaped). pgque also runs as a single-consumer
-competing-consumers queue, which is how this bench drives it: one
-consumer per replica, `--worker-count` controls in-flight handler
-concurrency within that consumer.
-
-| System | Contract | Peak (jobs/s) | At |
-|---|---|---:|---|
-| **pgque** *(single-consumer mode)* | event bus | **39,898** | 1×256 w |
-| **awa** | job queue | **14,158** | 1×256 w |
-| pgmq | visibility-timeout | 11,277 | 1×16 w |
-| pg-boss | job queue | 2,387 | 1×64 w |
-| river | job queue | 501 | 1×64 w |
-| absurd | job queue | 410 | 1×128 w |
-| oban | job queue | 284 | 1×64 w |
-| procrastinate | job queue | 269 | flat |
-
-pgque's number is its single-consumer mode; native fan-out across
-multiple consumer groups isn't exercised here. pgmq peaks at 1×16 w
-and anti-scales to 3.2 k at 1×256 w
-([audit](results/2026-05-09-full-sweep/audit_pgmq.md)).
-
-### What pgque trades for the throughput
-
-In the bench's single-consumer mode, pgque competes with the job
-queues. Two ways it differs from awa and the other five:
-
-- **Feature surface.** Default install ships retries with backoff,
-  per-message nack, DLQ. No priorities, no aging, no dedup, no rate
-  limiting, no web UI. Delayed delivery (`send_at`) is in
-  `sql/experimental/`.
-- **Ack granularity.** `receive` returns a batch and `ack(batch_id)`
-  finishes the batch in one row update. Failure handling is still
-  per-message via `nack(batch_id, msg_id, retry_after, reason)`. A
-  consumer that crashes mid-batch without acking redoes the whole
-  batch on the next claim.
-
-Whether that fits your workload is workload-specific. Analytics
-events that are cheap and idempotent are comfortable with batched
-ack. Long-running side-effecting jobs prefer the per-job ack the six
-job queues give you.
-
-Earlier reference runs:
-[2026-05-08 awa vs pgque v2 deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md) ·
-[2026-05-02 alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md) ·
-[awa under a 10-minute held writing transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md) ·
-[awa extended scaling (W=256/512/1024)](results/2026-05-01-awa-extended-scaling/SUMMARY.md).
-
-**Author bias:** this repo is owned by the author of
-[awa](https://github.com/hardbyte/awa), one of the systems benchmarked.
-Numbers are reproducible — re-run on your hardware and check.
-
-## Chaos / correctness
-
-Chaos scenarios run inside the same `bench.py` harness, as named
-compositions of phase types. Steady-state metrics, wait-event
-histograms, and per-phase aggregates carry over; the harness also
-emits `jobs_lost` and `chaos_recovery_time_s` into the recovery
-phase's `summary.json`.
-
-The headline picture across all eight adapters is in the
-[2026-05-09 sweep — Phase B](results/2026-05-09-full-sweep/SUMMARY.md#chaos-suite--phase-b)
-(40 cells, 5 scenarios × 8 systems). Three systems recover from every
-chaos scenario; the other five hit zero on at least one. The
-per-adapter audits in the same run name the root causes.
-
-The available chaos scenarios are documented in
-[`docs/method.md`](docs/method.md). The cross-system chaos tracker is
-[#12](https://github.com/hardbyte/postgresql-job-queue-benchmarking/issues/12).
-
-## Adapters
-
-- [awa](https://github.com/hardbyte/awa) (Rust + Python) — 2026-05-09 sweep on `v0.6.0-alpha.9`.
-- [Absurd](https://github.com/earendil-works/absurd) (Python)
-- [Oban](https://github.com/oban-bg/oban) (Elixir)
-- [pg-boss](https://github.com/timgit/pg-boss) (Node.js)
-- [pgmq](https://github.com/tembo-io/pgmq) (Postgres extension; Python adapter; needs an extension-bearing image, run separately from the shared-image matrix)
-- [PgQue](https://github.com/pgq/pgque) (plain SQL — no extension required; Python adapter; `pg_cron` optional, the harness runs the ticker + maint loops in-process instead)
-- [Procrastinate](https://github.com/procrastinate-org/procrastinate) (Python)
-- [River](https://github.com/riverqueue/river) (Go)
-
-## Design principles
-
-- **Public APIs only.** Each adapter integrates the system the way a real
-  consumer would. No reaching into internal modules, no privileged SQL.
-- **Subprocess contract.** Adapters are language-agnostic processes that
-  emit one JSON sample per line on stdout. Adding a new system means
-  writing one binary that respects the contract — see
-  [CONTRIBUTING_ADAPTERS.md](./CONTRIBUTING_ADAPTERS.md).
-- **One Postgres for everyone.** All systems run against the same
-  `postgres:18.3-alpine` instance with the same `postgres.conf` — no
-  per-system tuning advantage. (pgmq is the exception; it requires the
-  Postgres extension and runs on a separate `pg18-pgmq` image.) The
-  compose default caps Postgres at 4 CPUs for repeatable laptop and CI
-  runs; set `POSTGRES_CPUS=N` when measuring a larger machine envelope.
-- **Long-horizon.** Bloat and latency drift only show up after the first
-  few minutes. Default scenarios run 30+ minutes.
-
-## Quick start
+### Quick start (job queues)
 
 ```sh
 # Init the pgque submodule (vendored at a pinned upstream SHA)
@@ -224,38 +103,111 @@ uv run bench run \
   --replicas 1 \
   --phase warmup=warmup:30s \
   --phase clean=clean:5m
-```
 
-Outputs land under `results/<run-id>/<system>/` as `manifest.json` +
-`summary.json` + per-sample `samples.ndjson`. To compare runs:
-
-```sh
+# Compare runs
 uv run bench compare results/<run-id>
 ```
 
-## Method reference
+Scenarios, phase types, chaos definitions, and Postgres-side diagnostics are in [`docs/method.md`](docs/method.md). Earlier reference runs: [awa vs pgque deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md) · [alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md) · [awa under a 10-minute held transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md) · [awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md).
 
-Scenarios, phase types, and Postgres-side diagnostics (wait events,
-notification queue usage, active transactions) are documented in
-[`docs/method.md`](docs/method.md).
+---
+
+## The CDC bench
+
+An open-pipeline harness: a load generator writes a verifiable change stream into Postgres, a CDC system captures it from the logical WAL, and a harness-owned receiver terminates every consumer's delivery — timestamping arrivals, injecting chaos (dead/slow consumers, sink outages), and verifying the stream against a source-side ledger.
+
+The model under test is **fan-out**: one source database, one change stream, many downstream consumers — some slow, dead, or misbehaving. The core question is *what a bad consumer costs the source database*, and what each architecture's insulation layer buys and costs:
+
+```
+loadgen ──SQL──▶ Postgres ──WAL──▶ capture ──▶ [insulation layer] ──▶ consumer 1..N
+(harness)        (shared)          (SUT)        (SUT: Kafka /          (harness
+                                                 internal buffer /      receiver ×N)
+                                                 nothing)
+```
+
+### The six arms
+
+| `--system` | Topology | Slots for N consumers | What it is |
+|---|---|---:|---|
+| `pgoutput-raw` | slot-per-consumer | N | in-repo SQL-polling pgoutput baseline, no insulation |
+| `debezium-server` | slot-per-consumer | N | one Debezium Server (JVM) per consumer, batched HTTP sink |
+| `supabase-etl` | slot-per-consumer | N | in-repo Rust binary embedding the [supabase/etl](https://github.com/supabase/etl) crate |
+| `sequin` | shared slot + buffer | 1 | [Sequin](https://github.com/sequinstream/sequin) + Redis; per-sink cursors over its own buffer |
+| `sequin-grouped` | shared slot + buffer | 1 | Sequin with `message_grouping` (documented per-PK ordering) |
+| `debezium-kafka` | broker | 1 | Debezium Kafka Connect → Kafka; fan-out at the consumer-group layer |
+
+### What the sweeps found
+
+Full write-ups: [full-scale events sweep](results/cdc-sweep-long/SUMMARY.md) (15-minute outage) · [heterogeneous-profile sweep](results/cdc-sweep-hetero/SUMMARY.md) (mixed consumer speeds) · [ledger consistency sweep](results/cdc-sweep-ledger/REPORT.md).
+
+**Correctness:** every sweep cell passes ledger verification — zero lost events on every consumer of every system, through 15-minute consumer outages, for all six arms. Cross-table transaction integrity and balance conservation hold everywhere. The one behavioural difference: Sequin replays a recovered consumer's backlog out of per-key order (tens of thousands of reordered redeliveries; `message_grouping` didn't change it in v0.14.6) — at-least-once with reordering, where every other arm recovers with zero duplicates and zero reordering.
+
+**Where a dead consumer's backlog lives** (15-minute outage at 200 events/s):
+
+| Topology | Source slot WAL | Backlog elsewhere |
+|---|---:|---|
+| slot-per-consumer | ~57 MB, all pinned by the dead consumer's own slot | — |
+| shared slot + buffer (Sequin) | **642–680 MB** on the one slot every sink shares | its own state store |
+| broker (Kafka) | **flat ~11 MB** | 179k records of consumer-group offset lag |
+
+**Replay asymmetry:** after the consumer heals, slot- and broker-based arms drain the 15-minute backlog in **seconds** (18–36k events/s replay); Sequin's buffer takes **~9 minutes**, and the grouped variant longer still. Recovery-time-to-parity is currently the sharpest differentiator in the lineup.
+
+**Latency insulation is the mirror image of WAL insulation.** With a mixed fleet (fast/normal/slow consumers), the slot-per-consumer and broker arms give each consumer the latency of its own speed — the slow consumer queues behind its own handling, the fast consumer is untouched. Sequin's buffer absorbs the slow sink entirely (a flat 33 ms p99 for every profile): the best steady-state mixed-fleet latency, from the same buffering that couples WAL retention to the slowest sink and replays slowly after an outage.
+
+**Steady-state ladder** (200 events/s, worst-consumer median rolling p99): supabase-etl 26 ms < sequin 33 ms < pgoutput-raw 70 ms < debezium-server ~850 ms < debezium-kafka ~960 ms. Memory spans 13 MB (supabase-etl) to ~1.7 GB (the JVM arms).
+
+### Quick start (CDC)
+
+```sh
+# End-to-end smoke: loadgen → Postgres → pgoutput → receiver, with a
+# dead-consumer chaos phase and ledger verification (~90 s; needs docker + cargo)
+uv run cdc --system pgoutput-raw --scenario smoke --rate 100
+
+# Any other arm (images are pulled on first use)
+uv run cdc --system sequin --scenario smoke --rate 100 --drain-timeout-s 120
+
+# A sweep: all six arms × {fanout_steady, dead_consumer}, then a report
+bash scripts/cdc_sweep.sh results/my-sweep
+uv run python scripts/cdc_sweep_report.py results/my-sweep > results/my-sweep/REPORT.md
+```
+
+Workload modes: `--mode events` (single table), `ledger` (cross-table transfers, balance conservation), `outbox` (transactional outbox with janitor deletes). Chaos phases cover dead/slow consumers, sink outages, giant transactions, mid-stream DDL, and slot invalidation. [`docs/cdc-harness-design.md`](docs/cdc-harness-design.md) has the architecture and rationale; [`docs/cdc-sut-notes.md`](docs/cdc-sut-notes.md) has per-system integration facts, the verifier's design principles, and remaining gaps.
+
+---
+
+## Design principles (both benches)
+
+- **Public APIs only.** Each adapter integrates the system the way a real consumer would. No reaching into internal modules, no privileged SQL.
+- **Subprocess contract.** Adapters are language-agnostic processes that emit one JSON sample per line on stdout. Adding a system means writing one binary that respects the contract — see [CONTRIBUTING_ADAPTERS.md](./CONTRIBUTING_ADAPTERS.md).
+- **One Postgres for everyone.** All systems run against the same `postgres:18.3-alpine` instance with the same `postgres.conf` (the CDC bench adds a logical-WAL overlay, `docker-compose.cdc.yml`, shared by all CDC arms). The compose default caps Postgres at 4 CPUs for repeatable laptop and CI runs; set `POSTGRES_CPUS=N` for a larger machine envelope.
+- **Harness-owned measurement.** The load generator and the delivery-terminating receiver belong to the harness, not the SUT, so latency, loss, and duplicate accounting are computed identically for every system.
+- **Long-horizon.** Bloat, WAL retention, and latency drift only show up after the first few minutes; default scenarios run tens of minutes and the flagship sweeps run hours.
 
 ## Repo layout
 
 ```
-bench_harness/        # orchestrator, sample contract, comparison/plot
-                      # tooling — independent of any specific SUT
-tests/                # pytest suite for the harness itself
-<system>-bench/       # one directory per system-under-test, each
-                      # producing a binary that talks the JSON contract
-docker-compose.yml    # shared Postgres + sidecars
-postgres.conf         # shared tuning (work_mem, autovacuum, etc.)
-bench.py              # main CLI: run | combine | compare
+bench_harness/        # job-queue orchestrator, sample contract, comparison tooling
+bench.py              # job-queue CLI: run | combine | compare
+<system>-bench/       # one directory per job-queue SUT (awa, river, oban, …)
+
+cdc_harness/          # CDC orchestrator, adapters, loadgen, pgoutput parsing
+cdc-receiver/         # Rust receiver: every CDC arm's sink + online verifier
+pgoutput-raw-bench/   # SQL-polling pgoutput arm
+etl-cdc-bench/        # supabase/etl arm (Rust)
+kafka-bridge-bench/   # Kafka → receiver bridge for the broker arm
+scripts/cdc_sweep.sh  # resumable CDC sweep driver + report generator
+
+docker-compose.yml         # shared Postgres + sidecars
+docker-compose.cdc.yml     # logical-WAL overlay for CDC runs
+docker-compose.kafka.yml   # Kafka (KRaft) + Debezium Connect for the broker arm
+docs/                 # method.md (job queues), cdc-harness-design.md, cdc-sut-notes.md
+results/              # committed reports/summaries per sweep (raw CSVs stay local)
+tests/                # pytest suite for both harnesses
 ```
 
 ## Contributing a system
 
-See [CONTRIBUTING_ADAPTERS.md](./CONTRIBUTING_ADAPTERS.md) for the JSON
-contract and an end-to-end walk-through.
+See [CONTRIBUTING_ADAPTERS.md](./CONTRIBUTING_ADAPTERS.md) for the JSON contract and an end-to-end walk-through.
 
 ## License
 

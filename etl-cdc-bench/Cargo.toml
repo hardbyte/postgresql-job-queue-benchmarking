@@ -1,0 +1,16 @@
+[package]
+name = "etl-cdc-bench"
+version = "0.1.0"
+edition = "2021"
+description = "Supabase ETL CDC bench adapter: one etl pipeline per consumer, custom HTTP destination (docs/cdc-harness-design.md §2)"
+
+[dependencies]
+# Pre-1.0, git-only, no tags — pinned by commit (2026-07-17 HEAD).
+etl = { git = "https://github.com/supabase/etl", rev = "d206d66eabaa3cfd15872eba761c5131e22a7f75" }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+# Plain-http POSTs to the localhost receiver; no TLS stack needed.
+reqwest = { version = "0.12", default-features = false }
+
+[profile.release]
+debug = false

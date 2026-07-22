@@ -1,0 +1,116 @@
+{
+  "run_id": "cdc-20260722T060249Z-53c888",
+  "scenario": null,
+  "started_at": "2026-07-22T06:45:04+00:00",
+  "cli": [
+    "--system",
+    "sequin",
+    "--mode",
+    "events",
+    "--phase",
+    "warmup=warmup:2m",
+    "--phase",
+    "clean_1=clean:5m",
+    "--phase",
+    "dead=consumer-dead(id=1):15m",
+    "--phase",
+    "heal=clean:15m",
+    "--phase",
+    "drain=recovery:5m",
+    "--profiles",
+    "4xfast",
+    "--rate",
+    "200",
+    "--key-cardinality",
+    "20000",
+    "--skip-pg-setup",
+    "--drain-timeout-s",
+    "90",
+    "--adapter-ready-timeout-s",
+    "150",
+    "--results-root",
+    "/home/brian/dev/postgresql-job-queue-benchmarking/results/cdc-sweep-long"
+  ],
+  "systems": [
+    "sequin"
+  ],
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 120
+    },
+    {
+      "label": "clean_1",
+      "type": "clean",
+      "duration_s": 300
+    },
+    {
+      "label": "dead",
+      "type": "consumer-dead",
+      "duration_s": 900
+    },
+    {
+      "label": "heal",
+      "type": "clean",
+      "duration_s": 900
+    },
+    {
+      "label": "drain",
+      "type": "recovery",
+      "duration_s": 300
+    }
+  ],
+  "pg_image": "(see docker-compose.yml)",
+  "postgres": {
+    "version": "PostgreSQL 18.3 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "settings": {
+      "shared_buffers": "256MB",
+      "work_mem": "8MB",
+      "maintenance_work_mem": "128MB",
+      "autovacuum": "on",
+      "autovacuum_naptime": "1min",
+      "autovacuum_vacuum_cost_delay": "2ms",
+      "autovacuum_vacuum_cost_limit": "200",
+      "autovacuum_vacuum_scale_factor": "0.2",
+      "autovacuum_analyze_scale_factor": "0.1",
+      "max_connections": "400",
+      "synchronous_commit": "on",
+      "wal_level": "logical"
+    }
+  },
+  "host": {
+    "os": "Linux-6.18.21-x86_64-with-glibc2.42",
+    "kernel": "6.18.21",
+    "cpu": "x86_64",
+    "cpu_count": 24,
+    "memory_bytes": 98688577536,
+    "python": "3.14.3",
+    "docker": "Docker version 29.3.1, build v29.3.1",
+    "docker_compose": "Docker Compose version 5.0.2"
+  },
+  "adapters": {
+    "sequin": {
+      "descriptor": {
+        "system": "sequin",
+        "slot_names": [
+          "sequin_slot"
+        ],
+        "version": "sequin/sequin:v0.14.6",
+        "topology": "buffer",
+        "snapshot_mode_requested": "never",
+        "snapshot_mode_effective": "never"
+      }
+    }
+  },
+  "cdc": {
+    "consumer_profiles": "4xfast",
+    "rate": 200.0,
+    "op_mix": "70/25/5",
+    "key_cardinality": 20000,
+    "payload_bytes": 128,
+    "mode": "events",
+    "snapshot_mode_requested": "never",
+    "snapshot_mode_effective": "never"
+  }
+}

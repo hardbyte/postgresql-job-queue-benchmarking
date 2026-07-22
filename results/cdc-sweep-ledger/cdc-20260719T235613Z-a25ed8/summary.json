@@ -1,0 +1,1545 @@
+{
+  "run_id": "cdc-20260719T235613Z-a25ed8",
+  "scenario": null,
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 20
+    },
+    {
+      "label": "clean_1",
+      "type": "clean",
+      "duration_s": 60
+    },
+    {
+      "label": "dead",
+      "type": "consumer-dead",
+      "duration_s": 90
+    },
+    {
+      "label": "heal",
+      "type": "clean",
+      "duration_s": 60
+    },
+    {
+      "label": "drain",
+      "type": "recovery",
+      "duration_s": 30
+    }
+  ],
+  "systems": {
+    "debezium-server": {
+      "phases": {
+        "clean_1": {
+          "phase_type": "clean",
+          "metrics": {
+            "slot_retained_wal_bytes@dbz_0": {
+              "median": 995832.0,
+              "peak": 2576520.0,
+              "count": 12
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_0": {
+              "median": 53000.0,
+              "peak": 104712.0,
+              "count": 12
+            },
+            "decode_spill_bytes@dbz_0": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "decode_spill_txns@dbz_0": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "slot_retained_wal_bytes@dbz_1": {
+              "median": 995832.0,
+              "peak": 2576520.0,
+              "count": 12
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_1": {
+              "median": 81464.0,
+              "peak": 112296.0,
+              "count": 12
+            },
+            "decode_spill_bytes@dbz_1": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "decode_spill_txns@dbz_1": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "slot_retained_wal_bytes@dbz_2": {
+              "median": 995832.0,
+              "peak": 2576520.0,
+              "count": 12
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_2": {
+              "median": 63588.0,
+              "peak": 118208.0,
+              "count": 12
+            },
+            "decode_spill_bytes@dbz_2": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "decode_spill_txns@dbz_2": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "slot_retained_wal_bytes@dbz_3": {
+              "median": 995832.0,
+              "peak": 2576520.0,
+              "count": 12
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_3": {
+              "median": 67168.0,
+              "peak": 118208.0,
+              "count": 12
+            },
+            "decode_spill_bytes@dbz_3": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "decode_spill_txns@dbz_3": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "source_write_rate": {
+              "median": 150.0,
+              "peak": 150.4,
+              "count": 12
+            },
+            "source_tx_rate": {
+              "median": 150.0,
+              "peak": 150.4,
+              "count": 12
+            },
+            "source_ops_total": {
+              "median": 7124.0,
+              "peak": 11248.0,
+              "count": 12
+            },
+            "source_write_p99_ms": {
+              "median": 16.988419461995363,
+              "peak": 20.753364078700542,
+              "count": 12
+            },
+            "cpu_pct@cdcbench-debezium-0": {
+              "median": 2.92,
+              "peak": 3.84,
+              "count": 5
+            },
+            "rss_bytes@cdcbench-debezium-0": {
+              "median": 402338611.2,
+              "peak": 405169766.4,
+              "count": 5
+            },
+            "cpu_pct@cdcbench-debezium-1": {
+              "median": 2.89,
+              "peak": 4.03,
+              "count": 5
+            },
+            "rss_bytes@cdcbench-debezium-1": {
+              "median": 417018675.2,
+              "peak": 421842124.8,
+              "count": 5
+            },
+            "cpu_pct@cdcbench-debezium-2": {
+              "median": 3.03,
+              "peak": 5.08,
+              "count": 5
+            },
+            "rss_bytes@cdcbench-debezium-2": {
+              "median": 371091046.4,
+              "peak": 374446489.6,
+              "count": 5
+            },
+            "cpu_pct@cdcbench-debezium-3": {
+              "median": 4.69,
+              "peak": 114.58,
+              "count": 5
+            },
+            "rss_bytes@cdcbench-debezium-3": {
+              "median": 443023360.0,
+              "peak": 460534579.2,
+              "count": 5
+            },
+            "e2e_p50_ms@consumer:0:fast": {
+              "median": 469.24699999999996,
+              "peak": 568.831,
+              "count": 12
+            },
+            "e2e_p95_ms@consumer:0:fast": {
+              "median": 723.455,
+              "peak": 825.343,
+              "count": 12
+            },
+            "e2e_p99_ms@consumer:0:fast": {
+              "median": 758.015,
+              "peak": 933.887,
+              "count": 12
+            },
+            "delivery_rate@consumer:0:fast": {
+              "median": 458.1,
+              "peak": 462.0,
+              "count": 12
+            },
+            "delivery_bytes_rate@consumer:0:fast": {
+              "median": 246953.1,
+              "peak": 248895.0,
+              "count": 12
+            },
+            "delivered_total@consumer:0:fast": {
+              "median": 23328.0,
+              "peak": 35604.0,
+              "count": 12
+            },
+            "dup_events_total@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "order_violations_total@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "torn_tx_open@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "txs_completed_total@consumer:0:fast": {
+              "median": 7776.0,
+              "peak": 11868.0,
+              "count": 12
+            },
+            "e2e_p50_ms@consumer:1:fast": {
+              "median": 499.45500000000004,
+              "peak": 575.487,
+              "count": 12
+            },
+            "e2e_p95_ms@consumer:1:fast": {
+              "median": 742.655,
+              "peak": 824.831,
+              "count": 12
+            },
+            "e2e_p99_ms@consumer:1:fast": {
+              "median": 776.703,
+              "peak": 946.687,
+              "count": 12
+            },
+            "delivery_rate@consumer:1:fast": {
+              "median": 458.4,
+              "peak": 462.0,
+              "count": 12
+            },
+            "delivery_bytes_rate@consumer:1:fast": {
+              "median": 247100.1,
+              "peak": 248895.0,
+              "count": 12
+            },
+            "delivered_total@consumer:1:fast": {
+              "median": 23215.5,
+              "peak": 35604.0,
+              "count": 12
+            },
+            "dup_events_total@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "order_violations_total@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "torn_tx_open@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "txs_completed_total@consumer:1:fast": {
+              "median": 7738.5,
+              "peak": 11868.0,
+              "count": 12
+            },
+            "e2e_p50_ms@consumer:2:fast": {
+              "median": 591.3589999999999,
+              "peak": 683.007,
+              "count": 12
+            },
+            "e2e_p95_ms@consumer:2:fast": {
+              "median": 885.247,
+              "peak": 917.503,
+              "count": 12
+            },
+            "e2e_p99_ms@consumer:2:fast": {
+              "median": 952.319,
+              "peak": 979.455,
+              "count": 12
+            },
+            "delivery_rate@consumer:2:fast": {
+              "median": 459.0,
+              "peak": 501.6,
+              "count": 12
+            },
+            "delivery_bytes_rate@consumer:2:fast": {
+              "median": 247583.9,
+              "peak": 270215.8,
+              "count": 12
+            },
+            "delivered_total@consumer:2:fast": {
+              "median": 23221.5,
+              "peak": 35739.0,
+              "count": 12
+            },
+            "dup_events_total@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "order_violations_total@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "torn_tx_open@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "txs_completed_total@consumer:2:fast": {
+              "median": 7740.5,
+              "peak": 11913.0,
+              "count": 12
+            },
+            "e2e_p50_ms@consumer:3:fast": {
+              "median": 627.199,
+              "peak": 708.607,
+              "count": 12
+            },
+            "e2e_p95_ms@consumer:3:fast": {
+              "median": 885.2470000000001,
+              "peak": 945.663,
+              "count": 12
+            },
+            "e2e_p99_ms@consumer:3:fast": {
+              "median": 928.767,
+              "peak": 982.527,
+              "count": 12
+            },
+            "delivery_rate@consumer:3:fast": {
+              "median": 458.7,
+              "peak": 463.2,
+              "count": 12
+            },
+            "delivery_bytes_rate@consumer:3:fast": {
+              "median": 247726.8,
+              "peak": 249540.0,
+              "count": 12
+            },
+            "delivered_total@consumer:3:fast": {
+              "median": 23221.5,
+              "peak": 35739.0,
+              "count": 12
+            },
+            "dup_events_total@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "order_violations_total@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "torn_tx_open@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "txs_completed_total@consumer:3:fast": {
+              "median": 7740.5,
+              "peak": 11913.0,
+              "count": 12
+            }
+          },
+          "peak_dead_tup": null,
+          "median_dead_tup": null,
+          "median_claim_p99_ms": null,
+          "median_producer_p99_ms": null,
+          "median_producer_call_p99_ms": null,
+          "median_subscriber_p99_ms": null,
+          "median_end_to_end_p99_ms": null,
+          "median_throughput_per_s": null,
+          "median_enqueue_rate_per_s": null,
+          "median_queue_depth": null,
+          "median_running_depth": null,
+          "autovacuum_count_delta": null,
+          "pg_wal_bytes_delta": null,
+          "pg_wal_records_delta": null,
+          "pg_wal_fpi_delta": null,
+          "replicas": {}
+        },
+        "dead": {
+          "phase_type": "consumer-dead",
+          "metrics": {
+            "slot_retained_wal_bytes@dbz_0": {
+              "median": 726784.0,
+              "peak": 1530568.0,
+              "count": 18
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_0": {
+              "median": 69944.0,
+              "peak": 406400.0,
+              "count": 18
+            },
+            "decode_spill_bytes@dbz_0": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "decode_spill_txns@dbz_0": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "slot_retained_wal_bytes@dbz_1": {
+              "median": 4425696.0,
+              "peak": 8534464.0,
+              "count": 18
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_1": {
+              "median": 3768880.0,
+              "peak": 7877648.0,
+              "count": 18
+            },
+            "decode_spill_bytes@dbz_1": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "decode_spill_txns@dbz_1": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "slot_retained_wal_bytes@dbz_2": {
+              "median": 726784.0,
+              "peak": 1530568.0,
+              "count": 18
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_2": {
+              "median": 56008.0,
+              "peak": 144592.0,
+              "count": 18
+            },
+            "decode_spill_bytes@dbz_2": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "decode_spill_txns@dbz_2": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "slot_retained_wal_bytes@dbz_3": {
+              "median": 726784.0,
+              "peak": 1530568.0,
+              "count": 18
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_3": {
+              "median": 57448.0,
+              "peak": 144592.0,
+              "count": 18
+            },
+            "decode_spill_bytes@dbz_3": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "decode_spill_txns@dbz_3": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "source_write_rate": {
+              "median": 149.9,
+              "peak": 151.0,
+              "count": 18
+            },
+            "source_tx_rate": {
+              "median": 149.9,
+              "peak": 151.0,
+              "count": 18
+            },
+            "source_ops_total": {
+              "median": 18377.0,
+              "peak": 24749.0,
+              "count": 18
+            },
+            "source_write_p99_ms": {
+              "median": 16.44901279360056,
+              "peak": 18.636816181242466,
+              "count": 18
+            },
+            "cpu_pct@cdcbench-debezium-0": {
+              "median": 3.0149999999999997,
+              "peak": 5.63,
+              "count": 8
+            },
+            "rss_bytes@cdcbench-debezium-0": {
+              "median": 406690201.6,
+              "peak": 407057203.2,
+              "count": 8
+            },
+            "cpu_pct@cdcbench-debezium-1": {
+              "median": 0.10500000000000001,
+              "peak": 0.95,
+              "count": 8
+            },
+            "rss_bytes@cdcbench-debezium-1": {
+              "median": 423834419.20000005,
+              "peak": 425302425.6,
+              "count": 8
+            },
+            "cpu_pct@cdcbench-debezium-2": {
+              "median": 2.94,
+              "peak": 9.03,
+              "count": 8
+            },
+            "rss_bytes@cdcbench-debezium-2": {
+              "median": 373502771.2,
+              "peak": 379794227.2,
+              "count": 8
+            },
+            "cpu_pct@cdcbench-debezium-3": {
+              "median": 2.69,
+              "peak": 4.63,
+              "count": 8
+            },
+            "rss_bytes@cdcbench-debezium-3": {
+              "median": 451411968.0,
+              "peak": 452145971.2,
+              "count": 8
+            },
+            "e2e_p50_ms@consumer:0:fast": {
+              "median": 668.927,
+              "peak": 712.191,
+              "count": 18
+            },
+            "e2e_p95_ms@consumer:0:fast": {
+              "median": 901.119,
+              "peak": 948.735,
+              "count": 18
+            },
+            "e2e_p99_ms@consumer:0:fast": {
+              "median": 939.775,
+              "peak": 989.183,
+              "count": 18
+            },
+            "delivery_rate@consumer:0:fast": {
+              "median": 459.3,
+              "peak": 502.2,
+              "count": 18
+            },
+            "delivery_bytes_rate@consumer:0:fast": {
+              "median": 248167.5,
+              "peak": 271377.0,
+              "count": 18
+            },
+            "delivered_total@consumer:0:fast": {
+              "median": 56994.0,
+              "peak": 76263.0,
+              "count": 18
+            },
+            "dup_events_total@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "order_violations_total@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "torn_tx_open@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 1.0,
+              "count": 18
+            },
+            "txs_completed_total@consumer:0:fast": {
+              "median": 18998.0,
+              "peak": 25421.0,
+              "count": 18
+            },
+            "e2e_p50_ms@consumer:1:fast": {
+              "median": 620.031,
+              "peak": 659.455,
+              "count": 5
+            },
+            "e2e_p95_ms@consumer:1:fast": {
+              "median": 859.647,
+              "peak": 893.951,
+              "count": 5
+            },
+            "e2e_p99_ms@consumer:1:fast": {
+              "median": 899.583,
+              "peak": 913.919,
+              "count": 5
+            },
+            "delivery_rate@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "delivery_bytes_rate@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "delivered_total@consumer:1:fast": {
+              "median": 35604.0,
+              "peak": 35604.0,
+              "count": 18
+            },
+            "dup_events_total@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "order_violations_total@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "torn_tx_open@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "txs_completed_total@consumer:1:fast": {
+              "median": 11868.0,
+              "peak": 11868.0,
+              "count": 18
+            },
+            "e2e_p50_ms@consumer:2:fast": {
+              "median": 440.831,
+              "peak": 479.743,
+              "count": 18
+            },
+            "e2e_p95_ms@consumer:2:fast": {
+              "median": 681.983,
+              "peak": 886.271,
+              "count": 18
+            },
+            "e2e_p99_ms@consumer:2:fast": {
+              "median": 717.8230000000001,
+              "peak": 978.943,
+              "count": 18
+            },
+            "delivery_rate@consumer:2:fast": {
+              "median": 458.7,
+              "peak": 463.8,
+              "count": 18
+            },
+            "delivery_bytes_rate@consumer:2:fast": {
+              "median": 247771.5,
+              "peak": 250627.0,
+              "count": 18
+            },
+            "delivered_total@consumer:2:fast": {
+              "median": 57088.5,
+              "peak": 76194.0,
+              "count": 18
+            },
+            "dup_events_total@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "order_violations_total@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "torn_tx_open@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "txs_completed_total@consumer:2:fast": {
+              "median": 19029.5,
+              "peak": 25398.0,
+              "count": 18
+            },
+            "e2e_p50_ms@consumer:3:fast": {
+              "median": 365.823,
+              "peak": 524.799,
+              "count": 18
+            },
+            "e2e_p95_ms@consumer:3:fast": {
+              "median": 593.663,
+              "peak": 938.495,
+              "count": 18
+            },
+            "e2e_p99_ms@consumer:3:fast": {
+              "median": 630.271,
+              "peak": 982.527,
+              "count": 18
+            },
+            "delivery_rate@consumer:3:fast": {
+              "median": 458.7,
+              "peak": 462.6,
+              "count": 18
+            },
+            "delivery_bytes_rate@consumer:3:fast": {
+              "median": 247819.0,
+              "peak": 250006.4,
+              "count": 18
+            },
+            "delivered_total@consumer:3:fast": {
+              "median": 57088.5,
+              "peak": 76194.0,
+              "count": 18
+            },
+            "dup_events_total@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "order_violations_total@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "torn_tx_open@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "txs_completed_total@consumer:3:fast": {
+              "median": 19029.5,
+              "peak": 25398.0,
+              "count": 18
+            }
+          },
+          "peak_dead_tup": null,
+          "median_dead_tup": null,
+          "median_claim_p99_ms": null,
+          "median_producer_p99_ms": null,
+          "median_producer_call_p99_ms": null,
+          "median_subscriber_p99_ms": null,
+          "median_end_to_end_p99_ms": null,
+          "median_throughput_per_s": null,
+          "median_enqueue_rate_per_s": null,
+          "median_queue_depth": null,
+          "median_running_depth": null,
+          "autovacuum_count_delta": null,
+          "pg_wal_bytes_delta": null,
+          "pg_wal_records_delta": null,
+          "pg_wal_fpi_delta": null,
+          "replicas": {}
+        },
+        "heal": {
+          "phase_type": "clean",
+          "metrics": {
+            "slot_retained_wal_bytes@dbz_0": {
+              "median": 665052.0,
+              "peak": 1374552.0,
+              "count": 12
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_0": {
+              "median": 61876.0,
+              "peak": 92608.0,
+              "count": 12
+            },
+            "decode_spill_bytes@dbz_0": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "decode_spill_txns@dbz_0": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "slot_retained_wal_bytes@dbz_1": {
+              "median": 665052.0,
+              "peak": 8967136.0,
+              "count": 12
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_1": {
+              "median": 63416.0,
+              "peak": 8310320.0,
+              "count": 12
+            },
+            "decode_spill_bytes@dbz_1": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "decode_spill_txns@dbz_1": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "slot_retained_wal_bytes@dbz_2": {
+              "median": 665052.0,
+              "peak": 1374552.0,
+              "count": 12
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_2": {
+              "median": 68812.0,
+              "peak": 98672.0,
+              "count": 12
+            },
+            "decode_spill_bytes@dbz_2": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "decode_spill_txns@dbz_2": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "slot_retained_wal_bytes@dbz_3": {
+              "median": 665052.0,
+              "peak": 1374552.0,
+              "count": 12
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_3": {
+              "median": 57716.0,
+              "peak": 95800.0,
+              "count": 12
+            },
+            "decode_spill_bytes@dbz_3": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "decode_spill_txns@dbz_3": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "source_write_rate": {
+              "median": 150.1,
+              "peak": 150.6,
+              "count": 12
+            },
+            "source_tx_rate": {
+              "median": 150.1,
+              "peak": 150.6,
+              "count": 12
+            },
+            "source_ops_total": {
+              "median": 29626.0,
+              "peak": 33753.0,
+              "count": 12
+            },
+            "source_write_p99_ms": {
+              "median": 16.90897671505809,
+              "peak": 19.61447112262249,
+              "count": 12
+            },
+            "e2e_p50_ms@consumer:0:fast": {
+              "median": 302.46299999999997,
+              "peak": 324.607,
+              "count": 12
+            },
+            "e2e_p95_ms@consumer:0:fast": {
+              "median": 529.1510000000001,
+              "peak": 548.863,
+              "count": 12
+            },
+            "e2e_p99_ms@consumer:0:fast": {
+              "median": 554.495,
+              "peak": 585.215,
+              "count": 12
+            },
+            "delivery_rate@consumer:0:fast": {
+              "median": 459.0,
+              "peak": 462.0,
+              "count": 12
+            },
+            "delivery_bytes_rate@consumer:0:fast": {
+              "median": 248107.8,
+              "peak": 249759.8,
+              "count": 12
+            },
+            "delivered_total@consumer:0:fast": {
+              "median": 90975.0,
+              "peak": 103344.0,
+              "count": 12
+            },
+            "dup_events_total@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "order_violations_total@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "torn_tx_open@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "txs_completed_total@consumer:0:fast": {
+              "median": 30325.0,
+              "peak": 34448.0,
+              "count": 12
+            },
+            "e2e_p50_ms@consumer:1:fast": {
+              "median": 10178.815,
+              "peak": 32210.943,
+              "count": 12
+            },
+            "e2e_p95_ms@consumer:1:fast": {
+              "median": 31577.342999999997,
+              "peak": 63668.223,
+              "count": 12
+            },
+            "e2e_p99_ms@consumer:1:fast": {
+              "median": 33477.375,
+              "peak": 66453.503,
+              "count": 12
+            },
+            "delivery_rate@consumer:1:fast": {
+              "median": 459.9,
+              "peak": 8575.2,
+              "count": 12
+            },
+            "delivery_bytes_rate@consumer:1:fast": {
+              "median": 248624.0,
+              "peak": 4633107.4,
+              "count": 12
+            },
+            "delivered_total@consumer:1:fast": {
+              "median": 90922.5,
+              "peak": 103083.0,
+              "count": 12
+            },
+            "dup_events_total@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "order_violations_total@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "torn_tx_open@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "txs_completed_total@consumer:1:fast": {
+              "median": 30307.5,
+              "peak": 34361.0,
+              "count": 12
+            },
+            "e2e_p50_ms@consumer:2:fast": {
+              "median": 414.079,
+              "peak": 458.751,
+              "count": 12
+            },
+            "e2e_p95_ms@consumer:2:fast": {
+              "median": 643.0709999999999,
+              "peak": 683.519,
+              "count": 12
+            },
+            "e2e_p99_ms@consumer:2:fast": {
+              "median": 673.279,
+              "peak": 708.095,
+              "count": 12
+            },
+            "delivery_rate@consumer:2:fast": {
+              "median": 459.3,
+              "peak": 462.6,
+              "count": 12
+            },
+            "delivery_bytes_rate@consumer:2:fast": {
+              "median": 248280.6,
+              "peak": 250084.4,
+              "count": 12
+            },
+            "delivered_total@consumer:2:fast": {
+              "median": 90922.5,
+              "peak": 103308.0,
+              "count": 12
+            },
+            "dup_events_total@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "order_violations_total@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "torn_tx_open@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "txs_completed_total@consumer:2:fast": {
+              "median": 30307.5,
+              "peak": 34436.0,
+              "count": 12
+            },
+            "e2e_p50_ms@consumer:3:fast": {
+              "median": 323.455,
+              "peak": 352.511,
+              "count": 12
+            },
+            "e2e_p95_ms@consumer:3:fast": {
+              "median": 555.775,
+              "peak": 579.583,
+              "count": 12
+            },
+            "e2e_p99_ms@consumer:3:fast": {
+              "median": 581.887,
+              "peak": 601.087,
+              "count": 12
+            },
+            "delivery_rate@consumer:3:fast": {
+              "median": 458.1,
+              "peak": 462.0,
+              "count": 12
+            },
+            "delivery_bytes_rate@consumer:3:fast": {
+              "median": 247644.6,
+              "peak": 249759.8,
+              "count": 12
+            },
+            "delivered_total@consumer:3:fast": {
+              "median": 90921.0,
+              "peak": 103290.0,
+              "count": 12
+            },
+            "dup_events_total@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "order_violations_total@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "torn_tx_open@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "txs_completed_total@consumer:3:fast": {
+              "median": 30307.0,
+              "peak": 34430.0,
+              "count": 12
+            },
+            "cpu_pct@cdcbench-debezium-0": {
+              "median": 2.35,
+              "peak": 2.35,
+              "count": 5
+            },
+            "rss_bytes@cdcbench-debezium-0": {
+              "median": 407791206.4,
+              "peak": 408630067.2,
+              "count": 5
+            },
+            "cpu_pct@cdcbench-debezium-1": {
+              "median": 2.54,
+              "peak": 5.73,
+              "count": 5
+            },
+            "rss_bytes@cdcbench-debezium-1": {
+              "median": 452460544.0,
+              "peak": 452670259.2,
+              "count": 5
+            },
+            "cpu_pct@cdcbench-debezium-2": {
+              "median": 2.34,
+              "peak": 2.7,
+              "count": 5
+            },
+            "rss_bytes@cdcbench-debezium-2": {
+              "median": 373817344.0,
+              "peak": 375390208.0,
+              "count": 5
+            },
+            "cpu_pct@cdcbench-debezium-3": {
+              "median": 2.88,
+              "peak": 4.07,
+              "count": 5
+            },
+            "rss_bytes@cdcbench-debezium-3": {
+              "median": 452250828.8,
+              "peak": 453194547.2,
+              "count": 5
+            }
+          },
+          "peak_dead_tup": null,
+          "median_dead_tup": null,
+          "median_claim_p99_ms": null,
+          "median_producer_p99_ms": null,
+          "median_producer_call_p99_ms": null,
+          "median_subscriber_p99_ms": null,
+          "median_end_to_end_p99_ms": null,
+          "median_throughput_per_s": null,
+          "median_enqueue_rate_per_s": null,
+          "median_queue_depth": null,
+          "median_running_depth": null,
+          "autovacuum_count_delta": null,
+          "pg_wal_bytes_delta": null,
+          "pg_wal_records_delta": null,
+          "pg_wal_fpi_delta": null,
+          "replicas": {}
+        },
+        "drain": {
+          "phase_type": "recovery",
+          "metrics": {
+            "slot_retained_wal_bytes@dbz_0": {
+              "median": 671944.0,
+              "peak": 1128464.0,
+              "count": 6
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_0": {
+              "median": 50184.0,
+              "peak": 69472.0,
+              "count": 6
+            },
+            "decode_spill_bytes@dbz_0": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "decode_spill_txns@dbz_0": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "slot_retained_wal_bytes@dbz_1": {
+              "median": 671944.0,
+              "peak": 1128464.0,
+              "count": 6
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_1": {
+              "median": 83692.0,
+              "peak": 103944.0,
+              "count": 6
+            },
+            "decode_spill_bytes@dbz_1": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "decode_spill_txns@dbz_1": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "slot_retained_wal_bytes@dbz_2": {
+              "median": 671944.0,
+              "peak": 1128464.0,
+              "count": 6
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_2": {
+              "median": 53064.0,
+              "peak": 76392.0,
+              "count": 6
+            },
+            "decode_spill_bytes@dbz_2": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "decode_spill_txns@dbz_2": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "slot_retained_wal_bytes@dbz_3": {
+              "median": 671944.0,
+              "peak": 1128464.0,
+              "count": 6
+            },
+            "slot_confirmed_flush_lag_bytes@dbz_3": {
+              "median": 58276.0,
+              "peak": 79808.0,
+              "count": 6
+            },
+            "decode_spill_bytes@dbz_3": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "decode_spill_txns@dbz_3": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "source_write_rate": {
+              "median": 150.1,
+              "peak": 150.4,
+              "count": 6
+            },
+            "source_tx_rate": {
+              "median": 150.1,
+              "peak": 150.4,
+              "count": 6
+            },
+            "source_ops_total": {
+              "median": 36376.5,
+              "peak": 38251.0,
+              "count": 6
+            },
+            "source_write_p99_ms": {
+              "median": 15.910789836198092,
+              "peak": 16.911616548895836,
+              "count": 6
+            },
+            "e2e_p50_ms@consumer:0:fast": {
+              "median": 380.159,
+              "peak": 407.551,
+              "count": 6
+            },
+            "e2e_p95_ms@consumer:0:fast": {
+              "median": 614.655,
+              "peak": 633.855,
+              "count": 6
+            },
+            "e2e_p99_ms@consumer:0:fast": {
+              "median": 649.727,
+              "peak": 654.847,
+              "count": 6
+            },
+            "delivery_rate@consumer:0:fast": {
+              "median": 458.1,
+              "peak": 461.4,
+              "count": 6
+            },
+            "delivery_bytes_rate@consumer:0:fast": {
+              "median": 247692.4,
+              "peak": 249477.0,
+              "count": 6
+            },
+            "delivered_total@consumer:0:fast": {
+              "median": 111151.5,
+              "peak": 116685.0,
+              "count": 6
+            },
+            "dup_events_total@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "order_violations_total@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "torn_tx_open@consumer:0:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "txs_completed_total@consumer:0:fast": {
+              "median": 37050.5,
+              "peak": 38895.0,
+              "count": 6
+            },
+            "e2e_p50_ms@consumer:1:fast": {
+              "median": 501.119,
+              "peak": 536.063,
+              "count": 6
+            },
+            "e2e_p95_ms@consumer:1:fast": {
+              "median": 728.063,
+              "peak": 774.143,
+              "count": 6
+            },
+            "e2e_p99_ms@consumer:1:fast": {
+              "median": 770.815,
+              "peak": 812.031,
+              "count": 6
+            },
+            "delivery_rate@consumer:1:fast": {
+              "median": 458.70000000000005,
+              "peak": 462.0,
+              "count": 6
+            },
+            "delivery_bytes_rate@consumer:1:fast": {
+              "median": 248010.3,
+              "peak": 249812.2,
+              "count": 6
+            },
+            "delivered_total@consumer:1:fast": {
+              "median": 111109.5,
+              "peak": 116631.0,
+              "count": 6
+            },
+            "dup_events_total@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "order_violations_total@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "torn_tx_open@consumer:1:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "txs_completed_total@consumer:1:fast": {
+              "median": 37036.5,
+              "peak": 38877.0,
+              "count": 6
+            },
+            "e2e_p50_ms@consumer:2:fast": {
+              "median": 404.095,
+              "peak": 409.599,
+              "count": 6
+            },
+            "e2e_p95_ms@consumer:2:fast": {
+              "median": 631.5509999999999,
+              "peak": 636.415,
+              "count": 6
+            },
+            "e2e_p99_ms@consumer:2:fast": {
+              "median": 650.495,
+              "peak": 656.383,
+              "count": 6
+            },
+            "delivery_rate@consumer:2:fast": {
+              "median": 457.8,
+              "peak": 460.8,
+              "count": 6
+            },
+            "delivery_bytes_rate@consumer:2:fast": {
+              "median": 247526.0,
+              "peak": 249142.2,
+              "count": 6
+            },
+            "delivered_total@consumer:2:fast": {
+              "median": 111127.5,
+              "peak": 116631.0,
+              "count": 6
+            },
+            "dup_events_total@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "order_violations_total@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "torn_tx_open@consumer:2:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "txs_completed_total@consumer:2:fast": {
+              "median": 37042.5,
+              "peak": 38877.0,
+              "count": 6
+            },
+            "e2e_p50_ms@consumer:3:fast": {
+              "median": 374.52700000000004,
+              "peak": 381.695,
+              "count": 6
+            },
+            "e2e_p95_ms@consumer:3:fast": {
+              "median": 601.855,
+              "peak": 606.719,
+              "count": 6
+            },
+            "e2e_p99_ms@consumer:3:fast": {
+              "median": 627.711,
+              "peak": 627.711,
+              "count": 6
+            },
+            "delivery_rate@consumer:3:fast": {
+              "median": 460.79999999999995,
+              "peak": 463.2,
+              "count": 6
+            },
+            "delivery_bytes_rate@consumer:3:fast": {
+              "median": 249153.09999999998,
+              "peak": 250450.0,
+              "count": 6
+            },
+            "delivered_total@consumer:3:fast": {
+              "median": 111109.5,
+              "peak": 116862.0,
+              "count": 6
+            },
+            "dup_events_total@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "order_violations_total@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "torn_tx_open@consumer:3:fast": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 6
+            },
+            "txs_completed_total@consumer:3:fast": {
+              "median": 37036.5,
+              "peak": 38954.0,
+              "count": 6
+            },
+            "cpu_pct@cdcbench-debezium-0": {
+              "median": 2.835,
+              "peak": 3.09,
+              "count": 2
+            },
+            "rss_bytes@cdcbench-debezium-0": {
+              "median": 408315494.4,
+              "peak": 409049497.6,
+              "count": 2
+            },
+            "cpu_pct@cdcbench-debezium-1": {
+              "median": 2.585,
+              "peak": 2.98,
+              "count": 2
+            },
+            "rss_bytes@cdcbench-debezium-1": {
+              "median": 440716492.79999995,
+              "peak": 441345638.4,
+              "count": 2
+            },
+            "cpu_pct@cdcbench-debezium-2": {
+              "median": 2.4299999999999997,
+              "peak": 2.48,
+              "count": 2
+            },
+            "rss_bytes@cdcbench-debezium-2": {
+              "median": 374551347.20000005,
+              "peak": 374656204.8,
+              "count": 2
+            },
+            "cpu_pct@cdcbench-debezium-3": {
+              "median": 2.3099999999999996,
+              "peak": 2.32,
+              "count": 2
+            },
+            "rss_bytes@cdcbench-debezium-3": {
+              "median": 452145971.2,
+              "peak": 452145971.2,
+              "count": 2
+            }
+          },
+          "peak_dead_tup": null,
+          "median_dead_tup": null,
+          "median_claim_p99_ms": null,
+          "median_producer_p99_ms": null,
+          "median_producer_call_p99_ms": null,
+          "median_subscriber_p99_ms": null,
+          "median_end_to_end_p99_ms": null,
+          "median_throughput_per_s": null,
+          "median_enqueue_rate_per_s": null,
+          "median_queue_depth": null,
+          "median_running_depth": null,
+          "autovacuum_count_delta": null,
+          "pg_wal_bytes_delta": null,
+          "pg_wal_records_delta": null,
+          "pg_wal_fpi_delta": null,
+          "replicas": {}
+        }
+      }
+    }
+  },
+  "cdc_verify": {
+    "source_totals": {
+      "ops": 38995,
+      "txes": 38995,
+      "mode": "ledger",
+      "events_per_tx": 3,
+      "balance_sum_expected": 5000000
+    },
+    "consumers": {
+      "0": {
+        "profile": "fast",
+        "delivered": 116985,
+        "dups": 0,
+        "order_violations": 0,
+        "txs_completed": 38995,
+        "torn_txs_open": 0,
+        "lost_keys": 0,
+        "lost_events": 0,
+        "missed_deletes": 0,
+        "balance_mismatches": 0,
+        "pass": true
+      },
+      "1": {
+        "profile": "fast",
+        "delivered": 116985,
+        "dups": 0,
+        "order_violations": 0,
+        "txs_completed": 38995,
+        "torn_txs_open": 0,
+        "lost_keys": 0,
+        "lost_events": 0,
+        "missed_deletes": 0,
+        "balance_mismatches": 0,
+        "pass": true
+      },
+      "2": {
+        "profile": "fast",
+        "delivered": 116985,
+        "dups": 0,
+        "order_violations": 0,
+        "txs_completed": 38995,
+        "torn_txs_open": 0,
+        "lost_keys": 0,
+        "lost_events": 0,
+        "missed_deletes": 0,
+        "balance_mismatches": 0,
+        "pass": true
+      },
+      "3": {
+        "profile": "fast",
+        "delivered": 116985,
+        "dups": 0,
+        "order_violations": 0,
+        "txs_completed": 38995,
+        "torn_txs_open": 0,
+        "lost_keys": 0,
+        "lost_events": 0,
+        "missed_deletes": 0,
+        "balance_mismatches": 0,
+        "pass": true
+      }
+    },
+    "pass": true
+  }
+}
