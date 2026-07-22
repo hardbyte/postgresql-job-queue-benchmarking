@@ -28,12 +28,17 @@ if [[ ! -f "$RUN_INDEX" ]]; then
 fi
 MASTER_LOG="$RESULTS_ROOT/run.log"
 
-RATE=150
-KEYS=5000
-PROFILES=4xfast
+RATE="${RATE:-150}"
+KEYS="${KEYS:-5000}"
+PROFILES="${PROFILES:-4xfast}"
+# Per-cell timeout (seconds). Must exceed the longest phase list + startup.
+CELL_TIMEOUT="${CELL_TIMEOUT:-900}"
 # Workload shape: events | ledger | outbox. Ledger/outbox exercise the
 # cross-table transaction-integrity + balance-conservation verification.
 MODE="${MODE:-events}"
+# LONG=1 switches to the full-scale phase lists (see phases_for): ~20m
+# steady + ~42m dead-consumer per cell, ≈7h for the 6x2 matrix.
+LONG="${LONG:-0}"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$MASTER_LOG"; }
 
@@ -41,6 +46,18 @@ log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$MASTER_LOG"; }
 # whole matrix fits in ~1h). dead_consumer is the headline insulation cell;
 # fanout_steady is the no-chaos baseline.
 phases_for() {
+  if [[ "$LONG" == "1" ]]; then
+    case "$1" in
+      dead_consumer|tx_integrity)
+        # Heal is deliberately generous: the healed consumer must replay the
+        # whole outage backlog, and catch-up rate is itself a finding.
+        echo "--phase warmup=warmup:2m --phase clean_1=clean:5m --phase dead=consumer-dead(id=1):15m --phase heal=clean:15m --phase drain=recovery:5m" ;;
+      fanout_steady)
+        echo "--phase warmup=warmup:2m --phase clean_1=clean:15m --phase drain=recovery:3m" ;;
+      *) echo "unknown scenario $1" >&2; return 1 ;;
+    esac
+    return 0
+  fi
   case "$1" in
     dead_consumer|tx_integrity)
       echo "--phase warmup=warmup:20s --phase clean_1=clean:60s --phase dead=consumer-dead(id=1):90s --phase heal=clean:60s --phase drain=recovery:30s" ;;
@@ -83,7 +100,7 @@ run_cell() {
   local started; started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   log "START ${cell_id} rate=${RATE} profiles=${PROFILES} ready=${ready}s"
   # shellcheck disable=SC2086
-  timeout --signal=INT 900 uv run cdc \
+  timeout --signal=INT "$CELL_TIMEOUT" uv run cdc \
     --system "$system" \
     --mode "$MODE" \
     $(phases_for "$scenario") \

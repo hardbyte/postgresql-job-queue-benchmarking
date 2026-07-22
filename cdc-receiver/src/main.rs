@@ -450,7 +450,10 @@ fn emit_samples(app: &App, dt: f64, window_s: f64) {
     let mut stdout_lines = Vec::new();
     for (cid, slot) in app.consumers.iter().enumerate() {
         let mut c = slot.lock().unwrap();
-        let mut merged = Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).unwrap();
+        // 2h ceiling: heal-phase replay delivers events whose e2e age is the
+        // whole outage duration; a 60s bound silently dropped them and made
+        // every system's heal p99 saturate at the same ~66s bucket ceiling.
+        let mut merged = Histogram::<u64>::new_with_bounds(1, 7_200_000_000, 3).unwrap();
         for h in &c.ring {
             merged.add(h).ok();
         }
@@ -570,7 +573,7 @@ async fn main() {
                 dups: 0,
                 order_violations: 0,
                 ring: (0..6)
-                    .map(|_| Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).unwrap())
+                    .map(|_| Histogram::<u64>::new_with_bounds(1, 7_200_000_000, 3).unwrap())
                     .collect(),
                 ring_pos: 0,
                 prev_delivered: 0,

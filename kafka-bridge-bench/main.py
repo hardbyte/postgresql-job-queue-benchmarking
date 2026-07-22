@@ -95,6 +95,13 @@ def _consumer_loop(cid: int, bootstrap: str, sink_base: str, topic_pattern: str,
         # pattern subscription discovers the new topic within seconds rather
         # than the 5-minute default.
         metadata_max_age_ms=5000,
+        # A dead consumer blocks in sink retry without polling for the whole
+        # outage; with the 5-minute default max.poll.interval the group
+        # coordinator evicts it and the post-heal offset commit dies with
+        # CommitFailedError (surfaced by the first 15-minute outage cell).
+        # The blocked-in-retry model is the point of the bridge, so allow
+        # outages up to 2h before eviction.
+        max_poll_interval_ms=7_200_000,
     )
     consumer.subscribe(pattern=topic_pattern)
     _log(f"consumer {cid}: subscribed to /{topic_pattern}/")
