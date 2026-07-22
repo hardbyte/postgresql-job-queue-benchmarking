@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Initial CDC sweep: topology/insulation comparison at scaled durations.
 #
-# Holds the workload constant (--profiles 4xfast, one rate) across every
+# Holds the workload constant (one profile set, one rate) across every
 # system so the only moving variable is the capture/insulation topology —
 # slot-per-consumer (pgoutput-raw, debezium-server, supabase-etl) vs buffer
-# (sequin, sequin-grouped). 4xfast sidesteps Debezium Server's per-event
-# POST ceiling (docs/cdc-sut-notes.md) so all arms are directly comparable;
-# a heterogeneous-profile follow-up sweep is the next cut.
+# (sequin, sequin-grouped) vs broker (debezium-kafka). Default is 4xfast;
+# PROFILES=1xfast,2xnormal,1xslow gives the heterogeneous set (viable on
+# debezium-server since the 3.6 HTTP-sink batching, docs/cdc-sut-notes.md).
 #
 # Resumable: each (system, scenario) cell is one `uv run cdc` invocation
 # recorded in run_index.tsv; a cell already present is skipped. Mirrors

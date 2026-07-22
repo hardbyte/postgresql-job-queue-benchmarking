@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # this system with --profiles Nxfast. 3.2.x has batch.enabled but in a
 # quick trial delivered a near-empty stream (~31 events) — needs
 # investigation before bumping the pin.
-DEBEZIUM_IMAGE = os.environ.get("DEBEZIUM_IMAGE", "quay.io/debezium/server:3.1.3.Final")
+DEBEZIUM_IMAGE = os.environ.get("DEBEZIUM_IMAGE", "quay.io/debezium/server:3.6.0.Final")
 
 
 @dataclass
@@ -152,6 +152,12 @@ def _launch_pgoutput_raw(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedPro
 # topology with the same capture engine as the Kafka deployment.
 
 
+def _debezium_snapshot_mode(mode: str) -> str:
+    # Harness vocabulary is never|initial; Debezium 3.6 removed the
+    # deprecated "never" value in favour of "no_data".
+    return "no_data" if mode == "never" else mode
+
+
 def _debezium_env(adapter: CdcAdapter, ctx: LaunchCtx, cid: int) -> dict[str, str]:
     return {
         "DEBEZIUM_SINK_TYPE": "http",
@@ -159,6 +165,13 @@ def _debezium_env(adapter: CdcAdapter, ctx: LaunchCtx, cid: int) -> dict[str, st
         "DEBEZIUM_SINK_HTTP_TIMEOUT_MS": "30000",
         "DEBEZIUM_SINK_HTTP_RETRIES": "2147483647",  # retry forever: chaos phases must not kill the pipeline
         "DEBEZIUM_SINK_HTTP_RETRY_INTERVAL_MS": "500",
+        # Batching (3.6.0.Final+; earlier releases silently ignore these):
+        # body is a JSON array of the serialized events, chunked at max-size,
+        # no time-based holdback. Lifts the per-event-POST throughput cap that
+        # made non-fast profiles undrainable. Property is batch.max-size —
+        # dots AND hyphens both map to '_' in the env name.
+        "DEBEZIUM_SINK_HTTP_BATCH_ENABLED": "true",
+        "DEBEZIUM_SINK_HTTP_BATCH_MAX_SIZE": "200",
         "DEBEZIUM_SOURCE_CONNECTOR_CLASS": "io.debezium.connector.postgresql.PostgresConnector",
         "DEBEZIUM_SOURCE_OFFSET_STORAGE": "org.apache.kafka.connect.storage.FileOffsetBackingStore",
         "DEBEZIUM_SOURCE_OFFSET_STORAGE_FILE_FILENAME": "/debezium/data/offsets.dat",
@@ -174,7 +187,7 @@ def _debezium_env(adapter: CdcAdapter, ctx: LaunchCtx, cid: int) -> dict[str, st
         "DEBEZIUM_SOURCE_PUBLICATION_NAME": "cdc_pub",
         "DEBEZIUM_SOURCE_PUBLICATION_AUTOCREATE_MODE": "disabled",
         "DEBEZIUM_SOURCE_TABLE_INCLUDE_LIST": ",".join(ctx.source_tables),
-        "DEBEZIUM_SOURCE_SNAPSHOT_MODE": ctx.snapshot_mode,
+        "DEBEZIUM_SOURCE_SNAPSHOT_MODE": _debezium_snapshot_mode(ctx.snapshot_mode),
         "DEBEZIUM_SOURCE_TOMBSTONES_ON_DELETE": "false",
         "DEBEZIUM_FORMAT_VALUE": "json",
         "DEBEZIUM_FORMAT_VALUE_SCHEMAS_ENABLE": "false",
@@ -372,7 +385,7 @@ KAFKA_CONNECTOR = "cdc-source"
 KAFKA_SLOT = "dbz_kafka"
 # Pinned to match the compose file and the debezium-server engine version.
 KAFKA_IMAGE = "apache/kafka:3.9.0"
-KAFKA_CONNECT_IMAGE = "quay.io/debezium/connect:3.1.3.Final"
+KAFKA_CONNECT_IMAGE = "quay.io/debezium/connect:3.6.0.Final"
 
 
 def _connect_request(method: str, path: str, body: dict | None = None):
@@ -451,7 +464,7 @@ def _launch_debezium_kafka(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedP
         "slot.name": KAFKA_SLOT,
         "publication.name": "cdc_pub",
         "publication.autocreate.mode": "disabled",
-        "snapshot.mode": ctx.snapshot_mode,
+        "snapshot.mode": _debezium_snapshot_mode(ctx.snapshot_mode),
         "table.include.list": ",".join(ctx.source_tables),
         "tombstones.on.delete": "false",
         "value.converter.schemas.enable": "false",
