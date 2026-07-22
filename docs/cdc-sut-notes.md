@@ -34,6 +34,10 @@ Operational facts gathered 2026-07-17 for the three external systems, so the nex
 - GOTCHA: kafka-python pattern subscription only discovers topics created *after* subscribe if metadata refreshes — set `metadata_max_age_ms=5000` or the bridge sees nothing (Debezium creates the topic on the first row). Also run-scope topic prefix + consumer groups per run (a token) so a rerun can't replay old topic data / resume old offsets. kafka-python 3.0.8 admin API: `list_group_offsets(group)` returns `{group: {TopicPartition: OffsetAndMetadata}}` (not `list_consumer_group_offsets`).
 - FINDING (measured decoupling): in the rerun, source slot peak moved from 2.8 MB clean to 4.1 MB during a dead consumer while offset lag reached 13,365 records; healthy consumers continued. Total sampled RSS across Kafka, Connect, and bridge was about 1.82 GB. This is bounded source retention in this cell, not zero WAL usage.
 
+## Harness status (updated 2026-07-23, session 6)
+
+- Heterogeneous-profile sweep done (`results/cdc-sweep-hetero/`): all six arms × {fanout_steady, dead_consumer} at 150 ev/s with `1xfast,2xnormal,1xslow`, all PASS — enabled by the 3.6 HTTP-sink batching (above). Headline: slot/broker arms give per-consumer latency isolation (each consumer wears its own speed); Sequin's buffer gives a flat 33 ms across all profiles in steady state while remaining the slow-replay/shared-slot outlier under chaos.
+
 ## Harness status (updated 2026-07-20, session 4)
 
 - Broker arm `debezium-kafka` added. All six arms have been smoke-verified manually; automated smoke pytest covers `pgoutput-raw`.
