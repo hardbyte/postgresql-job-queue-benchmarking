@@ -1,68 +1,68 @@
-# CDC SUT integration notes (M2 work-in-progress)
+# CDC SUT integration notes
 
-Operational facts gathered 2026-07-17 for the three external systems, so the next implementation session doesn't re-research. See `docs/cdc-harness-design.md` for the architecture.
+Operational facts and empirically discovered behaviour for the six CDC arms, so future work doesn't re-research them. Architecture and rationale live in `docs/cdc-harness-design.md`; measured findings live in `results/cdc-sweep-*/SUMMARY.md`.
 
-## Debezium Server (implemented: `--system debezium-server`)
+## Debezium Server (`--system debezium-server`)
 
 - Image pinned in `cdc_harness/adapters.py` (`quay.io/debezium/server:3.6.0.Final`, override with `DEBEZIUM_IMAGE`). Env-var config rule: `debezium.sink.type` → `DEBEZIUM_SINK_TYPE` (dots and hyphens → underscores, uppercase).
 - One sink per server → fan-out = one container per consumer, slot per consumer (`dbz_<i>`), distinct `QUARKUS_HTTP_PORT` per instance under host networking.
 - HTTP sink: success = 2xx; retries are `debezium.sink.http.retries` × `retry.interval.ms` (constant), then the server **stops** — we set retries ≈ MAX_INT so chaos phases don't kill the pipeline. Same retry loop applies per batch in batch mode.
-- **RESOLVED (throughput / batching)**: HTTP-sink batching only exists from **3.6.0.Final** (source-verified: absent in 3.1.x–3.5.x `HttpChangeConsumer`; the 3.2.2 trial's `batch.enabled` was silently ignored, so that near-empty-stream result was a red herring). Properties: `debezium.sink.http.batch.enabled` (default false) + `debezium.sink.http.batch.max-size` (**hyphen**, default 200). Batch body = `[` + comma-joined pre-serialized event JSON + `]` — a plain JSON array of Debezium envelopes, already handled by the receiver's `decode_debezium`; chunked at max-size with no time-based holdback (a partial batch flushes with its `handleBatch` call), nulls filtered before batching. Adapter now enables batching, lifting the old per-event-POST cap (1/handling-latency, e.g. 40 ev/s on the 25 ms normal profile) that forced `--profiles Nxfast`. Kafka Connect image bumped to 3.6.0.Final in lockstep so both Debezium arms run the same engine.
-- Delete under REPLICA IDENTITY DEFAULT: `before` has PK only; tombstones disabled via `tombstones.on.delete=false` (otherwise empty-body POSTs follow every delete — decoder acks them anyway).
-- `snapshot.mode=never` streams from current LSN; `publication.autocreate.mode=disabled` (harness pre-creates `cdc_pub`).
+- **Batching requires 3.6.0.Final+** (source-verified: absent in 3.1.x–3.5.x `HttpChangeConsumer`; earlier releases silently ignore the config, which made a 3.2.2 trial look like a near-empty stream). Properties: `debezium.sink.http.batch.enabled` (default false) + `debezium.sink.http.batch.max-size` (**hyphen**, default 200). Batch body = plain JSON array of the serialized envelopes, chunked at max-size, size-flush only (a partial batch flushes with its `handleBatch` call), nulls filtered before batching; the receiver's `decode_debezium` handles it. Batching lifts the old per-event-POST cap (1/handling-latency, e.g. 40 ev/s at a 25 ms profile) that used to force `--profiles Nxfast`.
+- 3.6 removed `snapshot.mode=never`; the adapter maps the harness's `never` → `no_data`.
+- Delete under REPLICA IDENTITY DEFAULT: `before` has PK only; tombstones disabled via `tombstones.on.delete=false` (otherwise empty-body POSTs follow every delete — the decoder acks them anyway).
+- `publication.autocreate.mode=disabled` (harness pre-creates `cdc_pub`).
 
-## Sequin (implemented + smoke-verified: `--system sequin`)
+## Sequin (`--system sequin`, `--system sequin-grouped`)
 
-- Image pinned to `sequin/sequin:v0.14.6` (same digest as `latest` at pin time, 2026-07). Port 7376 (UI/API; readiness = HTTP on it). **Requires Redis** (per-sink cursors live there) + its own config Postgres DB (`PG_HOSTNAME/PG_PORT/PG_DATABASE/PG_USERNAME/PG_PASSWORD`), plus `SECRET_KEY_BASE` (64B b64) and `VAULT_KEY` (32B b64).
-- Declarative config via `CONFIG_FILE_YAML` (base64 inline): `databases:`, one `http_endpoint` and sink per consumer, and `batch_size`. The grouped arm enables `message_grouping`; it is intended to provide per-PK grouping, but measured recovery reordering remained in v0.14.6.
-- **One slot total** regardless of sink count (topology "buffer") — adapter needs a `slots_fn` override instead of `slot_prefix + i`; fan-out cursors are per-sink in Redis.
-- Webhook payload: single `{record, changes, action, metadata}` or batched `{"data": [...]}`; `action` ∈ insert/update/delete/read (read = backfill). Ack = 2xx; retries indefinitely with exp backoff capped ~3 min (good: consumer-dead chaos won't kill it). Receiver's `decode_sequin` already handles both shapes.
-- Sequin's config-DB state tables should join the metrics poll set (design: its buffer growth is the backlog-location metric).
+- Image pinned to `sequin/sequin:v0.14.6`. Port 7376 (UI/API; readiness = HTTP on it). **Requires Redis** (per-sink cursors) + its own config Postgres DB, plus `SECRET_KEY_BASE` (64B b64) and `VAULT_KEY` (32B b64).
+- Declarative config via `CONFIG_FILE_YAML` (base64 inline): `databases:`, one `http_endpoint` and sink per consumer, `batch_size`. YAML gotchas found empirically: sink `batch: true` and `initial_backfill` are **not** valid keys for v0.14.6 (boot fails with "Unknown field"); test any new key before sweeping with it.
+- `VAULT_KEY` must be deterministic across runs: a persisted `sequin_config` DB encrypted under an old key crashes boot. Preflight recreates SUT extra databases each run.
+- Sequin's slot-create call cancels on a short client timeout → preflight pre-creates `sequin_slot`.
+- **One slot total** regardless of sink count (topology "buffer") — the adapter uses a `slots_fn` override instead of `slot_prefix + i`; fan-out cursors are per-sink in Redis.
+- Webhook payload: single `{record, changes, action, metadata}` or batched `{"data": [...]}`; `action` ∈ insert/update/delete/read (read = backfill). Ack = 2xx; retries indefinitely with exp backoff capped ~3 min (consumer-dead chaos won't kill it).
+- **FINDING (recovery reordering).** After a sink outage, Sequin rewinds the sink to its last Redis-persisted cursor and replays pre-outage changes **out of per-key order**: at-least-once with reordering, not loss (`dups == order_violations`, every replayed event `seq <` the key's current seq). The `sequin-grouped` arm enables `message_grouping` (documented as per-PK ordering); measured recovery reordering remained in v0.14.6, so the finding holds for both variants.
+- Backfill/snapshot coverage needs the Management API (YAML `initial_backfill` rejected) — still open.
 
-## Supabase ETL (implemented + smoke-verified: `--system supabase-etl`)
+## Supabase ETL (`--system supabase-etl`)
 
-- Git-only crate: `etl = { git = "https://github.com/supabase/etl", rev = "<pin>" }` (no crates.io release, no tags — pin a commit). tokio 1.47.
-- Pipeline: `Pipeline::new(PipelineConfig{ id, publication_name, pg_connection: PgConnectionConfig{…}, batch: BatchConfig{…}, … }, MemoryStore::new(), destination)`; `start().await` then `wait().await`. **Slot identity derives from pipeline id** (no slot-name field) — orchestrator's `wait_for_slots` needs the derived name or an empty-slots readiness bypass.
-- Custom `Destination` trait is batched with async-result handles: implement `write_events(events, durability, async_result)` (streaming) + `write_table_rows` (initial copy) and signal `async_result.send(Ok(DestinationWriteStatus::Durable))`. Skeleton to copy: `crates/etl/src/test_utils/memory_destination.rs`.
-- Events: `Event::{Begin,Commit,Insert,Update,Delete,…}`, each with `commit_lsn`/`start_lsn`/`tx_ordinal`; rows are positional `Vec<Cell>` (bigint = `Cell::I64`) mapped to names via `ReplicatedTableSchema`. Our destination converts to canonical envelope and POSTs to the receiver (one pipeline per consumer = slot-per-consumer arm).
-- Initial table copy is on by default, publication-driven, no documented off-switch — harmless here because the source table is empty at pipeline start; check `TableSyncCopyConfig` if that changes.
+- Git-only crate: `etl = { git = "https://github.com/supabase/etl", rev = "<pin>" }` (no crates.io release, no tags). tokio 1.47. In-repo binary: `etl-cdc-bench/`.
+- Pipeline: `Pipeline::new(PipelineConfig{...}, MemoryStore::new(), destination)`; one pipeline per consumer = slot-per-consumer arm. **Slot identity derives from pipeline id** (no slot-name field), so orchestrator readiness uses slot *count*, not names.
+- Custom `Destination` trait is batched with async-result handles: `write_events` (streaming) + `write_table_rows` (initial copy), signalling `DestinationWriteStatus::Durable`. Events are positional `Vec<Cell>` mapped to names via `ReplicatedTableSchema`.
+- Concurrent `Pipeline::start()` races on `CREATE SCHEMA etl` — start pipelines sequentially.
+- Each pipeline uses ~2 slots (apply + table sync) and **fails table-sync quietly when the cluster hits max_replication_slots** — preflight drops stale slots on all `*_bench` DBs and the overlay allows 32.
+- Initial table copy is on by default and publication-driven; harmless here because source tables are empty at pipeline start.
 
-## Debezium + Kafka (implemented + smoke-verified: `--system debezium-kafka`)
+## Debezium + Kafka (`--system debezium-kafka`)
 
-- The broker arm: `docker-compose.kafka.yml` runs single-node Kafka (KRaft, `apache/kafka:3.9.0`) + Debezium Kafka Connect (`quay.io/debezium/connect:3.1.3.Final`), host-networked, brought up by the adapter (persists across cells like Postgres). One Debezium PostgresConnector (single slot `dbz_kafka`, one topic per table `<prefix>.<schema>.<table>`) registered via the Connect REST API.
-- Fan-out is at the **consumer layer**: `kafka-bridge-bench/main.py` (kafka-python) runs one consumer group per harness consumer, each reads the table topics and POSTs the Debezium envelopes to the receiver (`--envelope debezium`, same decoder as debezium-server). Blocking retry with no offset commit until acked → a dead consumer's backlog is **Kafka offset lag**, not source WAL.
-- GOTCHA: kafka-python pattern subscription only discovers topics created *after* subscribe if metadata refreshes — set `metadata_max_age_ms=5000` or the bridge sees nothing (Debezium creates the topic on the first row). Also run-scope topic prefix + consumer groups per run (a token) so a rerun can't replay old topic data / resume old offsets. kafka-python 3.0.8 admin API: `list_group_offsets(group)` returns `{group: {TopicPartition: OffsetAndMetadata}}` (not `list_consumer_group_offsets`).
-- FINDING (measured decoupling): in the rerun, source slot peak moved from 2.8 MB clean to 4.1 MB during a dead consumer while offset lag reached 13,365 records; healthy consumers continued. Total sampled RSS across Kafka, Connect, and bridge was about 1.82 GB. This is bounded source retention in this cell, not zero WAL usage.
+- The broker arm: `docker-compose.kafka.yml` runs single-node Kafka (KRaft, `apache/kafka:3.9.0`) + Debezium Kafka Connect (`3.6.0.Final`, kept in lockstep with the server arm's engine), host-networked, brought up by the adapter and persisting across cells. One PostgresConnector (single slot `dbz_kafka`, topic per table) registered via the Connect REST API; the adapter deletes the connector on teardown.
+- Fan-out is at the **consumer layer**: `kafka-bridge-bench/main.py` (kafka-python) runs one consumer group per harness consumer, each reading the table topics and POSTing the Debezium envelopes to the receiver. Blocking retry with no offset commit until acked → a dead consumer's backlog is **Kafka offset lag**, not source WAL; measured sweeps show the source slot staying essentially flat through an outage.
+- kafka-python gotchas: pattern subscription only discovers topics created *after* subscribe when metadata refreshes — set `metadata_max_age_ms=5000` (Debezium creates the topic on the first row). Topic prefix + consumer groups are run-scoped so a rerun can't replay old data. Admin API (3.0.8): `list_group_offsets(group)` returns `{group: {TopicPartition: OffsetAndMetadata}}`.
+- A consumer blocked in sink retry doesn't poll; past `max.poll.interval.ms` (default 5 min) the group coordinator evicts it and the post-heal commit dies with `CommitFailedError` — only surfaces with outages >5 min. The bridge sets `max_poll_interval_ms=2h` because blocked-in-retry is the consumer model under test; it's also a faithful production failure class for naive Kafka consumers.
+- Kafka + Connect persist after a sweep; stop with `docker compose -f docker-compose.kafka.yml down -v`. RSS attribution caveat: the bridge is per-consumer, Kafka/Connect are shared and reported as separate containers.
 
-## Harness status (updated 2026-07-23, session 6)
+## Harness capabilities
 
-- Heterogeneous-profile sweep done (`results/cdc-sweep-hetero/`): all six arms × {fanout_steady, dead_consumer} at 150 ev/s with `1xfast,2xnormal,1xslow`, all PASS — enabled by the 3.6 HTTP-sink batching (above). Headline: slot/broker arms give per-consumer latency isolation (each consumer wears its own speed); Sequin's buffer gives a flat 33 ms across all profiles in steady state while remaining the slow-replay/shared-slot outlier under chaos.
+- Workload modes (`--mode`): `events` (single-table insert/update/delete), `ledger` (cross-table transfers, exactly three replicated rows per application tx, `SUM(balance)` conserved), `outbox` (domain writes + one published outbox row per tx; janitor deletes verified as tombstones).
+- Chaos/stress phases: `consumer-dead`, `consumer-slow`, `sink-outage`, `big-tx(rows=N)` (huge tx into an unpublished ballast table — decode/spill cost without touching the verified stream; 200k rows ≈ 24 MB < the 64 MB `logical_decoding_work_mem`, so spill metrics need the 1M-row variant), `ddl-change` (ADD COLUMN mid-stream), `slot-invalidation(keep=N)` (ALTER SYSTEM WAL cap + all consumers dead; verify-failure is the expected outcome).
+- Snapshot consistency: `--preload N --snapshot-mode initial` (preloaded rows carry tx_id 0); passes on supabase-etl, expected-FAIL on pgoutput-raw (no snapshot support).
+- Resource sampler: cpu/rss per SUT process or container (`subject_kind=container`).
+- Smoke: `uv run --extra dev pytest -m cdc_smoke` (~90 s, pgoutput-raw). Per-system: `uv run cdc --system <name> --scenario smoke --rate 100 --drain-timeout-s 120`. Sweeps: `scripts/cdc_sweep.sh [results_root]` with `MODE`/`SYSTEMS`/`SCENARIOS`/`PROFILES`/`RATE`/`LONG`/`RERUN` env overrides; report via `uv run python scripts/cdc_sweep_report.py results/<dir>`.
 
-## Harness status (updated 2026-07-20, session 4)
+## Verifier principles
 
-- Broker arm `debezium-kafka` added. All six arms have been smoke-verified manually; automated smoke pytest covers `pgoutput-raw`.
+The verifier must be reorder-tolerant for at-least-once systems. Sticky delete tombstones are valid because workload PKs are never reused (a post-delete upsert is provably a reordered redelivery). Transaction groups count distinct `(table, pk)` keys per `tx_id` so stale replays still contribute, and completed tx ids are retained so a partial replay can't reopen a group. The airtight invariants are final-state convergence (exact live-key sequence/balance, tombstone evidence, no unexpected keys) and balance conservation; `missed_deletes` / `torn_txs` / `order_violations` are reordering-sensitive diagnostics, not hard failures. Limits: the source ledger keeps each key's maximum sequence, so a later update can mask a missing intermediate version, and application `tx_id` grouping does not prove atomic CDC visibility.
 
-## Harness status (updated 2026-07-17, second session)
+## Sweep results in-repo
 
-- Registry: `cdc_harness/adapters.py` — `pgoutput-raw`, `debezium-server`, `sequin`, `supabase-etl` all pass the smoke scenario (debezium needs `--profiles Nxfast`, see its known issue above).
-- Sequin gotchas found empirically: sink `batch: true` is not a valid YAML key (use `batch_size` only, `initial_backfill` also rejected); its slot-create call cancels on a short client timeout → preflight pre-creates `sequin_slot`; `VAULT_KEY` must be deterministic because a persisted `sequin_config` DB encrypted under an old key crashes boot (preflight now recreates SUT extra databases each run).
-- **FINDING (recovery reordering).** After a sink outage, Sequin rewinds sink-N to its last Redis-persisted cursor and replays pre-outage changes **out of per-key order** — the healthy consumer stays clean (0 dups) but the dead→healed consumer shows a large redelivery window (~400 events at smoke scale: `dups == order_violations`, every replayed event `seq < ` the key's current seq). This is at-least-once-with-reordering, not loss. It originally tripped the drain check via `missed_deletes`: the receiver's delete branch carries no seq, so a delete replayed **before** its key's earlier upserts got the tombstone cleared by the stale upsert → phantom resurrection. Fixed in the receiver: because no workload reuses a pk, any upsert arriving after a delete is provably a reordered redelivery, so the tombstone now sticks (counted as an out-of-order dup, state unchanged). Sequin now passes smoke with the reordering still fully visible in `order_violations`.
-- **LEVER (per-PK ordering).** Sink option `message_grouping: true` is documented as per-PK ordering; the generated YAML does **not** set it, so the finding above is the default-config behaviour. Whether the sweep should enable it (fairer to Sequin, likely lower throughput from per-key serialization) vs. report the default is a measurement-fairness decision — test that v0.14.6 accepts the key first (`batch: true` and `initial_backfill` were both rejected by this version).
-- Supabase ETL gotchas: concurrent `Pipeline::start()` races on `CREATE SCHEMA etl` (start sequentially); each pipeline uses ~2 slots (apply + table sync) and **fails table-sync quietly when the cluster hits max_replication_slots** — preflight now drops stale slots on all `*_bench` DBs and the overlay allows 32; slot names are pipeline-id-derived so readiness uses slot *count*.
-- M3 phases implemented: `big-tx(rows=N)` (single huge tx into an unpublished ballast table — decode reorder-buffer/spill cost without touching the verified stream) and `ddl-change` (ADD COLUMN mid-stream). Scenarios: `big_transaction`, `ddl_mid_stream`, `smoke_m3`. All four systems survive `smoke_m3` at 200k ballast rows; note 200k ≈ 24 MB < 64 MB `logical_decoding_work_mem`, so spill metrics only trigger at the full 1M-row scenario.
-- Smoke: `uv run --extra dev pytest -m cdc_smoke` (~65 s, pgoutput-raw); per-system: `uv run cdc --system <name> --scenario smoke|smoke_m3 --rate 100 --drain-timeout-s 90`.
-
-## Completed this session (third)
-
-- **Ledger mode** (`--mode ledger`): transfers + account upserts, exactly 3 events/tx, SUM(balance) conserved; receiver verifies per-(table, pk) seq + balance and tracks torn transactions (fresh-events-only counting; tx must close by drain). Passes on pgoutput-raw and supabase-etl with identical streams.
-- **Outbox mode** (`--mode outbox`): same domain writes + outbox row in-tx, publication on outbox only, janitor deletes verified as tombstones. `outbox_vs_wal` = the same rate run under each mode; compare `pg_wal_bytes_delta`/lag/bloat.
-- **Snapshot consistency** (`--preload N --snapshot-mode initial`, scenario `snapshot_consistency`): preloaded rows carry tx_id 0 (excluded from torn-tx tracking); the SUT's snapshot must deliver them all. Passes on supabase-etl; pgoutput-raw has no snapshot support (expected FAIL).
-- **Resource sampler**: cpu_pct/rss_bytes per SUT process (docker stats / /proc), `subject_kind=container`.
-- **`slot-invalidation(keep=N)` phase + scenario**: ALTER SYSTEM cap + all consumers dead; verify-failure is the expected outcome when invalidation hits; machinery validated at smoke scale.
+- `results/cdc-sweep-long/` — full-scale events-mode run, all six arms, 15-minute outage (headline insulation/replay findings).
+- `results/cdc-sweep-hetero/` — mixed consumer speeds (`1xfast,2xnormal,1xslow`), all six arms (latency-insulation findings).
+- `results/cdc-sweep-ledger/` — ledger-mode `tx_integrity` across all six arms (consistency findings).
 
 ## Remaining gaps
 
-- `pgoutput-awa` relay (queue-PG service, awa enqueue/worker glue).
-- Outbox and snapshot coverage across all arms. Sequin needs a Management-API-triggered backfill because its YAML rejected `initial_backfill`.
-- `broker-down`, full-scale 1M-row big transaction, real slot invalidation, and multi-hour fan-out runs.
+- `pgoutput-awa` relay (queue-insulation variant, complementary to the Kafka broker arm).
+- Outbox and snapshot coverage across all arms (Sequin backfill needs the Management API).
+- `broker-down` chaos, full-scale 1M-row big transaction, real slot invalidation at scale, ledger/outbox at long durations.
 - TOAST / `REPLICA IDENTITY FULL` fidelity cells.
+- Insulation-matrix plots.
+- Per-event identities if publication-grade claims ever require detecting missing intermediate versions.

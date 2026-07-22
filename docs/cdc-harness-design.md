@@ -1,6 +1,6 @@
 # CDC benchmarking harness — design
 
-Status: original design proposal. The implementation has diverged in places; use `docs/cdc-handover.md` and the code for current behaviour.
+Status: original design proposal, kept for the framing and rationale. The implementation has diverged in places; the README's CDC section and `docs/cdc-sut-notes.md` describe current behaviour.
 
 A sibling harness to the job-queue bench for comparing **PostgreSQL change-data-capture pipelines** under realistic, long-horizon workloads.
 
