@@ -140,6 +140,10 @@ loadgen ──SQL──▶ Postgres ──WAL──▶ capture ──▶ [insula
 
 Full write-ups: [full-scale events sweep](results/cdc-sweep-long/SUMMARY.md) (15-minute outage) · [heterogeneous-profile sweep](results/cdc-sweep-hetero/SUMMARY.md) (mixed consumer speeds) · [ledger consistency sweep](results/cdc-sweep-ledger/REPORT.md).
 
+![Where a dead consumer's backlog lives: retained WAL per arm, Kafka offset lag below](results/cdc-sweep-long/plots/backlog_location.png)
+
+![Per-consumer latency with a mixed fleet: slot/broker arms price each consumer individually; Sequin's buffer is flat](results/cdc-sweep-hetero/plots/profile_latency.png)
+
 **Correctness:** every sweep cell passes ledger verification — zero lost events on every consumer of every system, through 15-minute consumer outages, for all six arms. Cross-table transaction integrity and balance conservation hold everywhere. The one behavioural difference: Sequin replays a recovered consumer's backlog out of per-key order (tens of thousands of reordered redeliveries; `message_grouping` didn't change it in v0.14.6) — at-least-once with reordering, where every other arm recovers with zero duplicates and zero reordering.
 
 **Where a dead consumer's backlog lives** (15-minute outage at 200 events/s):

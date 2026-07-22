@@ -17,6 +17,8 @@ Clean-phase median rolling p99 per consumer, ms:
 | debezium-server | 850 | 961 | 967 | 1181 |
 | debezium-kafka | 957 | 957 | 958 | 1074 |
 
+![Per-consumer latency by profile and system](plots/profile_latency.png)
+
 Two distinct insulation behaviours, and they are the mirror image of the WAL-retention story:
 
 - **Slot-per-consumer and broker arms: each consumer wears its own speed.** The slow consumer's p99 sits at roughly one 250 ms handling cycle of queueing (267/273 ms on the light arms), while the fast consumer is untouched — 65 ms on pgoutput-raw and 25 ms on supabase-etl, essentially identical to the all-fast long sweep. Latency isolation between consumers holds.
@@ -49,6 +51,8 @@ Healed-consumer catch-up to a healthy peer after the 90 s outage (~13.5k-event b
 | debezium-server | 1.5k/s | ~5 s |
 | sequin | 648/s | **~70 s** (past the 60 s heal, into drain) |
 | sequin-grouped | 786/s | **~70 s** |
+
+![Healed consumer's delivery deficit vs a healthy peer](plots/replay_catchup.png)
 
 Same ordering as the 15-minute-outage long sweep: slot and broker arms replay in seconds, Sequin's buffer replays at a fraction of the others' rate and outlives the heal phase. The healed Sequin consumer again replayed with ~3.9k out-of-order redeliveries (both variants); zero duplicates and zero reordering on every other arm.
 
