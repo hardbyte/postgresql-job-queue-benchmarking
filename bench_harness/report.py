@@ -35,6 +35,11 @@ DEFAULT_TIMELINE_METRICS = [
     "scheduled_depth",
     "total_backlog",
     "n_dead_tup",
+    # Idle background-cost (cluster-scoped). Surfaced so the
+    # idle_background_cost scenario's headline signals are explorable.
+    "pg_wal_bytes",
+    "relfilenode_churn_total",
+    "pg_db_xacts_total",
 ]
 
 DEFAULT_PHASE_FILTER = "steady"
@@ -56,6 +61,9 @@ METRIC_LABELS = {
     "scheduled_depth": "Scheduled backlog",
     "total_backlog": "Total backlog",
     "n_dead_tup": "Dead tuples",
+    "pg_wal_bytes": "WAL bytes (cumulative)",
+    "relfilenode_churn_total": "Relfilenode churn (cumulative TRUNCATE/rewrite)",
+    "pg_db_xacts_total": "Background transactions (cumulative)",
 }
 
 TIMELINE_PRESETS = [
@@ -77,6 +85,8 @@ PLOT_ORDER = [
     "dead_tuples",
     "dead_tuples_faceted",
     "table_size",
+    "wal_bytes",
+    "relfilenode_churn",
     # Wait-event histogram per system (clean phase). Only rendered if any
     # wait-event rows landed in raw.csv; the report's existence-check on
     # the SVG file means this naturally degrades when --no-wait-events

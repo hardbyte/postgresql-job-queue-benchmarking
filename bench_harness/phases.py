@@ -18,6 +18,11 @@ class PhaseType(str, Enum):
     WARMUP = "warmup"
     CLEAN = "clean"
     IDLE_IN_TX = "idle-in-tx"
+    # Near-zero offered load with the worker/maintenance runtime still
+    # running — measures the queue engine's OWN background cost (WAL,
+    # destructive-DDL churn, background xacts). Distinct from idle-in-tx,
+    # which holds a transaction open to pin the vacuum horizon under load.
+    IDLE_BACKGROUND = "idle-background"
     RECOVERY = "recovery"
     ACTIVE_READERS = "active-readers"
     HIGH_LOAD = "high-load"
@@ -37,6 +42,7 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.WARMUP:          ("#D0D0D0", 0.40),
     PhaseType.CLEAN:           ("#B8B8B8", 0.35),
     PhaseType.IDLE_IN_TX:      ("#D46A6A", 0.30),
+    PhaseType.IDLE_BACKGROUND: ("#6C8EBF", 0.25),
     PhaseType.RECOVERY:        ("#DCDCDC", 0.30),
     PhaseType.ACTIVE_READERS:  ("#E0B66C", 0.30),
     PhaseType.HIGH_LOAD:       ("#A378C8", 0.30),
@@ -57,6 +63,7 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.WARMUP:          False,
     PhaseType.CLEAN:           True,
     PhaseType.IDLE_IN_TX:      True,
+    PhaseType.IDLE_BACKGROUND: True,
     PhaseType.RECOVERY:        True,
     PhaseType.ACTIVE_READERS:  True,
     PhaseType.HIGH_LOAD:       True,
@@ -196,6 +203,16 @@ def parse_phase_spec(spec: str) -> Phase:
 
 # Named scenarios desugar into explicit phase lists.
 SCENARIOS: dict[str, list[str]] = {
+    # Idle / low-throughput background cost. Invoke with --producer-rate 0
+    # (or a small trickle): the worker/maintenance runtime keeps ticking
+    # while ~no jobs are offered, so the Postgres-side metrics (WAL bytes/s,
+    # relfilenode/TRUNCATE churn, background xacts) isolate the queue
+    # engine's own maintenance cost. Contrast idle_in_tx_saturation, which
+    # pins the xmin horizon under load.
+    "idle_background_cost": [
+        "warmup=warmup:2m",
+        "idle_1=idle-background:60m",
+    ],
     "idle_in_tx_saturation": [
         "warmup=warmup:10m",
         "clean_1=clean:60m",

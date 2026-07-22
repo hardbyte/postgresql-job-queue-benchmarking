@@ -30,8 +30,9 @@ from . import adapters as adapters_mod
 from . import writers as writers_mod
 from .adapters import (
     ADAPTERS,
-    DEFAULT_PG_IMAGE,
+    DEFAULT_ENGINE,
     DEFAULT_SYSTEMS,
+    ENGINES,
     AdapterEntry,
     AdapterManifest,
     pg_url,
@@ -110,25 +111,33 @@ def _compose_env(pg_image: str) -> dict[str, str]:
     return {"POSTGRES_IMAGE": pg_image}
 
 
-def start_postgres(pg_image: str) -> None:
+def _compose_prefix(engine: str) -> list[str]:
+    """`docker compose` argv prefix for an engine.
+
+    For the default engine (no override) we emit a bare ``docker compose``
+    so the implicit ``docker-compose.override.yml`` auto-merge is preserved
+    (the tuning-matrix workflow relies on it). For an engine with an
+    override we pass explicit ``-f`` files — which also disables the
+    implicit merge, giving a reproducible, engine-pinned compose project.
+    """
+    override = ENGINES[engine].compose_override if engine in ENGINES else None
+    if override is None:
+        return ["docker", "compose"]
+    return ["docker", "compose", "-f", "docker-compose.yml", "-f", override]
+
+
+def start_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
+    prefix = _compose_prefix(engine)
     _run_cmd(
-        ["docker", "compose", "up", "-d", "--wait"],
+        [*prefix, "up", "-d", "--wait"],
         cwd=SCRIPT_DIR,
         env=_compose_env(pg_image),
     )
-    # Readiness probe
-    for _ in range(30):
+    # Readiness probe. Omni initdb + engine bring-up is slower than the
+    # alpine image, so allow a generous window.
+    for _ in range(60):
         r = subprocess.run(
-            [
-                "docker",
-                "compose",
-                "exec",
-                "-T",
-                "postgres",
-                "pg_isready",
-                "-U",
-                "bench",
-            ],
+            [*prefix, "exec", "-T", "postgres", "pg_isready", "-U", "bench"],
             cwd=str(SCRIPT_DIR),
             env={**os.environ, **_compose_env(pg_image)},
             capture_output=True,
@@ -155,36 +164,34 @@ def start_postgres(pg_image: str) -> None:
     )
 
 
-def _compose_stop_postgres(pg_image: str) -> None:
+def _compose_stop_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
     """Stop (but don't remove) the postgres container — used by the
     `postgres-restart` chaos phase to take PG down mid-run without
     blowing away the volume the system-under-test is talking to."""
     _run_cmd(
-        ["docker", "compose", "stop", "postgres"],
+        [*_compose_prefix(engine), "stop", "postgres"],
         cwd=SCRIPT_DIR,
         env=_compose_env(pg_image),
         check=False,
     )
 
 
-def _compose_start_postgres(pg_image: str) -> None:
+def _compose_start_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
     """Start the existing postgres container and wait for readiness.
 
     Re-uses the same readiness probe as ``start_postgres`` so callers
     that bring PG back up after a chaos `stop` get the same guarantees
     (pg_isready + a real SELECT 1 round-trip).
     """
+    prefix = _compose_prefix(engine)
     _run_cmd(
-        ["docker", "compose", "start", "postgres"],
+        [*prefix, "start", "postgres"],
         cwd=SCRIPT_DIR,
         env=_compose_env(pg_image),
     )
     for _ in range(60):
         r = subprocess.run(
-            [
-                "docker", "compose", "exec", "-T", "postgres",
-                "pg_isready", "-U", "bench",
-            ],
+            [*prefix, "exec", "-T", "postgres", "pg_isready", "-U", "bench"],
             cwd=str(SCRIPT_DIR),
             env={**os.environ, **_compose_env(pg_image)},
             capture_output=True,
@@ -210,20 +217,20 @@ def _compose_start_postgres(pg_image: str) -> None:
     )
 
 
-def _restart_postgres(pg_image: str) -> None:
+def _restart_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
     """Stop + start the postgres container. Bound into runtime.state by
     the orchestrator so the postgres-restart phase hook doesn't need to
     know about compose at all."""
-    _compose_stop_postgres(pg_image)
-    _compose_start_postgres(pg_image)
+    _compose_stop_postgres(pg_image, engine)
+    _compose_start_postgres(pg_image, engine)
 
 
-def stop_postgres(pg_image: str) -> None:
+def stop_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
     if os.environ.get("KEEP_DB"):
         print("[harness] KEEP_DB set — leaving postgres running for inspection")
         return
     _run_cmd(
-        ["docker", "compose", "down", "-v"],
+        [*_compose_prefix(engine), "down", "-v"],
         cwd=SCRIPT_DIR,
         env=_compose_env(pg_image),
         check=False,
@@ -660,6 +667,7 @@ def run_one_system(
     *,
     phases: list[Phase],
     pg_image: str,
+    engine: str = DEFAULT_ENGINE,
     fast: bool,
     run_id: str,
     out_queue: "queue.Queue[Sample]",
@@ -690,8 +698,8 @@ def run_one_system(
 
     # Sequential per-system fresh-PG isolation is the default.
     if not fast:
-        stop_postgres(pg_image)
-        start_postgres(pg_image)
+        stop_postgres(pg_image, engine)
+        start_postgres(pg_image, engine)
 
     preflight_database(manifest, recreate=fast)
 
@@ -785,9 +793,9 @@ def run_one_system(
         # restart) and know where to wait afterwards. Stash a no-arg
         # restart callback + URL probe instead of leaking compose
         # internals into the hooks module.
-        "postgres_restart_fn": lambda: _restart_postgres(pg_image),
-        "postgres_stop_fn": lambda: _compose_stop_postgres(pg_image),
-        "postgres_start_fn": lambda: _compose_start_postgres(pg_image),
+        "postgres_restart_fn": lambda: _restart_postgres(pg_image, engine),
+        "postgres_stop_fn": lambda: _compose_stop_postgres(pg_image, engine),
+        "postgres_start_fn": lambda: _compose_start_postgres(pg_image, engine),
         "admin_database_url": pg_url("postgres"),
         "system_database_url": pg_url(manifest.db_name),
         "system_database_name": manifest.db_name,
@@ -871,10 +879,15 @@ def _sleep_or_abort(seconds: float, pool: ReplicaPool) -> None:
 # ────────────────────────────────────────────────────────────────────────
 
 
-def _new_run_dir(scenario: str | None) -> Path:
+def _new_run_dir(scenario: str | None, engine: str = DEFAULT_ENGINE) -> Path:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short_id = uuid.uuid4().hex[:6]
-    name = f"{scenario or 'custom'}-{ts}-{short_id}"
+    # Fold a non-default engine into the run-id so an Omni run is never
+    # confused with a postgres run. Gated on non-default so the postgres
+    # `custom-…` / `<scenario>-…` prefix stays byte-identical and existing
+    # tooling regexes (scripts/run_full_sweep.sh) keep matching.
+    engine_tag = "" if engine == DEFAULT_ENGINE else f"-{engine}"
+    name = f"{scenario or 'custom'}{engine_tag}-{ts}-{short_id}"
     run_dir = RESULTS_ROOT / name
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -886,6 +899,7 @@ def drive(
     scenario: str | None,
     phases: list[Phase],
     pg_image: str,
+    engine: str = DEFAULT_ENGINE,
     fast: bool,
     skip_build: bool,
     sample_every_s: int,
@@ -904,7 +918,7 @@ def drive(
     if unknown:
         raise SystemExit(f"Unknown systems: {unknown}. Known: {sorted(ADAPTERS)}")
 
-    run_dir = _new_run_dir(scenario)
+    run_dir = _new_run_dir(scenario, engine)
     run_id = run_dir.name
     print(f"[harness] run_id = {run_id}", file=sys.stderr)
     raw_csv = run_dir / "raw.csv"
@@ -927,7 +941,7 @@ def drive(
     try:
         # Start PG once upfront (needed for the initial build phase to connect;
         # also the --fast path keeps this same instance across systems).
-        start_postgres(pg_image)
+        start_postgres(pg_image, engine)
 
         if not skip_build:
             for system in systems:
@@ -965,6 +979,7 @@ def drive(
                     s: adapter_descriptors[s] for s in completed_systems
                 },
                 pg_image=pg_image,
+                engine=engine,
             )
             if pg_env_snapshot:
                 ckpt_manifest["postgres"] = pg_env_snapshot
@@ -981,6 +996,7 @@ def drive(
                 system,
                 phases=phases,
                 pg_image=pg_image,
+                engine=engine,
                 fast=fast,
                 run_id=run_id,
                 out_queue=out_queue,
@@ -1023,7 +1039,7 @@ def drive(
         drain_stop.set()
         drain_thread.join(timeout=10)
         writer.close()
-        stop_postgres(pg_image)
+        stop_postgres(pg_image, engine)
 
     # Final post-processing outputs. Recompute against the full
     # `completed` list to pick up any drain-loop samples that landed
@@ -1097,9 +1113,18 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "because it duplicates the awa-native line in cross-system plots.",
     )
     parser.add_argument(
+        "--engine",
+        default=DEFAULT_ENGINE,
+        choices=sorted(ENGINES),
+        help="Storage engine to benchmark on (default: postgres). "
+        "'alloydb-omni' runs the same major on AlloyDB Omni via a compose "
+        "override that preserves the columnar/storage engine preload.",
+    )
+    parser.add_argument(
         "--pg-image",
-        default=DEFAULT_PG_IMAGE,
-        help="Pinned Postgres image. Do not track a moving major tag.",
+        default=None,
+        help="Override the engine's default Postgres image. Do not track a "
+        "moving major tag. Defaults to the selected --engine's image.",
     )
     parser.add_argument(
         "--fast",
@@ -1259,6 +1284,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         scenario=config.scenario,
         phases=phases,
         pg_image=config.pg_image,
+        engine=config.engine,
         fast=config.fast,
         skip_build=config.skip_build,
         sample_every_s=config.sample_every,

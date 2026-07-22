@@ -26,7 +26,40 @@ REPO_ROOT = SCRIPT_DIR
 PG_PORT = 15555
 PG_USER = "bench"
 PG_PASS = "bench"
-DEFAULT_PG_IMAGE = "postgres:18.3-alpine"
+
+
+@dataclass(frozen=True)
+class Engine:
+    """A Postgres-compatible storage engine the harness can benchmark on.
+
+    ``image`` is the container image; ``compose_override`` is an optional
+    repo-root-relative compose file merged via ``-f`` only for this engine
+    (so the default postgres run keeps the implicit
+    ``docker-compose.override.yml`` auto-merge behaviour).
+    """
+
+    image: str
+    compose_override: str | None = None
+
+
+# Engine registry. The default is stock Postgres; AlloyDB Omni is the same
+# major (18.3) but a different storage engine — its relation-file lifecycle
+# (TRUNCATE/relfilenode churn) is materially costlier, which the
+# idle_background_cost scenario is designed to surface. Omni needs a compose
+# override because the base compose `command` pins `config_file=`, which would
+# otherwise bypass Omni's generated `shared_preload_libraries` and silently
+# disable its engine. The preload list was captured from the stock image
+# (`SHOW shared_preload_libraries`).
+ENGINES: dict[str, "Engine"] = {
+    "postgres": Engine(image="postgres:18.3-alpine"),
+    "alloydb-omni": Engine(
+        image="gcr.io/alloydb-omni/alloydbomni:18.3",
+        compose_override="docker-compose.omni.override.yml",
+    ),
+}
+DEFAULT_ENGINE = "postgres"
+# Preserved name: several modules import DEFAULT_PG_IMAGE directly.
+DEFAULT_PG_IMAGE = ENGINES[DEFAULT_ENGINE].image
 
 
 def pg_url(dbname: str, host: str = "localhost") -> str:

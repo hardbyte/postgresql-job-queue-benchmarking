@@ -546,6 +546,38 @@ def compute_summary(
                 phase_label=phase_label,
                 metric="pg_wal_fpi",
             )
+            # Idle background-cost rates. Normalize the monotonic-counter
+            # deltas by the phase duration so WAL/DDL/xact cost is comparable
+            # across engines and queues regardless of phase length. These are
+            # the headline numbers for the idle_background_cost scenario.
+            _phase = phase_by_label.get(phase_label)
+            _dur = float(_phase.duration_s) if _phase is not None else 0.0
+            _wal_delta = phase_block["pg_wal_bytes_delta"]
+            phase_block["pg_wal_bytes_per_s"] = (
+                _wal_delta / _dur
+                if (_wal_delta is not None and _dur > 0)
+                else None
+            )
+            phase_block["relfilenode_churn_delta"] = _cluster_counter_delta(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="relfilenode_churn_total",
+            )
+            _churn = phase_block["relfilenode_churn_delta"]
+            phase_block["relfilenode_churn_per_s"] = (
+                _churn / _dur if (_churn is not None and _dur > 0) else None
+            )
+            phase_block["pg_db_xacts_delta"] = _cluster_counter_delta(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_db_xacts_total",
+            )
+            _xacts = phase_block["pg_db_xacts_delta"]
+            phase_block["pg_db_xacts_per_s"] = (
+                _xacts / _dur if (_xacts is not None and _dur > 0) else None
+            )
             phase_block["replicas"] = replicas
             wait = _wait_event_summary(
                 rows, system=system, phase_label=phase_label
@@ -963,6 +995,10 @@ def capture_pg_env(database_url: str) -> dict:
         "max_connections",
         "synchronous_commit",
         "wal_level",
+        # The single check that proves a non-postgres engine (e.g. AlloyDB
+        # Omni) actually loaded its engine libs rather than running as
+        # plain Postgres in an engine-tagged image.
+        "shared_preload_libraries",
     ]
     try:
         with psycopg.connect(database_url, autocommit=True) as conn:
@@ -1015,6 +1051,7 @@ def build_manifest(
     cli_args: list[str],
     adapter_versions: dict[str, dict],
     pg_image: str,
+    engine: str = "postgres",
 ) -> dict:
     return {
         "run_id": run_id,
@@ -1026,6 +1063,7 @@ def build_manifest(
             {"label": p.label, "type": p.type.value, "duration_s": p.duration_s}
             for p in phases
         ],
+        "engine": engine,
         "pg_image": pg_image,
         "postgres": capture_pg_env(database_url) if database_url else None,
         "host": capture_host_env(),

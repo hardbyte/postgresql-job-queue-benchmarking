@@ -101,6 +101,32 @@ SELECT
 FROM pg_stat_wal
 """
 
+# Per-relation on-disk file identity. A change to relfilenode between ticks is
+# the exact signature of a non-concurrent TRUNCATE / VACUUM FULL / CLUSTER /
+# REINDEX / rewriting ALTER — i.e. the destructive DDL an idle queue's segment
+# reclaim leans on. Diffing this needs no extension (unlike pg_stat_statements,
+# which is not preloaded here), so it works uniformly across every engine.
+_RELFILENODE_SQL = """
+SELECT n.nspname || '.' || c.relname AS relation, c.relfilenode::text
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'i', 't', 'm')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+  AND c.relfilenode <> 0
+"""
+
+# Per-database transaction / tuple churn. With offered load driven to zero,
+# this measures how chatty each engine's background loop is (leader election,
+# heartbeat, ring rotation, archive sweeps). Built-in view, no extension.
+_PG_STAT_DATABASE_SQL = """
+SELECT
+  (xact_commit + xact_rollback)::double precision AS xacts,
+  tup_updated::double precision,
+  tup_deleted::double precision
+FROM pg_stat_database
+WHERE datname = current_database()
+"""
+
 _ACTIVE_XACT_SQL = """
 SELECT
   pid,
@@ -211,6 +237,11 @@ class MetricsDaemon(threading.Thread):
         # aggregations key on exact elapsed_s equality.
         self._tick_elapsed_s: float | None = None
         self._tick_sampled_at: str | None = None
+        # Relfilenode-churn tracking. Lives for the whole run (per-system
+        # daemon), so relfilenode_churn_total is monotonic across phases and
+        # its per-phase delta drops out of the existing counter-delta path.
+        self._relfilenode_prev: dict[str, str] = {}
+        self._relfilenode_churn_total = 0
 
     # ── one-shot boundary snapshots ─────────────────────────────────────
     def phase_boundary_snapshot(self) -> None:
@@ -512,6 +543,57 @@ class MetricsDaemon(threading.Thread):
                     subject="",
                     metric="pg_wal_bytes",
                     value=float(wal_bytes),
+                )
+
+            # Relfilenode churn: diff this tick's file identities against the
+            # previous tick and accumulate the number of relations that were
+            # swapped (TRUNCATE / VACUUM FULL / REINDEX / rewrite). Emitted as
+            # a monotonic cluster counter so the per-phase delta and rate fall
+            # out of the standard counter-delta aggregation.
+            try:
+                cur.execute(_RELFILENODE_SQL)
+                current = {rel: node for rel, node in cur.fetchall()}
+            except psycopg.Error:
+                current = None
+            if current is not None:
+                if self._relfilenode_prev:
+                    for rel, node in current.items():
+                        prev = self._relfilenode_prev.get(rel)
+                        if prev is not None and prev != node:
+                            self._relfilenode_churn_total += 1
+                self._relfilenode_prev = current
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="relfilenode_churn_total",
+                    value=float(self._relfilenode_churn_total),
+                )
+
+            # Per-database transaction / tuple churn (background chattiness).
+            try:
+                cur.execute(_PG_STAT_DATABASE_SQL)
+                row = cur.fetchone()
+            except psycopg.Error:
+                row = None
+            if row is not None:
+                db_xacts, db_tup_updated, db_tup_deleted = row
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_db_xacts_total",
+                    value=float(db_xacts),
+                )
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_db_tup_updated_total",
+                    value=float(db_tup_updated),
+                )
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_db_tup_deleted_total",
+                    value=float(db_tup_deleted),
                 )
 
             try:
