@@ -418,7 +418,7 @@ fn build_batch_params(
             insert::params_with(
                 &args,
                 awa_model::InsertOpts {
-                    queue: queue_name.clone().into(),
+                    queue: queue_name.clone(),
                     priority,
                     max_attempts,
                     ..Default::default()
