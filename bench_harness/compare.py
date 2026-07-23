@@ -69,6 +69,25 @@ def render(summary: dict, out_path: Path, *, phase: str = "clean_1") -> None:
     if not systems:
         raise SystemExit("summary has no systems")
 
+    # Fall back to the first summarized phase when the requested label isn't
+    # in this run. Scenarios name their measurement phase differently
+    # (idle_background_cost summarizes `idle_1`, the CLI default is
+    # `clean_1`); without this, the whole comparison renders empty cells
+    # unless the caller remembers --phase.
+    available = [
+        p["label"] for p in summary.get("phases", [])
+        if any(
+            p.get("label") in summary["systems"][s].get("phases", {})
+            for s in systems
+        )
+    ]
+    if phase not in available and available:
+        print(
+            f"[compare] phase {phase!r} not in this run; using {available[0]!r}",
+            file=sys.stderr,
+        )
+        phase = available[0]
+
     lines: list[str] = []
     lines.append("# Cross-System Comparison")
     lines.append("")
@@ -140,6 +159,51 @@ def render(summary: dict, out_path: Path, *, phase: str = "clean_1") -> None:
     for sys_name in systems:
         med, peak = _system_dead_tuple_total(summary["systems"][sys_name], phase)
         lines.append(f"| {sys_name} | {med:,} | {peak:,} |")
+    lines.append("")
+
+    # Idle background cost. Most meaningful for the idle_background_cost
+    # scenario (run at --producer-rate 0), where these isolate each engine's
+    # own maintenance cost. The fields live directly on the phase block
+    # (see writers.compute_summary), not under "metrics".
+    def _phase_block(sys_name: str) -> dict:
+        return summary["systems"][sys_name].get("phases", {}).get(phase, {})
+
+    def _fmt_rate(v: Any) -> str:
+        if v is None:
+            return "—"
+        if isinstance(v, (int, float)):
+            if abs(v) >= 1000:
+                return f"{v:,.0f}"
+            return f"{v:,.3f}"
+        return str(v)
+
+    lines.append("## Idle background cost")
+    lines.append("")
+    lines.append(
+        "Postgres-side cost of each engine's background runtime over `"
+        f"{phase}`, normalized per second. Most meaningful for the "
+        "`idle_background_cost` scenario (offered load driven to zero): "
+        "these isolate the queue's own maintenance chatter. "
+        "**Relfilenode churn/s** counts on-disk file swaps — the signature "
+        "of `TRUNCATE` / `VACUUM FULL` / `REINDEX` / rewrite; a queue that "
+        "reclaims by re-truncating idle segments shows a non-zero rate here. "
+        "Background xacts include a small constant harness floor — one "
+        "transaction per metrics tick plus ~1/s from the wait-event sampler "
+        "— identical for every system, so cross-system deltas are clean."
+    )
+    lines.append("")
+    lines.append(
+        "| System | WAL bytes/s | Relfilenode churn/s | Background xacts/s |"
+    )
+    lines.append("|---|---:|---:|---:|")
+    for sys_name in systems:
+        pb = _phase_block(sys_name)
+        lines.append(
+            f"| {sys_name} "
+            f"| {_fmt_rate(pb.get('pg_wal_bytes_per_s'))} "
+            f"| {_fmt_rate(pb.get('relfilenode_churn_per_s'))} "
+            f"| {_fmt_rate(pb.get('pg_db_xacts_per_s'))} |"
+        )
     lines.append("")
 
     # Caveats.

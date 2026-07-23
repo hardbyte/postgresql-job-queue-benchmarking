@@ -96,6 +96,23 @@ PLOT_SPECS: dict[str, PlotSpec] = {
         use_raw_underlay=True,
         subject_kind="table",
     ),
+    # Idle background-cost signals (cluster-scoped, single subject).
+    "pg_wal_bytes": PlotSpec(
+        title="WAL bytes (cumulative)",
+        filename_stem="wal_bytes",
+        y_label="pg_stat_wal.wal_bytes (cumulative)",
+        use_raw_underlay=True,
+        subject_kind="cluster",
+        sum_by_subject=False,
+    ),
+    "relfilenode_churn_total": PlotSpec(
+        title="Relfilenode churn (cumulative TRUNCATE/rewrite)",
+        filename_stem="relfilenode_churn",
+        y_label="relfilenode changes (cumulative)",
+        use_raw_underlay=True,
+        subject_kind="cluster",
+        sum_by_subject=False,
+    ),
     "claim_p99_ms": PlotSpec(
         title="Claim p99 latency",
         filename_stem="claim_p99",

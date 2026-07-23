@@ -1,0 +1,31 @@
+# AlloyDB Omni engine override. Merged via `-f` ONLY for `--engine alloydb-omni`
+# (see bench_harness/adapters.py ENGINES); it is deliberately NOT named
+# docker-compose.override.yml so it cannot leak into stock-postgres runs.
+#
+# Why the explicit shared_preload_libraries: the base docker-compose.yml pins
+# `command: postgres -c config_file=/etc/postgresql/postgresql.conf`, which
+# makes the server read the harness's postgres.conf as its base config instead
+# of Omni's generated one — bypassing Omni's preload line and silently
+# disabling the columnar/storage engine (you'd benchmark plain PG in an Omni
+# tag). postgres.conf sets no shared_preload_libraries, so re-adding it here on
+# the command line wins cleanly while keeping postgres.conf byte-identical
+# across engines (fair-comparison GUCs preserved). The list was captured from
+# the stock image via `SHOW shared_preload_libraries`.
+# The env-substituted image keeps `--pg-image` working on this engine (the
+# harness always sets POSTGRES_IMAGE, resolved from --engine unless
+# overridden); a literal image here would win the compose merge over the base
+# file's ${POSTGRES_IMAGE} and silently ignore the flag.
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-gcr.io/alloydb-omni/alloydbomni:18.3}
+    command:
+      - "postgres"
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "shared_preload_libraries=g_stats,google_columnar_engine,google_job_scheduler,google_ml_integration,google_storage"
+    deploy:
+      resources:
+        limits:
+          # Omni's engine is heavier than postgres:alpine; 8G can be tight.
+          memory: 12G

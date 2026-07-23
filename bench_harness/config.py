@@ -22,7 +22,7 @@ from pydantic import (
     model_validator,
 )
 
-from .adapters import ADAPTERS, DEFAULT_PG_IMAGE
+from .adapters import ADAPTERS, DEFAULT_ENGINE, DEFAULT_PG_IMAGE, ENGINES
 from .phases import Phase, SCENARIOS, resolve_scenario
 
 
@@ -46,6 +46,7 @@ class CliConfig(BaseModel):
     systems: list[str]
 
     # ── Environment ────────────────────────────────────────────────────
+    engine: str = DEFAULT_ENGINE
     pg_image: str = DEFAULT_PG_IMAGE
     fast: bool = False
     skip_build: bool = False
@@ -74,6 +75,14 @@ class CliConfig(BaseModel):
     # (< 0.1% of one core at 1 s cadence). See bench_harness/wait_events.py.
     wait_events: bool = True
     wait_event_sample_every: Annotated[float, Field(gt=0.0)] = 1.0
+
+    @field_validator("engine")
+    @classmethod
+    def _engine_must_be_known(cls, v: str) -> str:
+        if v in ENGINES:
+            return v
+        known = ", ".join(sorted(ENGINES))
+        raise ValueError(f"unknown engine {v!r}; known: {known}")
 
     @field_validator("scenario")
     @classmethod
@@ -124,11 +133,17 @@ class CliConfig(BaseModel):
     def from_namespace(cls, args: argparse.Namespace) -> "CliConfig":
         """Build from argparse output. Maps flag names to model fields."""
         systems = [s.strip() for s in args.systems.split(",") if s.strip()]
+        engine = getattr(args, "engine", DEFAULT_ENGINE)
+        # --pg-image (default None) overrides the engine's default image;
+        # otherwise take the selected engine's image.
+        engine_default_image = ENGINES[engine].image if engine in ENGINES else DEFAULT_PG_IMAGE
+        pg_image = getattr(args, "pg_image", None) or engine_default_image
         return cls(
             scenario=args.scenario,
             phase_specs=list(args.phase or []),
             systems=systems,
-            pg_image=args.pg_image,
+            engine=engine,
+            pg_image=pg_image,
             fast=args.fast,
             skip_build=args.skip_build,
             sample_every=args.sample_every,

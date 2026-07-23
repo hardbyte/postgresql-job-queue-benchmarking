@@ -546,6 +546,42 @@ def compute_summary(
                 phase_label=phase_label,
                 metric="pg_wal_fpi",
             )
+            # Idle background-cost rates. Normalize the monotonic-counter
+            # deltas by the OBSERVED sample span (not the configured phase
+            # duration, which overstates the denominator when a phase is cut
+            # short) so WAL/DDL/xact cost is comparable across engines and
+            # queues regardless of phase length. These are the headline
+            # numbers for the idle_background_cost scenario.
+            phase_block["pg_wal_bytes_per_s"] = _cluster_counter_rate(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_wal_bytes",
+            )
+            phase_block["relfilenode_churn_delta"] = _cluster_counter_delta(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="relfilenode_churn_total",
+            )
+            phase_block["relfilenode_churn_per_s"] = _cluster_counter_rate(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="relfilenode_churn_total",
+            )
+            phase_block["pg_db_xacts_delta"] = _cluster_counter_delta(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_db_xacts_total",
+            )
+            phase_block["pg_db_xacts_per_s"] = _cluster_counter_rate(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_db_xacts_total",
+            )
             phase_block["replicas"] = replicas
             wait = _wait_event_summary(
                 rows, system=system, phase_label=phase_label
@@ -921,6 +957,40 @@ def _cluster_counter_delta(
     return float(max(values) - min(values))
 
 
+def _cluster_counter_rate(
+    rows: list[dict], *, system: str, phase_label: str, metric: str
+) -> float | None:
+    """Per-second rate of a monotonic cluster counter over one phase.
+
+    The denominator is the observed span between the metric's first and
+    last samples in the phase — not the configured phase duration, which
+    overstates the denominator (understating the rate) when a phase is
+    interrupted or a daemon starts late.
+    """
+    points: list[tuple[float, float]] = []
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row["subject_kind"] != "cluster"
+        ):
+            continue
+        try:
+            points.append((float(row["elapsed_s"]), float(row["value"])))
+        except (TypeError, ValueError):
+            continue
+    if len(points) < 2:
+        return None
+    points.sort()
+    span_s = points[-1][0] - points[0][0]
+    if span_s <= 0:
+        return None
+    values = [value for _, value in points]
+    # Same max-min convention as _cluster_counter_delta (monotonic counter).
+    return (max(values) - min(values)) / span_s
+
+
 def write_summary(summary: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as fh:
@@ -963,6 +1033,10 @@ def capture_pg_env(database_url: str) -> dict:
         "max_connections",
         "synchronous_commit",
         "wal_level",
+        # The single check that proves a non-postgres engine (e.g. AlloyDB
+        # Omni) actually loaded its engine libs rather than running as
+        # plain Postgres in an engine-tagged image.
+        "shared_preload_libraries",
     ]
     try:
         with psycopg.connect(database_url, autocommit=True) as conn:
@@ -1015,6 +1089,7 @@ def build_manifest(
     cli_args: list[str],
     adapter_versions: dict[str, dict],
     pg_image: str,
+    engine: str = "postgres",
 ) -> dict:
     return {
         "run_id": run_id,
@@ -1026,6 +1101,7 @@ def build_manifest(
             {"label": p.label, "type": p.type.value, "duration_s": p.duration_s}
             for p in phases
         ],
+        "engine": engine,
         "pg_image": pg_image,
         "postgres": capture_pg_env(database_url) if database_url else None,
         "host": capture_host_env(),

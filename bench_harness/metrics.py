@@ -17,7 +17,6 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Iterable
 
 import psycopg
 
@@ -99,6 +98,32 @@ SELECT
   wal_fpi::double precision,
   wal_bytes::double precision
 FROM pg_stat_wal
+"""
+
+# Per-relation on-disk file identity. A change to relfilenode between ticks is
+# the exact signature of a non-concurrent TRUNCATE / VACUUM FULL / CLUSTER /
+# REINDEX / rewriting ALTER — i.e. the destructive DDL an idle queue's segment
+# reclaim leans on. Diffing this needs no extension (unlike pg_stat_statements,
+# which is not preloaded here), so it works uniformly across every engine.
+_RELFILENODE_SQL = """
+SELECT n.nspname || '.' || c.relname AS relation, c.relfilenode::text
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'i', 't', 'm')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+  AND c.relfilenode <> 0
+"""
+
+# Per-database transaction / tuple churn. With offered load driven to zero,
+# this measures how chatty each engine's background loop is (leader election,
+# heartbeat, ring rotation, archive sweeps). Built-in view, no extension.
+_PG_STAT_DATABASE_SQL = """
+SELECT
+  (xact_commit + xact_rollback)::double precision AS xacts,
+  tup_updated::double precision,
+  tup_deleted::double precision
+FROM pg_stat_database
+WHERE datname = current_database()
 """
 
 _ACTIVE_XACT_SQL = """
@@ -211,6 +236,11 @@ class MetricsDaemon(threading.Thread):
         # aggregations key on exact elapsed_s equality.
         self._tick_elapsed_s: float | None = None
         self._tick_sampled_at: str | None = None
+        # Relfilenode-churn tracking. Lives for the whole run (per-system
+        # daemon), so relfilenode_churn_total is monotonic across phases and
+        # its per-phase delta drops out of the existing counter-delta path.
+        self._relfilenode_prev: dict[str, str] = {}
+        self._relfilenode_churn_total = 0
 
     # ── one-shot boundary snapshots ─────────────────────────────────────
     def phase_boundary_snapshot(self) -> None:
@@ -352,10 +382,42 @@ class MetricsDaemon(threading.Thread):
         self._tick_elapsed_s = round(time.time() - self.bench_start, 3)
         self._tick_sampled_at = now_iso()
         try:
-            self._poll_once_body(conn)
+            # One explicit transaction per tick (the connection is otherwise
+            # autocommit, i.e. one counted transaction per statement). This
+            # matters for pg_db_xacts_total: the daemon's own statement count
+            # scales with the adapter's event_tables/indexes list, so under
+            # autocommit the harness would inflate the "background xacts"
+            # metric by a different amount per system. One txn/tick makes the
+            # harness's contribution a constant across every adapter.
+            with conn.transaction():
+                self._poll_once_body(conn)
         finally:
             self._tick_elapsed_s = None
             self._tick_sampled_at = None
+
+    def _tick_query(
+        self,
+        conn: "psycopg.Connection",
+        cur: "psycopg.Cursor",
+        sql: str,
+        params: tuple | None = None,
+        *,
+        fetchall: bool = False,
+    ):
+        """Run one query of the tick under a savepoint; None on error.
+
+        The tick runs inside a single transaction (see _poll_once), so a
+        failing query would poison every later query of the tick with
+        InFailedSqlTransaction. The nested ``conn.transaction()`` block is a
+        savepoint: an individual failure rolls back only itself, preserving
+        the old autocommit behaviour where each probe degraded independently.
+        """
+        try:
+            with conn.transaction():
+                cur.execute(sql, params)
+                return cur.fetchall() if fetchall else cur.fetchone()
+        except psycopg.Error:
+            return None
 
     def _poll_once_body(self, conn: "psycopg.Connection") -> None:
         with conn.cursor() as cur:
@@ -363,13 +425,9 @@ class MetricsDaemon(threading.Thread):
                 schema, _, relname = fq_table.partition(".")
                 if not relname:
                     continue
-                try:
-                    cur.execute(_TABLE_STATS_SQL, (schema, relname))
-                    row = cur.fetchone()
-                except psycopg.Error:
-                    continue
+                row = self._tick_query(conn, cur, _TABLE_STATS_SQL, (schema, relname))
                 if row is None:
-                    # Not yet created by the adapter — skip this tick.
+                    # Errored, or not yet created by the adapter — skip this tick.
                     continue
                 (
                     n_dead,
@@ -417,11 +475,7 @@ class MetricsDaemon(threading.Thread):
                     value=float(table_mb),
                 )
             for fq_index in self.targets.event_indexes:
-                try:
-                    cur.execute(_INDEX_SIZE_SQL, (fq_index,))
-                    row = cur.fetchone()
-                except psycopg.Error:
-                    continue
+                row = self._tick_query(conn, cur, _INDEX_SIZE_SQL, (fq_index,))
                 if row is None:
                     continue
                 self._emit(
@@ -431,11 +485,7 @@ class MetricsDaemon(threading.Thread):
                     value=float(row[0]),
                 )
 
-            try:
-                cur.execute(_CLUSTER_SQL)
-                row = cur.fetchone()
-            except psycopg.Error:
-                row = None
+            row = self._tick_query(conn, cur, _CLUSTER_SQL)
             if row is not None:
                 (
                     snapshot_xmin,
@@ -475,11 +525,7 @@ class MetricsDaemon(threading.Thread):
                     value=float(oldest_idle_age),
                 )
 
-            try:
-                cur.execute(_NOTIFICATION_QUEUE_USAGE_SQL)
-                row = cur.fetchone()
-            except psycopg.Error:
-                row = None
+            row = self._tick_query(conn, cur, _NOTIFICATION_QUEUE_USAGE_SQL)
             if row is not None:
                 self._emit(
                     subject_kind="cluster",
@@ -488,11 +534,7 @@ class MetricsDaemon(threading.Thread):
                     value=float(row[0]),
                 )
 
-            try:
-                cur.execute(_PG_STAT_WAL_SQL)
-                row = cur.fetchone()
-            except psycopg.Error:
-                row = None
+            row = self._tick_query(conn, cur, _PG_STAT_WAL_SQL)
             if row is not None:
                 wal_records, wal_fpi, wal_bytes = row
                 self._emit(
@@ -514,11 +556,53 @@ class MetricsDaemon(threading.Thread):
                     value=float(wal_bytes),
                 )
 
-            try:
-                cur.execute(_ACTIVE_XACT_SQL)
-                rows = cur.fetchall()
-            except psycopg.Error:
-                rows = []
+            # Relfilenode churn: diff this tick's file identities against the
+            # previous tick and accumulate the number of relations that were
+            # swapped (TRUNCATE / VACUUM FULL / REINDEX / rewrite). Emitted as
+            # a monotonic cluster counter so the per-phase delta and rate fall
+            # out of the standard counter-delta aggregation.
+            rel_rows = self._tick_query(conn, cur, _RELFILENODE_SQL, fetchall=True)
+            current = (
+                {rel: node for rel, node in rel_rows} if rel_rows is not None else None
+            )
+            if current is not None:
+                if self._relfilenode_prev:
+                    for rel, node in current.items():
+                        prev = self._relfilenode_prev.get(rel)
+                        if prev is not None and prev != node:
+                            self._relfilenode_churn_total += 1
+                self._relfilenode_prev = current
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="relfilenode_churn_total",
+                    value=float(self._relfilenode_churn_total),
+                )
+
+            # Per-database transaction / tuple churn (background chattiness).
+            row = self._tick_query(conn, cur, _PG_STAT_DATABASE_SQL)
+            if row is not None:
+                db_xacts, db_tup_updated, db_tup_deleted = row
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_db_xacts_total",
+                    value=float(db_xacts),
+                )
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_db_tup_updated_total",
+                    value=float(db_tup_updated),
+                )
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_db_tup_deleted_total",
+                    value=float(db_tup_deleted),
+                )
+
+            rows = self._tick_query(conn, cur, _ACTIVE_XACT_SQL, fetchall=True) or []
             self._emit(
                 subject_kind="cluster",
                 subject="",
