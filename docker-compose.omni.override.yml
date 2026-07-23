@@ -11,9 +11,13 @@
 # the command line wins cleanly while keeping postgres.conf byte-identical
 # across engines (fair-comparison GUCs preserved). The list was captured from
 # the stock image via `SHOW shared_preload_libraries`.
+# The env-substituted image keeps `--pg-image` working on this engine (the
+# harness always sets POSTGRES_IMAGE, resolved from --engine unless
+# overridden); a literal image here would win the compose merge over the base
+# file's ${POSTGRES_IMAGE} and silently ignore the flag.
 services:
   postgres:
-    image: gcr.io/alloydb-omni/alloydbomni:18.3
+    image: ${POSTGRES_IMAGE:-gcr.io/alloydb-omni/alloydbomni:18.3}
     command:
       - "postgres"
       - "-c"

@@ -69,6 +69,25 @@ def render(summary: dict, out_path: Path, *, phase: str = "clean_1") -> None:
     if not systems:
         raise SystemExit("summary has no systems")
 
+    # Fall back to the first summarized phase when the requested label isn't
+    # in this run. Scenarios name their measurement phase differently
+    # (idle_background_cost summarizes `idle_1`, the CLI default is
+    # `clean_1`); without this, the whole comparison renders empty cells
+    # unless the caller remembers --phase.
+    available = [
+        p["label"] for p in summary.get("phases", [])
+        if any(
+            p.get("label") in summary["systems"][s].get("phases", {})
+            for s in systems
+        )
+    ]
+    if phase not in available and available:
+        print(
+            f"[compare] phase {phase!r} not in this run; using {available[0]!r}",
+            file=sys.stderr,
+        )
+        phase = available[0]
+
     lines: list[str] = []
     lines.append("# Cross-System Comparison")
     lines.append("")
@@ -167,7 +186,10 @@ def render(summary: dict, out_path: Path, *, phase: str = "clean_1") -> None:
         "these isolate the queue's own maintenance chatter. "
         "**Relfilenode churn/s** counts on-disk file swaps — the signature "
         "of `TRUNCATE` / `VACUUM FULL` / `REINDEX` / rewrite; a queue that "
-        "reclaims by re-truncating idle segments shows a non-zero rate here."
+        "reclaims by re-truncating idle segments shows a non-zero rate here. "
+        "Background xacts include a small constant harness floor — one "
+        "transaction per metrics tick plus ~1/s from the wait-event sampler "
+        "— identical for every system, so cross-system deltas are clean."
     )
     lines.append("")
     lines.append(

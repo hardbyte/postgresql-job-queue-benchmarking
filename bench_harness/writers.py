@@ -547,16 +547,16 @@ def compute_summary(
                 metric="pg_wal_fpi",
             )
             # Idle background-cost rates. Normalize the monotonic-counter
-            # deltas by the phase duration so WAL/DDL/xact cost is comparable
-            # across engines and queues regardless of phase length. These are
-            # the headline numbers for the idle_background_cost scenario.
-            _phase = phase_by_label.get(phase_label)
-            _dur = float(_phase.duration_s) if _phase is not None else 0.0
-            _wal_delta = phase_block["pg_wal_bytes_delta"]
-            phase_block["pg_wal_bytes_per_s"] = (
-                _wal_delta / _dur
-                if (_wal_delta is not None and _dur > 0)
-                else None
+            # deltas by the OBSERVED sample span (not the configured phase
+            # duration, which overstates the denominator when a phase is cut
+            # short) so WAL/DDL/xact cost is comparable across engines and
+            # queues regardless of phase length. These are the headline
+            # numbers for the idle_background_cost scenario.
+            phase_block["pg_wal_bytes_per_s"] = _cluster_counter_rate(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_wal_bytes",
             )
             phase_block["relfilenode_churn_delta"] = _cluster_counter_delta(
                 rows,
@@ -564,9 +564,11 @@ def compute_summary(
                 phase_label=phase_label,
                 metric="relfilenode_churn_total",
             )
-            _churn = phase_block["relfilenode_churn_delta"]
-            phase_block["relfilenode_churn_per_s"] = (
-                _churn / _dur if (_churn is not None and _dur > 0) else None
+            phase_block["relfilenode_churn_per_s"] = _cluster_counter_rate(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="relfilenode_churn_total",
             )
             phase_block["pg_db_xacts_delta"] = _cluster_counter_delta(
                 rows,
@@ -574,9 +576,11 @@ def compute_summary(
                 phase_label=phase_label,
                 metric="pg_db_xacts_total",
             )
-            _xacts = phase_block["pg_db_xacts_delta"]
-            phase_block["pg_db_xacts_per_s"] = (
-                _xacts / _dur if (_xacts is not None and _dur > 0) else None
+            phase_block["pg_db_xacts_per_s"] = _cluster_counter_rate(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_db_xacts_total",
             )
             phase_block["replicas"] = replicas
             wait = _wait_event_summary(
@@ -951,6 +955,40 @@ def _cluster_counter_delta(
     # pg_stat_wal counters are monotonically non-decreasing. Use max-min so
     # queue drain ordering cannot make the delta negative.
     return float(max(values) - min(values))
+
+
+def _cluster_counter_rate(
+    rows: list[dict], *, system: str, phase_label: str, metric: str
+) -> float | None:
+    """Per-second rate of a monotonic cluster counter over one phase.
+
+    The denominator is the observed span between the metric's first and
+    last samples in the phase — not the configured phase duration, which
+    overstates the denominator (understating the rate) when a phase is
+    interrupted or a daemon starts late.
+    """
+    points: list[tuple[float, float]] = []
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row["subject_kind"] != "cluster"
+        ):
+            continue
+        try:
+            points.append((float(row["elapsed_s"]), float(row["value"])))
+        except (TypeError, ValueError):
+            continue
+    if len(points) < 2:
+        return None
+    points.sort()
+    span_s = points[-1][0] - points[0][0]
+    if span_s <= 0:
+        return None
+    values = [value for _, value in points]
+    # Same max-min convention as _cluster_counter_delta (monotonic counter).
+    return (max(values) - min(values)) / span_s
 
 
 def write_summary(summary: dict, path: Path) -> None:
