@@ -15,6 +15,7 @@ CREATE DATABASE pgque_bench;
 CREATE DATABASE pgmq_bench;
 CREATE DATABASE pgboss_bench;
 CREATE DATABASE absurd_bench;
+CREATE DATABASE segmented_bench;
 
 \connect awa_bench
 CREATE EXTENSION IF NOT EXISTS pgstattuple;
@@ -44,4 +45,7 @@ CREATE EXTENSION IF NOT EXISTS pgstattuple;
 CREATE EXTENSION IF NOT EXISTS pgstattuple;
 
 \connect absurd_bench
+CREATE EXTENSION IF NOT EXISTS pgstattuple;
+
+\connect segmented_bench
 CREATE EXTENSION IF NOT EXISTS pgstattuple;
