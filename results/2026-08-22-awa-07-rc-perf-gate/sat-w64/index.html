@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Portable Bench Report custom-20260822T005039Z-dfe763</title>
+  <style>body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f5f7fb; color: #0f172a; }
+.layout { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
+.sidebar { position: sticky; top: 0; height: 100vh; overflow: auto; background: #0f172a; color: #e2e8f0; padding: 24px 20px; }
+.sidebar h1 { font-size: 20px; margin: 0 0 6px 0; }
+.sidebar .muted { color: #94a3b8; font-size: 13px; }
+.sidebar nav { margin-top: 20px; display: grid; gap: 8px; }
+.sidebar a { color: #cbd5e1; text-decoration: none; font-size: 14px; }
+.sidebar a:hover { color: white; }
+.content { padding: 28px; display: grid; gap: 24px; }
+.panel { background: white; border: 1px solid #dbe4ee; border-radius: 12px; padding: 20px; box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
+.panel h2 { margin: 0 0 12px 0; font-size: 18px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.card { border: 1px solid #dbe4ee; border-radius: 10px; padding: 14px 16px; background: linear-gradient(180deg, #fff, #f8fbff); }
+.card-title { font-size: 13px; color: #475569; text-transform: uppercase; letter-spacing: 0.04em; }
+.card-stat { font-size: 24px; font-weight: 700; margin-top: 8px; }
+.card-sub { font-size: 13px; color: #475569; margin-top: 4px; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 16px; }
+.controls label { font-size: 13px; color: #334155; }
+.controls .hint { font-size: 12px; color: #64748b; }
+.preset-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.preset-row button { border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 999px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+.preset-row button:hover { background: #eef2ff; border-color: #93c5fd; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #cbd5e1; border-radius: 999px; padding: 4px 10px; background: #fff; }
+.timeline-shell { border: 1px solid #dbe4ee; border-radius: 10px; overflow-x: auto; overflow-y: hidden; background: #fff; }
+#timeline-tooltip { position: absolute; pointer-events: none; background: rgba(15,23,42,0.92); color: white; padding: 8px 10px; border-radius: 8px; font-size: 12px; display: none; z-index: 20; }
+.outlier-list { margin: 10px 0 0 18px; padding: 0; display: grid; gap: 6px; color: #334155; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { border-bottom: 1px solid #e2e8f0; padding: 10px 8px; text-align: left; }
+th { cursor: pointer; background: #f8fafc; position: sticky; top: 0; }
+td { color: #1e293b; }
+.plot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.plot-card { border: 1px solid #dbe4ee; border-radius: 10px; padding: 12px; background: #fff; cursor: pointer; text-align: left; }
+.plot-card img { width: 100%; height: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: white; }
+.plot-card-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.modal { position: fixed; inset: 0; background: rgba(15,23,42,0.8); display: none; align-items: center; justify-content: center; padding: 30px; z-index: 50; }
+.modal.open { display: flex; }
+.modal-content { background: white; border-radius: 12px; max-width: min(1200px, 95vw); max-height: 90vh; padding: 18px; display: grid; gap: 12px; }
+.modal-content img { max-width: 100%; max-height: 76vh; }
+.meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 18px; font-size: 14px; }
+.meta-grid strong { color: #475569; display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.phase-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; margin-top: 8px; color: #475569; }
+.phase-legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 999px; margin-right: 6px; vertical-align: baseline; }
+.legend-clean::before { background: #dcfce7; }
+.legend-active-readers::before { background: #dbeafe; }
+.legend-recovery::before { background: #fef3c7; }
+.legend-warmup::before { background: #e2e8f0; }
+@media (max-width: 980px) { .layout { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } }</style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <h1>Portable Bench</h1>
+      <div class="muted">custom-20260822T005039Z-dfe763</div>
+      <nav>
+        <a href="#overview">Overview</a>
+        <a href="#timeline">Timeline</a>
+        <a href="#phase-summary">Phase Summary</a>
+        <a href="#replica-summary">Replica Summary</a>
+        <a href="#plots">Plots</a>
+        <a href="#run-meta">Run Metadata</a>
+      </nav>
+    </aside>
+    <main class="content">
+      <section class="panel" id="overview">
+        <h2>Overview</h2>
+        <div class="cards"><div class='card'><div class='card-title'>Awa (Rust, native)</div><div class='card-stat'>throughput 4095.5/s</div><div class='card-sub'>producer p99 0.123 ms per message</div><div class='card-sub'>producer call p99 7.131 ms</div><div class='card-sub'>subscriber p99 1080.319 ms</div><div class='card-sub'>dead tuples 72 median</div></div><div class='card'><div class='card-title'>Sample Quality</div><div class='card-sub'>Potential graph-warping samples detected. Check raw.csv before trusting the exact timeline shape.</div><ul class='outlier-list'><li><strong>Awa (Rust, native)</strong> Producer call latency p99 in <code>clean</code> at 130.4s: 15.895 vs median 7.131</li><li><strong>Awa (Rust, native)</strong> Producer call latency p99 in <code>clean</code> at 135.4s: 15.391 vs median 7.131</li><li><strong>Awa (Rust, native)</strong> Producer call latency p99 in <code>clean</code> at 125.4s: 15.351 vs median 7.131</li><li><strong>Awa (Rust, native)</strong> Producer call latency p99 in <code>clean</code> at 115.4s: 14.943 vs median 7.131</li><li><strong>Awa (Rust, native)</strong> Producer call latency p99 in <code>clean</code> at 120.4s: 14.943 vs median 7.131</li><li><strong>Awa (Rust, native)</strong> Producer call latency p99 in <code>clean</code> at 140.4s: 14.439 vs median 7.131</li><li><strong>Awa (Rust, native)</strong> Producer call latency p99 in <code>clean</code> at 110.4s: 14.023 vs median 7.131</li></ul></div></div>
+      </section>
+
+      <section class="panel" id="timeline-section">
+        <h2>Timeline Explorer</h2>
+        <div id="timeline-presets" class="preset-row"></div>
+        <div class="controls">
+          <label>Primary metric
+            <select id="primary-metric-select">
+              <option value='completion_rate'>Completion throughput</option><option value='enqueue_rate'>Producer throughput</option><option value='producer_p99_ms'>Producer latency p99 (per message)</option><option value='producer_call_p99_ms'>Producer call latency p99</option><option value='subscriber_p99_ms'>Subscriber latency p99</option><option value='end_to_end_p99_ms'>End-to-end latency p99</option><option value='claim_p99_ms'>Claim latency p99</option><option value='completed_original_priority_1_rate'>Completed original priority 1 rate</option><option value='completed_original_priority_4_rate'>Completed original priority 4 rate</option><option value='aged_completion_rate'>Aged completion rate</option><option value='queue_depth'>Queue depth</option><option value='running_depth'>Running depth</option><option value='retryable_depth'>Retryable backlog</option><option value='scheduled_depth'>Scheduled backlog</option><option value='total_backlog'>Total backlog</option><option value='n_dead_tup'>Dead tuples</option><option value='pg_wal_bytes'>WAL bytes (cumulative)</option><option value='relfilenode_churn_total'>Relfilenode churn (cumulative TRUNCATE/rewrite)</option><option value='pg_db_xacts_total'>Background transactions (cumulative)</option>
+            </select>
+          </label>
+          <label>Compare against
+            <select id="compare-metric-select">
+              <option value="">None</option>
+              <option value='completion_rate'>Completion throughput</option><option value='enqueue_rate'>Producer throughput</option><option value='producer_p99_ms'>Producer latency p99 (per message)</option><option value='producer_call_p99_ms'>Producer call latency p99</option><option value='subscriber_p99_ms'>Subscriber latency p99</option><option value='end_to_end_p99_ms'>End-to-end latency p99</option><option value='claim_p99_ms'>Claim latency p99</option><option value='completed_original_priority_1_rate'>Completed original priority 1 rate</option><option value='completed_original_priority_4_rate'>Completed original priority 4 rate</option><option value='aged_completion_rate'>Aged completion rate</option><option value='queue_depth'>Queue depth</option><option value='running_depth'>Running depth</option><option value='retryable_depth'>Retryable backlog</option><option value='scheduled_depth'>Scheduled backlog</option><option value='total_backlog'>Total backlog</option><option value='n_dead_tup'>Dead tuples</option><option value='pg_wal_bytes'>WAL bytes (cumulative)</option><option value='relfilenode_churn_total'>Relfilenode churn (cumulative TRUNCATE/rewrite)</option><option value='pg_db_xacts_total'>Background transactions (cumulative)</option>
+            </select>
+          </label>
+          <label>Phase
+            <select id="phase-select">
+              <option value="steady" selected>Presented phases (exclude warmup)</option>
+              <option value="all">All phases</option>
+              <option value='warmup'>warmup (warmup)</option><option value='clean'>clean (clean)</option>
+            </select>
+          </label>
+          <div id="system-chips" class="chips"></div>
+          <div class="hint">Warmup is diagnostic-only and hidden by default. Solid lines use the left axis. Dashed comparison lines use the right axis.</div>
+        </div>
+        <div id="timeline" class="timeline-shell"></div>
+        <div id="timeline-tooltip"></div>
+        <div class="phase-legend">
+          <span class="legend-warmup">warmup</span>
+          <span class="legend-clean">clean</span>
+          <span class="legend-active-readers">active-readers</span>
+          <span class="legend-recovery">recovery</span>
+        </div>
+      </section>
+
+      <section class="panel" id="phase-summary">
+        <h2>Per-phase Summary</h2>
+        <table id='phase-summary-table'><thead><tr><th data-sortable='true'>System</th><th data-sortable='true'>Phase</th><th data-sortable='true'>Type</th><th data-sortable='true'>Throughput/s</th><th data-sortable='true'>Producer p99 ms</th><th data-sortable='true'>Producer call p99 ms</th><th data-sortable='true'>Subscriber p99 ms</th><th data-sortable='true'>End-to-end p99 ms</th><th data-sortable='true'>Median dead tuples</th><th data-sortable='true'>Peak dead tuples</th></tr></thead><tbody><tr><td>Awa (Rust, native)</td><td>clean</td><td>clean</td><td data-sort='4095.474416031763'>4095.5</td><td data-sort='0.1235'>0.123</td><td data-sort='7.131'>7.131</td><td data-sort='1080.319'>1080.319</td><td data-sort='1082.367'>1082.367</td><td data-sort='71.5'>72</td><td data-sort='115.0'>115</td></tr></tbody></table>
+      </section>
+
+      <section class="panel" id="replica-summary">
+        <h2>Per-replica Summary</h2>
+        <div class="card-sub">Replica-scoped adapter metrics for presented phases, excluding warmup. This is the primary view for multi-replica load distribution.</div>
+        <table id='replica-summary-table'><thead><tr><th>System</th><th>Replica</th><th>Phase</th><th>Completion/s</th><th>Enqueue/s</th><th>Subscriber p99 ms</th><th>End-to-end p99 ms</th><th>Queue depth</th><th>Running depth</th></tr></thead><tbody><tr><td>Awa (Rust, native)</td><td>0</td><td>clean</td><td>4095.5</td><td>4105.7</td><td>1080.319</td><td>1082.367</td><td>3136.0</td><td>0.0</td></tr></tbody></table>
+      </section>
+
+      <section class="panel" id="plots">
+        <h2>Static Plot Bundle</h2>
+        <div class='plot-grid'><button class='plot-card' data-plot-src='plots/throughput.svg' data-plot-title='Throughput'><div class='plot-card-title'>Throughput</div><img src='plots/throughput.svg' alt='Throughput' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/producer_p99.svg' data-plot-title='Producer P99'><div class='plot-card-title'>Producer P99</div><img src='plots/producer_p99.svg' alt='Producer P99' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/producer_call_p99.svg' data-plot-title='Producer Call P99'><div class='plot-card-title'>Producer Call P99</div><img src='plots/producer_call_p99.svg' alt='Producer Call P99' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/subscriber_p99.svg' data-plot-title='Subscriber P99'><div class='plot-card-title'>Subscriber P99</div><img src='plots/subscriber_p99.svg' alt='Subscriber P99' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/end_to_end_p99.svg' data-plot-title='End To End P99'><div class='plot-card-title'>End To End P99</div><img src='plots/end_to_end_p99.svg' alt='End To End P99' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/claim_p99.svg' data-plot-title='Claim P99'><div class='plot-card-title'>Claim P99</div><img src='plots/claim_p99.svg' alt='Claim P99' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/queue_depth.svg' data-plot-title='Queue Depth'><div class='plot-card-title'>Queue Depth</div><img src='plots/queue_depth.svg' alt='Queue Depth' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/dead_tuples.svg' data-plot-title='Dead Tuples'><div class='plot-card-title'>Dead Tuples</div><img src='plots/dead_tuples.svg' alt='Dead Tuples' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/dead_tuples_faceted.svg' data-plot-title='Dead Tuples Faceted'><div class='plot-card-title'>Dead Tuples Faceted</div><img src='plots/dead_tuples_faceted.svg' alt='Dead Tuples Faceted' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/table_size.svg' data-plot-title='Table Size'><div class='plot-card-title'>Table Size</div><img src='plots/table_size.svg' alt='Table Size' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/wal_bytes.svg' data-plot-title='Wal Bytes'><div class='plot-card-title'>Wal Bytes</div><img src='plots/wal_bytes.svg' alt='Wal Bytes' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/relfilenode_churn.svg' data-plot-title='Relfilenode Churn'><div class='plot-card-title'>Relfilenode Churn</div><img src='plots/relfilenode_churn.svg' alt='Relfilenode Churn' loading='lazy' /></button><button class='plot-card' data-plot-src='plots/wait_events_clean.svg' data-plot-title='Wait Events Clean'><div class='plot-card-title'>Wait Events Clean</div><img src='plots/wait_events_clean.svg' alt='Wait Events Clean' loading='lazy' /></button></div>
+      </section>
+
+      <section class="panel" id="run-meta">
+        <h2>Run Metadata</h2>
+        <div class="meta-grid">
+          <div><strong>Scenario</strong>custom</div>
+          <div><strong>Systems</strong>Awa (Rust, native)</div>
+          <div><strong>Postgres image</strong>postgres:18.3-alpine</div>
+          <div><strong>CLI</strong><span style="word-break: break-all">/home/brian/dev/postgresql-job-queue-benchmarking/.venv/bin/bench run --systems awa --replicas 1 --producer-rate 50000 --producer-mode depth-target --target-depth 4000 --worker-count 64 --phase warmup=warmup:30s --phase clean=clean:120s</span></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal" id="plot-modal">
+    <div class="modal-content">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:16px;">
+        <h2 id="plot-modal-title" style="margin:0;"></h2>
+        <button data-close="true">Close</button>
+      </div>
+      <img id="plot-modal-image" alt="" />
+    </div>
+  </div>
+
+  <script>
+  const SYSTEMS = [{"id": "awa", "label": "Awa (Rust, native)", "family": "awa"}];
+const PHASES = [{"label": "warmup", "type": "warmup", "duration_s": 30}, {"label": "clean", "type": "clean", "duration_s": 120}];
+const TIMELINE = {"completion_rate": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 4784.263442894309}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 4883.302199701757}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 4256.438645582045}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3827.126715881368}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 4051.2821267810177}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 4352.036759043282}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 3941.740148757358}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 3795.846668789358}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 4025.06022493362}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 4262.721880686844}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 4301.070853915527}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 4262.417162477718}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 4351.994520488867}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 4441.269974557715}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 4243.288929152061}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 4243.279757534979}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 3904.082223094884}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 4396.816201388339}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 4386.147489058619}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 4650.578970099579}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 2898.641755801805}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 2914.156136974349}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 4057.6006508391442}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 4108.170579790763}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 4051.8360393933854}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 4065.2446583386695}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 3833.45773194996}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 3852.951424073327}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 4082.7782522727625}]}, "enqueue_rate": {"awa": [{"elapsed_s": 10.429, "phase_label": "warmup", "phase_type": "warmup", "value": 4836.846554828832}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 4825.700994200687}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 4250.037985964628}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3827.126715881368}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 4083.2827754917685}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 4377.636975272948}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 3980.1337216348643}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 3725.4346732468907}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 4057.0559341938233}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 4198.717047643498}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 4345.8736753104795}, {"elapsed_s": 65.43, "phase_label": "clean", "phase_type": "clean", "value": 4281.215474069766}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 4397.198618366911}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 4466.868072393782}, {"elapsed_s": 80.431, "phase_label": "clean", "phase_type": "clean", "value": 4102.485978260138}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 4326.481321408213}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 3859.2812795511722}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 4441.616366467987}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 4421.943796018063}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 4499.566664287993}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 3052.212179950245}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 2914.156136974349}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 3942.400632361061}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 4128.567454748836}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 4083.841063401232}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 4108.845137307371}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 3705.4624821352704}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 3884.9526817483547}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 4101.97626913298}]}, "producer_p99_ms": {"awa": [{"elapsed_s": 10.429, "phase_label": "warmup", "phase_type": "warmup", "value": 0.063}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.062}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.063}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.063}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.063}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 0.114}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 0.117}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 0.117}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 0.117}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 0.117}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 0.12}, {"elapsed_s": 65.43, "phase_label": "clean", "phase_type": "clean", "value": 0.12}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 0.121}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 0.122}, {"elapsed_s": 80.431, "phase_label": "clean", "phase_type": "clean", "value": 0.124}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 0.124}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 0.124}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 0.124}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 0.123}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 0.124}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 0.129}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 0.132}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 0.132}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 0.134}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 0.136}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 0.136}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 0.126}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 0.121}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 0.121}]}, "producer_call_p99_ms": {"awa": [{"elapsed_s": 10.429, "phase_label": "warmup", "phase_type": "warmup", "value": 6.031}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 5.999}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 6.883}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 6.031}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 6.023}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 5.999}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 6.023}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 6.683}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 5.935}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 5.935}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 6.847}, {"elapsed_s": 65.43, "phase_label": "clean", "phase_type": "clean", "value": 6.847}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 6.963}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 6.971}, {"elapsed_s": 80.431, "phase_label": "clean", "phase_type": "clean", "value": 7.115}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 7.823}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 7.823}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 7.559}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 7.023}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 7.559}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 14.023}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 14.943}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 14.943}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 15.351}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 15.895}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 15.391}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 14.439}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 7.147}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 6.791}]}, "subscriber_p99_ms": {"awa": [{"elapsed_s": 10.429, "phase_label": "warmup", "phase_type": "warmup", "value": 848.383}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 832.511}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 1026.047}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 1052.671}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 1048.063}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 1048.063}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 1048.063}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 1049.599}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 1041.407}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 1016.319}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 1015.295}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 1015.295}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 1011.199}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 960.511}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 952.319}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 996.351}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 1382.399}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 1382.399}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 1381.375}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 1381.375}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 1809.407}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 1838.079}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 1838.079}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 1838.079}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 1839.103}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 1841.151}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 1807.359}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 1080.319}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 1080.319}]}, "end_to_end_p99_ms": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 850.431}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 833.023}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 1027.071}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 1053.695}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 1049.599}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 1049.599}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 1049.599}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 1050.623}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 1042.431}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 1017.343}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 1016.319}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 1016.319}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 1012.223}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 962.047}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 954.367}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 998.399}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 1384.447}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 1384.447}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 1382.399}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 1382.399}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 1814.527}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 1840.127}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 1840.127}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 1841.151}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 1841.151}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 1843.199}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 1811.455}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 1082.367}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 1082.367}]}, "claim_p99_ms": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 848.383}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 832.511}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 1026.047}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 1052.671}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 1048.063}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 1048.063}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 1048.063}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 1049.599}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 1041.407}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 1016.319}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 1015.295}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 1015.295}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 1011.199}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 960.511}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 952.319}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 996.351}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 1382.399}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 1382.399}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 1381.375}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 1381.375}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 1809.407}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 1838.079}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 1838.079}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 1838.079}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 1839.103}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 1841.151}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 1807.359}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 1080.319}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 1080.319}]}, "completed_original_priority_1_rate": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}]}, "completed_original_priority_4_rate": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}]}, "aged_completion_rate": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}]}, "queue_depth": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 2976.0}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3008.0}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3264.0}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3200.0}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3136.0}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 3264.0}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 3232.0}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 3104.0}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 3104.0}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 3200.0}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 3456.0}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 3072.0}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 3104.0}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 3040.0}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 3008.0}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 3584.0}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 3206.0}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 3232.0}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 3066.0}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 3200.0}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 3200.0}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 3104.0}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 3168.0}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}]}, "running_depth": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}]}, "retryable_depth": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}]}, "scheduled_depth": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 0.0}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 0.0}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 0.0}]}, "total_backlog": {"awa": [{"elapsed_s": 10.43, "phase_label": "warmup", "phase_type": "warmup", "value": 2976.0}, {"elapsed_s": 15.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3008.0}, {"elapsed_s": 20.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3264.0}, {"elapsed_s": 25.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3200.0}, {"elapsed_s": 30.43, "phase_label": "warmup", "phase_type": "warmup", "value": 3136.0}, {"elapsed_s": 35.43, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 40.431, "phase_label": "clean", "phase_type": "clean", "value": 3264.0}, {"elapsed_s": 45.43, "phase_label": "clean", "phase_type": "clean", "value": 3232.0}, {"elapsed_s": 50.431, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 55.43, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 60.43, "phase_label": "clean", "phase_type": "clean", "value": 3104.0}, {"elapsed_s": 65.431, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 70.43, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}, {"elapsed_s": 75.431, "phase_label": "clean", "phase_type": "clean", "value": 3104.0}, {"elapsed_s": 80.432, "phase_label": "clean", "phase_type": "clean", "value": 3200.0}, {"elapsed_s": 85.43, "phase_label": "clean", "phase_type": "clean", "value": 3456.0}, {"elapsed_s": 90.43, "phase_label": "clean", "phase_type": "clean", "value": 3072.0}, {"elapsed_s": 95.43, "phase_label": "clean", "phase_type": "clean", "value": 3104.0}, {"elapsed_s": 100.431, "phase_label": "clean", "phase_type": "clean", "value": 3040.0}, {"elapsed_s": 105.43, "phase_label": "clean", "phase_type": "clean", "value": 3008.0}, {"elapsed_s": 110.433, "phase_label": "clean", "phase_type": "clean", "value": 3584.0}, {"elapsed_s": 115.431, "phase_label": "clean", "phase_type": "clean", "value": 3206.0}, {"elapsed_s": 120.43, "phase_label": "clean", "phase_type": "clean", "value": 3232.0}, {"elapsed_s": 125.431, "phase_label": "clean", "phase_type": "clean", "value": 3066.0}, {"elapsed_s": 130.43, "phase_label": "clean", "phase_type": "clean", "value": 3200.0}, {"elapsed_s": 135.43, "phase_label": "clean", "phase_type": "clean", "value": 3200.0}, {"elapsed_s": 140.43, "phase_label": "clean", "phase_type": "clean", "value": 3104.0}, {"elapsed_s": 145.43, "phase_label": "clean", "phase_type": "clean", "value": 3168.0}, {"elapsed_s": 150.431, "phase_label": "clean", "phase_type": "clean", "value": 3136.0}]}, "n_dead_tup": {"awa": [{"elapsed_s": 4.802, "phase_label": "warmup", "phase_type": "warmup", "value": 9.0}, {"elapsed_s": 9.802, "phase_label": "warmup", "phase_type": "warmup", "value": 13.0}, {"elapsed_s": 14.802, "phase_label": "warmup", "phase_type": "warmup", "value": 18.0}, {"elapsed_s": 19.802, "phase_label": "warmup", "phase_type": "warmup", "value": 22.0}, {"elapsed_s": 24.802, "phase_label": "warmup", "phase_type": "warmup", "value": 28.0}, {"elapsed_s": 29.802, "phase_label": "warmup", "phase_type": "warmup", "value": 33.0}, {"elapsed_s": 34.802, "phase_label": "clean", "phase_type": "clean", "value": 69.0}, {"elapsed_s": 39.802, "phase_label": "clean", "phase_type": "clean", "value": 73.0}, {"elapsed_s": 44.802, "phase_label": "clean", "phase_type": "clean", "value": 78.0}, {"elapsed_s": 49.802, "phase_label": "clean", "phase_type": "clean", "value": 84.0}, {"elapsed_s": 54.802, "phase_label": "clean", "phase_type": "clean", "value": 44.0}, {"elapsed_s": 59.802, "phase_label": "clean", "phase_type": "clean", "value": 49.0}, {"elapsed_s": 64.802, "phase_label": "clean", "phase_type": "clean", "value": 55.0}, {"elapsed_s": 69.802, "phase_label": "clean", "phase_type": "clean", "value": 59.0}, {"elapsed_s": 74.802, "phase_label": "clean", "phase_type": "clean", "value": 64.0}, {"elapsed_s": 79.802, "phase_label": "clean", "phase_type": "clean", "value": 70.0}, {"elapsed_s": 84.802, "phase_label": "clean", "phase_type": "clean", "value": 76.0}, {"elapsed_s": 89.802, "phase_label": "clean", "phase_type": "clean", "value": 80.0}, {"elapsed_s": 94.802, "phase_label": "clean", "phase_type": "clean", "value": 87.0}, {"elapsed_s": 99.802, "phase_label": "clean", "phase_type": "clean", "value": 47.0}, {"elapsed_s": 104.802, "phase_label": "clean", "phase_type": "clean", "value": 52.0}, {"elapsed_s": 109.803, "phase_label": "clean", "phase_type": "clean", "value": 57.0}, {"elapsed_s": 114.802, "phase_label": "clean", "phase_type": "clean", "value": 62.0}, {"elapsed_s": 119.802, "phase_label": "clean", "phase_type": "clean", "value": 66.0}, {"elapsed_s": 124.802, "phase_label": "clean", "phase_type": "clean", "value": 102.0}, {"elapsed_s": 129.802, "phase_label": "clean", "phase_type": "clean", "value": 106.0}, {"elapsed_s": 134.802, "phase_label": "clean", "phase_type": "clean", "value": 112.0}, {"elapsed_s": 139.802, "phase_label": "clean", "phase_type": "clean", "value": 115.0}, {"elapsed_s": 144.802, "phase_label": "clean", "phase_type": "clean", "value": 75.0}, {"elapsed_s": 149.802, "phase_label": "clean", "phase_type": "clean", "value": 80.0}]}, "pg_wal_bytes": {}, "relfilenode_churn_total": {}, "pg_db_xacts_total": {}};
+const LABELS = {"completion_rate": "Completion throughput", "enqueue_rate": "Producer throughput", "producer_p99_ms": "Producer latency p99 (per message)", "producer_call_p99_ms": "Producer call latency p99", "subscriber_p99_ms": "Subscriber latency p99", "end_to_end_p99_ms": "End-to-end latency p99", "claim_p99_ms": "Claim latency p99", "completed_original_priority_1_rate": "Completed original priority 1 rate", "completed_original_priority_4_rate": "Completed original priority 4 rate", "aged_completion_rate": "Aged completion rate", "queue_depth": "Queue depth", "running_depth": "Running depth", "retryable_depth": "Retryable backlog", "scheduled_depth": "Scheduled backlog", "total_backlog": "Total backlog", "n_dead_tup": "Dead tuples", "pg_wal_bytes": "WAL bytes (cumulative)", "relfilenode_churn_total": "Relfilenode churn (cumulative TRUNCATE/rewrite)", "pg_db_xacts_total": "Background transactions (cumulative)"};
+const PRESETS = [{"label": "Throughput vs dead tuples", "primary": "completion_rate", "secondary": "n_dead_tup"}, {"label": "Producer vs end-to-end latency", "primary": "producer_p99_ms", "secondary": "end_to_end_p99_ms"}, {"label": "Producer call vs per-message", "primary": "producer_call_p99_ms", "secondary": "producer_p99_ms"}, {"label": "Subscriber vs queue depth", "primary": "subscriber_p99_ms", "secondary": "queue_depth"}, {"label": "Subscriber vs total backlog", "primary": "subscriber_p99_ms", "secondary": "total_backlog"}];
+
+const primaryMetricSelect = document.getElementById('primary-metric-select');
+const compareMetricSelect = document.getElementById('compare-metric-select');
+const phaseSelect = document.getElementById('phase-select');
+const chips = document.getElementById('system-chips');
+const table = document.getElementById('phase-summary-table');
+const tooltip = document.getElementById('timeline-tooltip');
+
+function renderSystemChips() {
+  chips.innerHTML = '';
+  for (const system of SYSTEMS) {
+    const label = document.createElement('label');
+    label.className = 'chip';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = system.id;
+    input.checked = true;
+    input.addEventListener('change', renderTimeline);
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(system.label));
+    chips.appendChild(label);
+  }
+}
+
+function renderPresets() {
+  const row = document.getElementById('timeline-presets');
+  row.innerHTML = '';
+  for (const preset of PRESETS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = preset.label;
+    button.addEventListener('click', () => {
+      primaryMetricSelect.value = preset.primary;
+      compareMetricSelect.value = preset.secondary || '';
+      renderTimeline();
+    });
+    row.appendChild(button);
+  }
+}
+
+function selectedSystems() {
+  return Array.from(chips.querySelectorAll('input:checked')).map((el) => el.value);
+}
+
+function seriesFor(metric) {
+  return TIMELINE[metric] || {};
+}
+
+function currentPhaseLabel() {
+  return phaseSelect.value || 'steady';
+}
+
+function currentMetric() {
+  return primaryMetricSelect.value;
+}
+
+function compareMetric() {
+  return compareMetricSelect.value || '';
+}
+
+function svgEl(name, attrs = {}) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', name);
+  for (const [key, value] of Object.entries(attrs)) {
+    el.setAttribute(key, String(value));
+  }
+  return el;
+}
+
+function renderTimeline() {
+  const shell = document.getElementById('timeline');
+  shell.innerHTML = '';
+  const width = Math.max(980, shell.clientWidth || 980);
+  const height = 360;
+  const margin = { top: 20, right: 132, bottom: 36, left: 56 };
+  const phaseLabel = currentPhaseLabel();
+  const metric = currentMetric();
+  const secondaryMetric = compareMetric();
+  const systems = selectedSystems();
+  const allSeries = seriesFor(metric);
+  const allSecondarySeries = secondaryMetric ? seriesFor(secondaryMetric) : {};
+
+  const pointsBySystem = systems.map((system) => {
+    const points = (allSeries[system] || []).filter((pt) => {
+      if (phaseLabel === 'all') return true;
+      if (phaseLabel === 'steady') return pt.phase_type !== 'warmup';
+      return pt.phase_label === phaseLabel;
+    });
+    return { system, points };
+  }).filter((entry) => entry.points.length > 0);
+  const secondaryPointsBySystem = secondaryMetric ? systems.map((system) => {
+    const points = (allSecondarySeries[system] || []).filter((pt) => {
+      if (phaseLabel === 'all') return true;
+      if (phaseLabel === 'steady') return pt.phase_type !== 'warmup';
+      return pt.phase_label === phaseLabel;
+    });
+    return { system, points };
+  }).filter((entry) => entry.points.length > 0) : [];
+
+  const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, width: '100%', height: height });
+  shell.appendChild(svg);
+  if (!pointsBySystem.length && !secondaryPointsBySystem.length) {
+    const text = svgEl('text', { x: width / 2, y: height / 2, 'text-anchor': 'middle', fill: '#64748b' });
+    text.textContent = 'No data for selected systems / phase.';
+    svg.appendChild(text);
+    return;
+  }
+
+  const allPoints = pointsBySystem.flatMap((entry) => entry.points).concat(secondaryPointsBySystem.flatMap((entry) => entry.points));
+  const minX = Math.min(...allPoints.map((pt) => pt.elapsed_s));
+  const maxX = Math.max(...allPoints.map((pt) => pt.elapsed_s));
+  let minY = pointsBySystem.length ? Math.min(...pointsBySystem.flatMap((entry) => entry.points.map((pt) => pt.value))) : 0;
+  let maxY = pointsBySystem.length ? Math.max(...pointsBySystem.flatMap((entry) => entry.points.map((pt) => pt.value))) : 1;
+  if (minY === maxY) {
+    minY = 0;
+    maxY = maxY || 1;
+  }
+  let minY2 = secondaryPointsBySystem.length ? Math.min(...secondaryPointsBySystem.flatMap((entry) => entry.points.map((pt) => pt.value))) : 0;
+  let maxY2 = secondaryPointsBySystem.length ? Math.max(...secondaryPointsBySystem.flatMap((entry) => entry.points.map((pt) => pt.value))) : 1;
+  if (secondaryPointsBySystem.length && minY2 === maxY2) {
+    minY2 = 0;
+    maxY2 = maxY2 || 1;
+  }
+
+  const plotW = width - margin.left - margin.right;
+  const plotH = height - margin.top - margin.bottom;
+  const xScale = (x) => margin.left + ((x - minX) / Math.max(1e-9, maxX - minX)) * plotW;
+  const yScale = (y) => margin.top + plotH - ((y - minY) / Math.max(1e-9, maxY - minY)) * plotH;
+  const yScale2 = (y) => margin.top + plotH - ((y - minY2) / Math.max(1e-9, maxY2 - minY2)) * plotH;
+
+  const phaseBands = phaseLabel === 'all'
+    ? PHASES
+    : phaseLabel === 'steady'
+      ? PHASES.filter((p) => p.type !== 'warmup')
+      : PHASES.filter((p) => p.label === phaseLabel);
+  let phaseStart = 0;
+  for (const phase of PHASES) {
+    const phaseEnd = phaseStart + phase.duration_s;
+    const includePhase = phaseLabel === 'all'
+      || (phaseLabel === 'steady' && phase.type !== 'warmup')
+      || phase.label === phaseLabel;
+    if (!includePhase) {
+      phaseStart = phaseEnd;
+      continue;
+    }
+    const colors = { warmup: '#e2e8f0', clean: '#dcfce7', 'active-readers': '#dbeafe', recovery: '#fef3c7' };
+    const rect = svgEl('rect', {
+      x: xScale(Math.max(minX, phaseStart)),
+      y: margin.top,
+      width: Math.max(0, xScale(Math.min(maxX, phaseEnd)) - xScale(Math.max(minX, phaseStart))),
+      height: plotH,
+      fill: colors[phase.type] || '#f1f5f9',
+      opacity: 0.35,
+    });
+    svg.appendChild(rect);
+    phaseStart = phaseEnd;
+  }
+
+  for (let i = 0; i < 5; i++) {
+    const y = margin.top + (plotH / 4) * i;
+    svg.appendChild(svgEl('line', { x1: margin.left, x2: width - margin.right, y1: y, y2: y, stroke: '#e2e8f0' }));
+  }
+  svg.appendChild(svgEl('line', { x1: margin.left, x2: margin.left, y1: margin.top, y2: height - margin.bottom, stroke: '#94a3b8' }));
+  svg.appendChild(svgEl('line', { x1: margin.left, x2: width - margin.right, y1: height - margin.bottom, y2: height - margin.bottom, stroke: '#94a3b8' }));
+  if (secondaryPointsBySystem.length) {
+    svg.appendChild(svgEl('line', { x1: width - margin.right, x2: width - margin.right, y1: margin.top, y2: height - margin.bottom, stroke: '#94a3b8' }));
+  }
+
+  const palette = ['#2563eb', '#dc2626', '#16a34a', '#7c3aed', '#ea580c', '#0891b2', '#be123c'];
+  pointsBySystem.forEach((entry, idx) => {
+    const path = entry.points.map((pt, i) => `${i ? 'L' : 'M'} ${xScale(pt.elapsed_s)} ${yScale(pt.value)}`).join(' ');
+    svg.appendChild(svgEl('path', { d: path, fill: 'none', stroke: palette[idx % palette.length], 'stroke-width': 2 }));
+    const label = SYSTEMS.find((item) => item.id === entry.system)?.label || entry.system;
+    const last = entry.points[entry.points.length - 1];
+    const text = svgEl('text', {
+      x: Math.min(width - margin.right + 10, xScale(last.elapsed_s) + 10),
+      y: yScale(last.value),
+      fill: palette[idx % palette.length],
+      'font-size': 12,
+    });
+    text.textContent = label;
+    svg.appendChild(text);
+    for (const pt of entry.points) {
+      const dot = svgEl('circle', {
+        cx: xScale(pt.elapsed_s),
+        cy: yScale(pt.value),
+        r: 3,
+        fill: palette[idx % palette.length],
+        opacity: 0.6,
+      });
+      dot.addEventListener('mouseenter', (event) => {
+        tooltip.style.display = 'block';
+        tooltip.style.left = `${event.pageX + 12}px`;
+        tooltip.style.top = `${event.pageY + 12}px`;
+        tooltip.innerHTML = `<strong>${label}</strong><br>${LABELS[metric] || metric}: ${pt.value.toFixed(3)}<br>t=${pt.elapsed_s.toFixed(1)}s<br>${pt.phase_label}`;
+      });
+      dot.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+      svg.appendChild(dot);
+    }
+  });
+
+  secondaryPointsBySystem.forEach((entry, idx) => {
+    const path = entry.points.map((pt, i) => `${i ? 'L' : 'M'} ${xScale(pt.elapsed_s)} ${yScale2(pt.value)}`).join(' ');
+    svg.appendChild(svgEl('path', {
+      d: path,
+      fill: 'none',
+      stroke: palette[idx % palette.length],
+      'stroke-width': 2,
+      'stroke-dasharray': '6 4',
+      opacity: 0.7,
+    }));
+    for (const pt of entry.points) {
+      const dot = svgEl('circle', {
+        cx: xScale(pt.elapsed_s),
+        cy: yScale2(pt.value),
+        r: 2.5,
+        fill: palette[idx % palette.length],
+        opacity: 0.45,
+      });
+      const label = SYSTEMS.find((item) => item.id === entry.system)?.label || entry.system;
+      dot.addEventListener('mouseenter', (event) => {
+        tooltip.style.display = 'block';
+        tooltip.style.left = `${event.pageX + 12}px`;
+        tooltip.style.top = `${event.pageY + 12}px`;
+        tooltip.innerHTML = `<strong>${label}</strong><br>${LABELS[secondaryMetric] || secondaryMetric}: ${pt.value.toFixed(3)}<br>t=${pt.elapsed_s.toFixed(1)}s<br>${pt.phase_label}`;
+      });
+      dot.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+      svg.appendChild(dot);
+    }
+  });
+
+  const yTop = svgEl('text', { x: 12, y: margin.top + 4, fill: '#64748b', 'font-size': 12 });
+  yTop.textContent = maxY.toFixed(1);
+  svg.appendChild(yTop);
+  const yBottom = svgEl('text', { x: 12, y: height - margin.bottom, fill: '#64748b', 'font-size': 12 });
+  yBottom.textContent = minY.toFixed(1);
+  svg.appendChild(yBottom);
+  if (secondaryPointsBySystem.length) {
+    const yTop2 = svgEl('text', { x: width - 12, y: margin.top + 4, fill: '#64748b', 'font-size': 12, 'text-anchor': 'end' });
+    yTop2.textContent = maxY2.toFixed(1);
+    svg.appendChild(yTop2);
+    const yBottom2 = svgEl('text', { x: width - 12, y: height - margin.bottom, fill: '#64748b', 'font-size': 12, 'text-anchor': 'end' });
+    yBottom2.textContent = minY2.toFixed(1);
+    svg.appendChild(yBottom2);
+  }
+  const xStart = svgEl('text', { x: margin.left, y: height - 8, fill: '#64748b', 'font-size': 12 });
+  xStart.textContent = `${minX.toFixed(0)}s`;
+  svg.appendChild(xStart);
+  const xEnd = svgEl('text', { x: width - margin.right, y: height - 8, fill: '#64748b', 'font-size': 12, 'text-anchor': 'end' });
+  xEnd.textContent = `${maxX.toFixed(0)}s`;
+  svg.appendChild(xEnd);
+}
+
+function makeSortableTable(tableEl) {
+  tableEl.querySelectorAll('th[data-sortable="true"]').forEach((th, idx) => {
+    let asc = true;
+    th.addEventListener('click', () => {
+      const rows = Array.from(tableEl.querySelectorAll('tbody tr'));
+      rows.sort((a, b) => {
+        const av = a.children[idx].dataset.sort || a.children[idx].textContent.trim();
+        const bv = b.children[idx].dataset.sort || b.children[idx].textContent.trim();
+        const an = Number(av);
+        const bn = Number(bv);
+        let cmp;
+        if (!Number.isNaN(an) && !Number.isNaN(bn)) cmp = an - bn;
+        else cmp = av.localeCompare(bv);
+        return asc ? cmp : -cmp;
+      });
+      asc = !asc;
+      const tbody = tableEl.querySelector('tbody');
+      rows.forEach((row) => tbody.appendChild(row));
+    });
+  });
+}
+
+function setupModal() {
+  const modal = document.getElementById('plot-modal');
+  const title = document.getElementById('plot-modal-title');
+  const img = document.getElementById('plot-modal-image');
+  document.querySelectorAll('.plot-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      title.textContent = card.dataset.plotTitle || '';
+      img.src = card.dataset.plotSrc || '';
+      modal.classList.add('open');
+    });
+  });
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal || event.target.dataset.close === 'true') {
+      modal.classList.remove('open');
+    }
+  });
+}
+
+function init() {
+  renderSystemChips();
+  renderPresets();
+  primaryMetricSelect.addEventListener('change', renderTimeline);
+  compareMetricSelect.addEventListener('change', renderTimeline);
+  phaseSelect.addEventListener('change', renderTimeline);
+  makeSortableTable(table);
+  setupModal();
+  renderTimeline();
+}
+
+init();
+  </script>
+</body>
+</html>

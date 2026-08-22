@@ -92,7 +92,7 @@ dependencies = [
  "awa-worker",
  "chrono",
  "hdrhistogram",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "serde",
@@ -105,9 +105,8 @@ dependencies = [
 
 [[package]]
 name = "awa-macros"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4e639bb08b7140fc77540ae968ad537ff76c269ce86d9adb7e28b36aee6a15c"
+version = "0.7.0-alpha.1"
+source = "git+https://github.com/hardbyte/awa?rev=8c279516c4407c3d277d4fe2a0c40eb58e2848d4#8c279516c4407c3d277d4fe2a0c40eb58e2848d4"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -117,19 +116,17 @@ dependencies = [
 
 [[package]]
 name = "awa-metrics"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cca71630d1bb027d5c8012404d22a303609501e87daca499d9b3a3e3aa6079d1"
+version = "0.7.0-alpha.1"
+source = "git+https://github.com/hardbyte/awa?rev=8c279516c4407c3d277d4fe2a0c40eb58e2848d4#8c279516c4407c3d277d4fe2a0c40eb58e2848d4"
 dependencies = [
  "awa-model",
- "opentelemetry",
+ "opentelemetry 0.32.0",
 ]
 
 [[package]]
 name = "awa-model"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0863154c69e35de28b9ed6bbc1621872ef1ead773f874c37d203d7f2f54e58cf"
+version = "0.7.0-alpha.1"
+source = "git+https://github.com/hardbyte/awa?rev=8c279516c4407c3d277d4fe2a0c40eb58e2848d4#8c279516c4407c3d277d4fe2a0c40eb58e2848d4"
 dependencies = [
  "awa-macros",
  "blake3",
@@ -137,20 +134,22 @@ dependencies = [
  "chrono-tz",
  "croner",
  "hex",
+ "opentelemetry 0.32.0",
+ "semver",
  "serde",
  "serde_json",
  "sqlx",
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
  "uuid",
 ]
 
 [[package]]
 name = "awa-worker"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc98d55557b131704fd3b1fc787228a6f098d55f6057ee41ba2b0c8260ae086f"
+version = "0.7.0-alpha.1"
+source = "git+https://github.com/hardbyte/awa?rev=8c279516c4407c3d277d4fe2a0c40eb58e2848d4#8c279516c4407c3d277d4fe2a0c40eb58e2848d4"
 dependencies = [
  "async-trait",
  "awa-macros",
@@ -159,7 +158,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "croner",
- "opentelemetry",
+ "opentelemetry 0.32.0",
  "serde",
  "serde_json",
  "sqlx",
@@ -167,6 +166,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-opentelemetry",
  "uuid",
 ]
 
@@ -1244,6 +1244,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "opentelemetry-http"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1252,7 +1266,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "http",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "reqwest",
 ]
 
@@ -1263,7 +1277,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f69cd6acbb9af919df949cd1ec9e5e7fdc2ef15d234b6b795aaa525cc02f71f"
 dependencies = [
  "http",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
@@ -1281,7 +1295,7 @@ version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
 dependencies = [
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "opentelemetry_sdk",
  "prost",
  "tonic",
@@ -1297,7 +1311,7 @@ dependencies = [
  "futures-channel",
  "futures-executor",
  "futures-util",
- "opentelemetry",
+ "opentelemetry 0.31.0",
  "percent-encoding",
  "rand 0.9.4",
  "thiserror",
@@ -2423,6 +2437,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-opentelemetry"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adbc64cba7137545b8044cb1fe9814f7aacf3c6b5f9b45be8bb5db538befdb26"
+dependencies = [
+ "js-sys",
+ "opentelemetry 0.32.0",
+ "smallvec",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
+ "web-time",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2672,6 +2702,16 @@ name = "web-sys"
 version = "0.3.97"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2eadbac71025cd7b0834f20d1fe8472e8495821b4e9801eb0a60bd1f19827602"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

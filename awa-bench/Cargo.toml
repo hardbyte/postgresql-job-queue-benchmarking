@@ -9,9 +9,12 @@ name = "awa-bench"
 path = "src/main.rs"
 
 [dependencies]
-awa-model = "=0.6.4"
-awa-worker = "=0.6.4"
-awa-macros = "=0.6.4"
+# Pinned to the awa 0.7 release candidate the 2026-08-22 perf gate measured
+# (results/2026-08-22-awa-07-rc-perf-gate). Bump the rev alongside any new
+# results directory.
+awa-model = { git = "https://github.com/hardbyte/awa", rev = "8c279516c4407c3d277d4fe2a0c40eb58e2848d4" }
+awa-worker = { git = "https://github.com/hardbyte/awa", rev = "8c279516c4407c3d277d4fe2a0c40eb58e2848d4" }
+awa-macros = { git = "https://github.com/hardbyte/awa", rev = "8c279516c4407c3d277d4fe2a0c40eb58e2848d4" }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "json", "migrate"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
