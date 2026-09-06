@@ -251,6 +251,13 @@ uv run python scripts/run_awa_release_gate.py \
   --output results/YYYY-MM-DD-awa-release-gate
 ```
 
+Add `--overnight` for matched four-hour baseline and candidate soaks after the
+reference/saturation matrix: 10m warmup, 30m clean, 120m pinned transaction, and
+80m recovery per build. This is eight hours of soak measurement plus the matrix.
+The driver validates sampled horizon stability, pin age and post-release
+advancement before accepting a soak. Failed pin validation preserves its evidence
+and marks the campaign failed.
+
 Each campaign keeps its build receipts, configuration, image identity, progress,
 and per-cell manifests/summaries. Single paired cells are directional evidence;
 report variation and repeat any suspicious difference before claiming a regression.
@@ -264,6 +271,10 @@ Generate the report and soak figure with:
 uv run python scripts/plot_awa_soak.py results/YYYY-MM-DD-awa-release-gate
 uv run python scripts/report_awa_release_gate.py results/YYYY-MM-DD-awa-release-gate
 ```
+
+For an overnight campaign, also run the plot command with
+`--cell mvcc-soak-baseline` before generating the report. Both figures derive the
+pin duration from recorded phase boundaries.
 
 The figure retains compact sampled series alongside the PNG, so it can be
 regenerated without distributing the full raw CSV. Latencies are rolling-window

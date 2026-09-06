@@ -14,9 +14,12 @@ def number(value, digits=1):
 def report(root: Path) -> None:
     campaign = json.loads((root / "campaign.json").read_text())
     cells = {}
+    phase_specs = {}
     for cell in campaign["cells"]:
         path = root / cell["path"] / "summary.json"
-        cells[cell["name"]] = json.loads(path.read_text())["systems"]["awa"]["phases"]
+        summary = json.loads(path.read_text())
+        cells[cell["name"]] = summary["systems"]["awa"]["phases"]
+        phase_specs[cell["name"]] = summary["phases"]
     builds = campaign["builds"]
     lines = ["# AWA owner-reconciliation benchmark", "",
         f"Campaign status: **{campaign['status']}**. Started {campaign['started_at']}.", "",
@@ -62,31 +65,44 @@ def report(root: Path) -> None:
         row = json.loads(line)
         values = [row["snapshot_only"]["p99_ms"], row["steady_publication"]["p99_ms"], row["reconcile_ms"], row["retire_ms"]]
         lines.append(f"| {row['fleet']} | {row['schedules']:,} | " + " | ".join(number(v) for v in values) + " |")
-    lines += ["", "## Fresh MVCC soak", "",
-        "Candidate W32 at offered 800/s: 10m warmup, 10m clean, 60m pinned transaction, 30m recovery. "
-        "The discarded August 23 soak is not reused.", "",
-        "| Phase | Enqueue/s | Complete/s | E2E p99 ms | Queue depth | Peak dead tuples |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |"]
-    soak = cells.get("mvcc-soak-candidate", {})
-    for label in ("clean", "pinned", "recovery"):
-        if phase := soak.get(label):
-            values = [phase.get(key) for key in ("median_enqueue_rate_per_s", "median_throughput_per_s",
-                "median_end_to_end_p99_ms", "median_queue_depth", "peak_dead_tup")]
-            lines.append(f"| {label} | " + " | ".join(number(v) for v in values) + " |")
-    if recovery := soak.get("recovery"):
-        # The legacy summary key says "halflife", but its implementation uses
-        # 0.1 * pinned peak. Name the measured threshold accurately here.
-        lines += ["", "Time to ≤10% of pinned peak dead tuples: "
-            f"{number(recovery.get('recovery_halflife_s'))} seconds. "
-            "Time to within 10% of clean median dead tuples: "
-            f"{number(recovery.get('recovery_to_baseline_s'))} seconds. "
-            "Times use the first recovery sample as their origin; zero means the threshold was already met "
-            "in that first sample. Sampling cadence is five seconds. A dash means the threshold was not "
-            "observed; PostgreSQL tuple statistics are estimates."]
-    else:
-        lines += ["", "Soak results pending."]
-    if (root / "soak.png").exists():
-        lines += ["", "![Fresh MVCC soak](soak.png)", ""]
+    lines += ["", "## Fresh MVCC soaks", "",
+        "W32 at offered 800/s, with fresh databases and the same phase lengths for each paired soak. "
+        "Historical soaks are not reused.", ""]
+    for build in ("baseline", "candidate"):
+        cell = f"mvcc-soak-{build}"
+        soak = cells.get(cell)
+        if not soak:
+            continue
+        durations = ", ".join(f"{p['duration_s'] / 60:g}m {p['label']}" for p in phase_specs[cell])
+        lines += [f"### {build.title()}", "", durations + ".", "",
+            "| Phase | Enqueue/s | Complete/s | E2E p99 ms | Queue depth | Peak dead tuples |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |"]
+        for label in ("clean", "pinned", "recovery"):
+            if phase := soak.get(label):
+                values = [phase.get(key) for key in ("median_enqueue_rate_per_s", "median_throughput_per_s",
+                    "median_end_to_end_p99_ms", "median_queue_depth", "peak_dead_tup")]
+                lines.append(f"| {label} | " + " | ".join(number(v) for v in values) + " |")
+        if recovery := soak.get("recovery"):
+            # The legacy key measures 90% reduction, despite its name.
+            lines += ["", "Time to ≤10% of pinned peak dead tuples: "
+                f"{number(recovery.get('recovery_halflife_s'))} seconds. "
+                "Time to within 10% of clean median dead tuples: "
+                f"{number(recovery.get('recovery_to_baseline_s'))} seconds. "
+                "Times use the first recovery sample as their origin; zero means the threshold was already met "
+                "in that first sample. Sampling cadence is five seconds. A dash means the threshold was not "
+                "observed; PostgreSQL tuple statistics are estimates.", ""]
+        proof = root / cell / "pin-validation.json"
+        if proof.exists():
+            validation = json.loads(proof.read_text())
+            lines += [f"Pin validation: **{validation['status']}**. "
+                f"{validation['pinned_samples']} samples, "
+                f"maximum measured horizon age {validation['maximum_xmin_age_s']:.1f}s. "
+                f"[Validation evidence]({cell}/pin-validation.json).", ""]
+        figure = "soak.png" if build == "candidate" else "soak-baseline.png"
+        if (root / figure).exists():
+            lines += [f"![{build.title()} MVCC soak]({figure})", ""]
+    if not any(name.startswith("mvcc-soak-") for name in cells):
+        lines += ["Soak results pending.", ""]
     lines += ["", "## Evidence boundaries", "",
         "This is a single-host, sequential performance experiment, not an exact job-loss proof. "
         "Correctness and released-artifact accounting evidence is linked from "

@@ -9,9 +9,10 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def plot(root: Path) -> None:
-    series_file = root / "soak-series.json"
-    raw = root / "mvcc-soak-candidate/raw.csv"
+def plot(root: Path, cell: str = "mvcc-soak-candidate") -> None:
+    prefix = "soak" if cell == "mvcc-soak-candidate" else "soak-baseline"
+    series_file = root / f"{prefix}-series.json"
+    raw = root / cell / "raw.csv"
     wanted = {"enqueue_rate", "completion_rate", "end_to_end_p99_ms", "queue_depth",
               "n_dead_tup", "total_relation_size_mb"}
     if raw.exists():
@@ -68,15 +69,17 @@ def plot(root: Path) -> None:
         axis.axvline(recovery, color="#555", linestyle="--", linewidth=.8)
         axis.grid(alpha=.15)
         axis.set_ylim(bottom=0)
-    axes[0].text((pin + recovery) / 2, 1.02, "60-minute MVCC pin", ha="center",
+    axes[0].text((pin + recovery) / 2, 1.02, f"{recovery - pin:.0f}-minute MVCC pin", ha="center",
                  transform=axes[0].get_xaxis_transform())
     axes[3].set_xlabel("Elapsed minutes (including warmup)")
-    fig.suptitle("AWA #481 — fresh MVCC soak\nPG18.3 · W32 · offered 800/s · durability enabled · upstream SQLx socket fix", fontsize=13)
-    fig.savefig(root / "soak.png", dpi=150)
+    fig.suptitle(f"AWA #481 — {cell.removeprefix('mvcc-soak-')} MVCC soak\nPG18.3 · W32 · offered 800/s · durability enabled · upstream SQLx socket fix", fontsize=13)
+    fig.savefig(root / f"{prefix}.png", dpi=150)
     plt.close(fig)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("campaign", type=Path)
-    plot(parser.parse_args().campaign)
+    parser.add_argument("--cell", choices=("mvcc-soak-baseline", "mvcc-soak-candidate"), default="mvcc-soak-candidate")
+    args = parser.parse_args()
+    plot(args.campaign, args.cell)

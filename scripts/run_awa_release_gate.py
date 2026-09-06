@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paired AWA reference/saturation cells and a fresh one-hour MVCC pin.
+"""Paired AWA reference/saturation cells and fresh MVCC soaks.
 
 Build/archive each executable with bench_harness.adapters.build_awa(False),
 including its .build.json receipt. Select binaries explicitly: this script
@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 from bench_harness.adapters import pg_url
 from bench_harness.orchestrator import drive, start_postgres, stop_postgres
 from bench_harness.phases import parse_phase_spec
+from bench_harness.pin_validation import validate_mvcc_pin
 from bench_harness.versions import file_sha256, verify_awa_build
 from bench_harness.writers import capture_pg_env
 
@@ -41,6 +42,7 @@ def main():
     parser.add_argument("--protocol-bin", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--pg-image", default="postgres:18.3-alpine")
+    parser.add_argument("--overnight", action="store_true", help="Run matched four-hour baseline/candidate MVCC soaks after the reference and saturation matrix")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     binaries = {"baseline":args.baseline.resolve(), "candidate":args.candidate.resolve()}
@@ -49,7 +51,7 @@ def main():
             shutil.copy2(ROOT/name,args.output/name)
     campaign = {"started_at":datetime.now(timezone.utc).isoformat(), "status":"running",
                 "builds":{label:verify_awa_build(binary, match_inputs=False) for label,binary in binaries.items()},
-                "protocol_executable_sha256":file_sha256(args.protocol_bin), "cells":[]}
+                "protocol_executable_sha256":file_sha256(args.protocol_bin), "overnight":args.overnight, "cells":[]}
     def save():
         (args.output / "campaign.json").write_text(json.dumps(campaign, indent=2)+"\n")
     save()
@@ -81,8 +83,13 @@ def main():
             order = ["baseline","candidate"] if name in {"ref800","sat-w128"} else ["candidate","baseline"]
             for label in order:
                 cells.append((f"{name}-{label}",label,workers,rate,mode,["warmup=warmup:60s",f"clean=clean:{clean}s"]))
-        cells.append(("mvcc-soak-candidate","candidate",32,800,"fixed",[
-            "warmup=warmup:10m","clean=clean:10m","pinned=idle-in-tx:60m","recovery=recovery:30m"]))
+        if args.overnight:
+            for label in ("baseline", "candidate"):
+                cells.append((f"mvcc-soak-{label}", label, 32, 800, "fixed", [
+                    "warmup=warmup:10m", "clean=clean:30m", "pinned=idle-in-tx:120m", "recovery=recovery:80m"]))
+        else:
+            cells.append(("mvcc-soak-candidate","candidate",32,800,"fixed",[
+                "warmup=warmup:10m","clean=clean:10m","pinned=idle-in-tx:60m","recovery=recovery:30m"]))
         for name,label,workers,rate,mode,specs in cells:
             campaign["active_cell"] = name
             save()
@@ -102,6 +109,8 @@ def main():
             shutil.move(str(result),str(args.output/name))
             if mode == "fixed":
                 check_offered_load(json.loads((args.output/name/"summary.json").read_text()), rate)
+            if name.startswith("mvcc-soak-"):
+                validate_mvcc_pin(args.output/name)
             campaign["cells"].append({"name":name,"path":name,"status":"complete"})
             save()
         campaign["status"]="complete"
