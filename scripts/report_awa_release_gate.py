@@ -22,7 +22,7 @@ def report(root: Path) -> None:
         phase_specs[cell["name"]] = summary["phases"]
     builds = campaign["builds"]
     lines = ["# AWA owner-reconciliation benchmark", "",
-        f"Campaign status: **{campaign['status']}**. Started {campaign['started_at']}.", "",
+        f"Campaign status: **{campaign['status']}**. Started {campaign['started_at']}; last update {campaign.get('updated_at', 'unknown')}.", "",
         f"Baseline: `{builds['baseline']['git_sha']}`. Candidate: `{builds['candidate']['git_sha']}`.", "",
         "Both builds use the same pinned upstream SQLx TCP_NODELAY fix. "
         "These results isolate #481 under corrected transport; they do **not** approve "
@@ -99,10 +99,22 @@ def report(root: Path) -> None:
                 f"maximum measured horizon age {validation['maximum_xmin_age_s']:.1f}s. "
                 f"[Validation evidence]({cell}/pin-validation.json).", ""]
         figure = "soak.png" if build == "candidate" else "soak-baseline.png"
-        if (root / figure).exists():
+        if (root / figure).exists() and not (root / "plots/soak-comparison.png").exists():
             lines += [f"![{build.title()} MVCC soak]({figure})", ""]
     if not any(name.startswith("mvcc-soak-") for name in cells):
         lines += ["Soak results pending.", ""]
+    if (root / "INTERPRETATION.md").exists():
+        lines[2:2] = ["[Interpretation, limitations and follow-ups](INTERPRETATION.md).", ""]
+    figures = [("throughput-latency", "Reference and saturation"),
+               ("soak-comparison", "Matched soak traces"),
+               ("recovery", "Recovery thresholds and full window"),
+               ("cron-protocol", "Candidate control-plane cost")]
+    for name, title in figures:
+        if (root / f"plots/{name}.png").exists():
+            lines += ["", f"## {title}", "", f"![{title}](plots/{name}.png)", "",
+                      f"[Vector figure](plots/{name}.svg).", ""]
+    lines += ["", "Recovery thresholds report the first observed crossing, not sustained recovery. "
+              "Continued traffic and estimated tuple statistics can cross the threshold again.", ""]
     lines += ["", "## Evidence boundaries", "",
         "This is a single-host, sequential performance experiment, not an exact job-loss proof. "
         "Correctness and released-artifact accounting evidence is linked from "
