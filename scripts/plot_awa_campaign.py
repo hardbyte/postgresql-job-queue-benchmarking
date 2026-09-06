@@ -39,6 +39,9 @@ def render(root: Path) -> None:
         fig.tight_layout(rect=(0, .025, 1, .98))
         for extension in ('png', 'svg'):
             fig.savefig(out / f'{name}.{extension}', dpi=180, metadata={'Date': None} if extension == 'svg' else None)
+            if extension == 'svg':
+                path = out / f'{name}.svg'
+                path.write_text('\n'.join(line.rstrip() for line in path.read_text().splitlines()) + '\n')
         plt.close(fig)
 
     workloads = ['ref800', 'sat-w64', 'sat-w128', 'sat-w256']
