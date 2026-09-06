@@ -46,6 +46,10 @@ def report(root: Path) -> None:
                 values = [phase.get(key) for key in ("median_enqueue_rate_per_s", "median_throughput_per_s",
                     "median_end_to_end_p99_ms", "median_queue_depth")]
                 lines.append(f"| {workload} | {build} | " + " | ".join(number(v) for v in values) + " |")
+    repeats = root.parent / f"{root.name.removesuffix('-nodelay')}-w128-repeat/SUMMARY.md"
+    if repeats.exists():
+        lines += ["", "The initial W128 latency difference was checked with two additional pairs; "
+            f"see [all three W128 pairs](../{repeats.parent.name}/SUMMARY.md).", ""]
     lines += ["", "## Cron control-plane probe", "",
         "Concurrent fleet publication, three steady rounds per cell. Manifests are prepared before "
         "timing, as in the runtime. Snapshot-only and publication measurements include waiting for "
@@ -76,15 +80,26 @@ def report(root: Path) -> None:
             f"{number(recovery.get('recovery_halflife_s'))} seconds. "
             "Time to within 10% of clean median dead tuples: "
             f"{number(recovery.get('recovery_to_baseline_s'))} seconds. "
-            "A dash means the threshold was not observed; PostgreSQL tuple statistics are estimates."]
+            "Times use the first recovery sample as their origin; zero means the threshold was already met "
+            "in that first sample. Sampling cadence is five seconds. A dash means the threshold was not "
+            "observed; PostgreSQL tuple statistics are estimates."]
     else:
         lines += ["", "Soak results pending."]
+    if (root / "soak.png").exists():
+        lines += ["", "![Fresh MVCC soak](soak.png)", ""]
     lines += ["", "## Evidence boundaries", "",
         "This is a single-host, sequential performance experiment, not an exact job-loss proof. "
         "Correctness and released-artifact accounting evidence is linked from "
         "[AWA PR #482](https://github.com/hardbyte/awa/pull/482). "
         "Raw CSV and process logs remain local; checked-in manifests and summaries preserve the "
         "workload, build identity and phase aggregates.", ""]
+    if (root / "pin-verification.jsonl").exists():
+        lines += [
+        "The original soak process used the old `xmin_age_s` query, which omitted horizon holders "
+        "with `backend_xid` but no `backend_xmin`. Pin validation therefore uses the original "
+        "snapshot-horizon and idle-transaction-age samples, plus supplementary live SQL evidence; "
+        "the raw legacy age values are retained. The reporting query is now corrected and tested. "
+        "See [pin validation](pin-validation.json) and [live SQL samples](pin-verification.jsonl).", ""]
     (root / "SUMMARY.md").write_text("\n".join(lines))
 
 

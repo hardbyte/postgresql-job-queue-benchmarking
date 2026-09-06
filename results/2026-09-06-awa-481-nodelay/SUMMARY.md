@@ -1,6 +1,6 @@
 # AWA owner-reconciliation benchmark
 
-Campaign status: **running**. Started 2026-09-06T04:05:54.546726+00:00.
+Campaign status: **complete**. Started 2026-09-06T04:05:54.546726+00:00.
 
 Baseline: `49b1a7741bc0ebdc805719bf3d0a51b4a17bba2d`. Candidate: `a8e7e638fd6ff715ff7be66318b6e8e3b109434e`.
 
@@ -22,6 +22,9 @@ Reference: W32, offered 800/s, 60s warmup + 300s clean. Saturation: W64/128/256,
 | sat-w128 | candidate | 7,510.8 | 7,512.3 | 743.4 | 2,464.0 |
 | sat-w256 | baseline | 10,422.8 | 10,435.2 | 460.2 | 1,779.0 |
 | sat-w256 | candidate | 11,385.8 | 11,365.2 | 456.7 | 1,648.0 |
+
+The initial W128 latency difference was checked with two additional pairs; see [all three W128 pairs](../2026-09-06-awa-481-w128-repeat/SUMMARY.md).
+
 
 ## Cron control-plane probe
 
@@ -45,9 +48,17 @@ Candidate W32 at offered 800/s: 10m warmup, 10m clean, 60m pinned transaction, 3
 
 | Phase | Enqueue/s | Complete/s | E2E p99 ms | Queue depth | Peak dead tuples |
 | --- | ---: | ---: | ---: | ---: | ---: |
+| clean | 800.2 | 800.1 | 44.0 | 0.0 | 132.0 |
+| pinned | 798.4 | 799.1 | 44.0 | 0.0 | 3,758.0 |
+| recovery | 798.3 | 798.4 | 41.0 | 0.0 | 469.0 |
 
-Soak results pending.
+Time to ≤10% of pinned peak dead tuples: 15.0 seconds. Time to within 10% of clean median dead tuples: — seconds. Times use the first recovery sample as their origin; zero means the threshold was already met in that first sample. Sampling cadence is five seconds. A dash means the threshold was not observed; PostgreSQL tuple statistics are estimates.
+
+![Fresh MVCC soak](soak.png)
+
 
 ## Evidence boundaries
 
 This is a single-host, sequential performance experiment, not an exact job-loss proof. Correctness and released-artifact accounting evidence is linked from [AWA PR #482](https://github.com/hardbyte/awa/pull/482). Raw CSV and process logs remain local; checked-in manifests and summaries preserve the workload, build identity and phase aggregates.
+
+The original soak process used the old `xmin_age_s` query, which omitted horizon holders with `backend_xid` but no `backend_xmin`. Pin validation therefore uses the original snapshot-horizon and idle-transaction-age samples, plus supplementary live SQL evidence; the raw legacy age values are retained. The reporting query is now corrected and tested. See [pin validation](pin-validation.json) and [live SQL samples](pin-verification.jsonl).

@@ -261,8 +261,8 @@ a lower-load run.
 Generate the report and soak figure with:
 
 ```bash
-uv run python scripts/report_awa_release_gate.py results/YYYY-MM-DD-awa-release-gate
 uv run python scripts/plot_awa_soak.py results/YYYY-MM-DD-awa-release-gate
+uv run python scripts/report_awa_release_gate.py results/YYYY-MM-DD-awa-release-gate
 ```
 
 The figure retains compact sampled series alongside the PNG, so it can be
@@ -275,3 +275,15 @@ diagnostic comparisons. Resolve the lockfile with that Cargo config, then set
 `AWA_BENCH_CARGO_CONFIG` to its absolute path when building through the harness.
 Receipts capture the config and SQLx sources. Apply it equally to both builds,
 and distinguish those results from the unpatched published dependency.
+
+For two additional W128 pairs (candidate/baseline, then baseline/candidate), use
+`scripts/repeat_awa_w128.py` with the same `--baseline`, `--candidate`, and a new
+`--output` directory. It preserves the original executable receipts and uses a
+fresh database for each 60s warmup + 180s measurement. Summarize all three pairs
+with `scripts/report_awa_w128.py INITIAL_CAMPAIGN REPEAT_CAMPAIGN`.
+
+The September 6 evidence includes the [completed campaign and fresh soak](results/2026-09-06-awa-481-nodelay/SUMMARY.md),
+[W128 repeats](results/2026-09-06-awa-481-w128-repeat/SUMMARY.md), and the
+[isolated manifest-cache comparison](results/2026-09-06-cron-manifest-cache/SUMMARY.md).
+The soak report records a legacy horizon-age metric defect and independently
+verified pin evidence; subsequent runs use the corrected query.
