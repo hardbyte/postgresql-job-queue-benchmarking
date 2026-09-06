@@ -31,9 +31,9 @@ Three systems (awa, pgque, river) recover from every chaos scenario; the other f
 
 **Event/message bus** — pgque (PgQ lineage). Append-only event log, ticker forms batch boundaries, multiple consumer groups each track a cursor over the shared log. This bench drives it in single-consumer competing-consumers mode: `receive` returns a batch and `ack(batch_id)` finishes the batch in one row update; failure handling stays per-message via `nack`. Cheap idempotent events are comfortable with that; long-running side-effecting jobs prefer the per-job ack the six job queues give you.
 
-## Feature comparison recorded with the historical sweep
+## Archived feature notes
 
-Throughput is one shape of the question; the other is what each system actually gives you out of the box. This historical table records the feature descriptions associated with the sweep; it is not a current-version product survey.
+Throughput is one shape of the question; the other is what each system actually gives you out of the box. These notes are preserved from the previous README. They were not revalidated during the September AWA-only campaign; consult each system's versioned documentation before relying on a feature comparison.
 
 | | awa | Absurd | pg-boss | pgmq | pgque | Oban | Procrastinate | River |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
