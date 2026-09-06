@@ -965,7 +965,8 @@ pub async fn run() {
                                 Ok(counts) => {
                                     total_available += counts.available as u64;
                                     total_running += counts.running as u64;
-                                    match sqlx::query_as::<_, (i64, i64)>(&format!(
+                                    match // QueueStorage validates the schema identifier; values remain bound.
+sqlx::query_as::<_, (i64, i64)>(sqlx::AssertSqlSafe(format!(
                                         r#"
                                         SELECT
                                             COALESCE(sum(CASE WHEN state = 'retryable' THEN 1 ELSE 0 END), 0)::bigint AS retryable,
@@ -974,7 +975,7 @@ pub async fn run() {
                                         WHERE queue = $1
                                         "#,
                                         depth_store.schema()
-                                    ))
+                                    )))
                                     .bind(q.as_str())
                                     .fetch_one(&depth_pool)
                                     .await

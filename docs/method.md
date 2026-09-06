@@ -1,8 +1,9 @@
 # Method
 
 How the harness composes scenarios, what each phase type does, and the
-Postgres-side diagnostics it captures. The README is the comparison; this
-file is the reference.
+Postgres-side diagnostics it captures. The README indexes dated evidence; this
+file is the workload reference. AWA candidate comparisons and plot conventions
+are documented in [the campaign guide](awa-campaigns.md).
 
 ## Scenarios
 

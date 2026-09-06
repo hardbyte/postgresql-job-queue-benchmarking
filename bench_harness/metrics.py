@@ -69,7 +69,11 @@ SELECT
   snap.snapshot_xmin::text::double precision AS snapshot_xmin,
   COALESCE(
     EXTRACT(EPOCH FROM (now() - MIN(pg_stat_activity.xact_start) FILTER (
-      WHERE pg_stat_activity.backend_xmin::text = snap.snapshot_xmin::text
+      -- An idle READ COMMITTED transaction can hold the horizon through
+      -- its assigned XID while backend_xmin is NULL. Cast xid8 to xid so
+      -- the activity comparison also works after the 32-bit XID wraps.
+      WHERE pg_stat_activity.backend_xmin = snap.snapshot_xmin::xid
+         OR pg_stat_activity.backend_xid = snap.snapshot_xmin::xid
     ))),
     0
   )::double precision AS xmin_age_s,

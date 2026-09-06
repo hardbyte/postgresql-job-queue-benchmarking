@@ -5,10 +5,10 @@ one half of the story: it records whatever the process chose to claim about
 itself at start-of-run. This module records the other half — what the
 harness can prove by inspecting the source tree and pinned manifests:
 
-- `awa*`: the git SHA / branch / dirty state of the awa checkout (since
-  the native `awa-bench`, the Docker image, and the Python wheel all compile
-  from it). This is the canonical answer to "which commit of awa was
-  benchmarked?".
+- Native `awa`: a build receipt binds the resolved Cargo.lock source to the
+  executable SHA-256 and adapter source digest. Launch refuses stale receipts.
+- Docker adapters: immutable image identity; source revision is unknown unless
+  the image provides it. A nearby source checkout is never build evidence.
 - `pgque`: the submodule SHA of `pgque-bench/vendor/pgque` (that SQL is
   embedded into the image at build time).
 - `procrastinate` / `river` / `oban`: the pinned upstream library version
@@ -22,7 +22,11 @@ results directory.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import tomllib
+from datetime import datetime, timezone
 import re
 import subprocess
 from pathlib import Path
@@ -47,22 +51,84 @@ def _git(args: list[str], cwd: Path = BENCH_REPO_ROOT) -> str | None:
     return res.stdout.strip() if res.returncode == 0 else None
 
 
-def _awa_repo_revision() -> dict[str, Any]:
-    """Git state of the awa repo — shared by awa, awa-docker, awa-python."""
-    sha = _git(["rev-parse", "HEAD"], cwd=AWA_REPO_ROOT)
-    short = _git(["rev-parse", "--short", "HEAD"], cwd=AWA_REPO_ROOT)
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=AWA_REPO_ROOT)
-    tag = _git(["describe", "--tags", "--exact-match", "HEAD"], cwd=AWA_REPO_ROOT)
-    dirty = bool((_git(["status", "--porcelain"], cwd=AWA_REPO_ROOT) or "").strip())
-    return {
-        "source": "awa repo",
-        "git_sha": sha,
-        "git_short": short,
-        "git_branch": branch,
-        "git_tag": tag,
-        "dirty": dirty,
-        "benchmark_harness": _bench_repo_revision(),
-    }
+def file_sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def awa_input_digest() -> str:
+    root = SCRIPT_DIR / "awa-bench"
+    paths = [root / "Cargo.toml", root / "Cargo.lock", *sorted((root / "src").rglob("*"))]
+    if (root / "build.rs").exists():
+        paths.append(root / "build.rs")
+    digest = hashlib.sha256()
+    for path in paths:
+        if path.is_file():
+            digest.update(str(path.relative_to(root)).encode() + b"\0")
+            digest.update(path.read_bytes())
+    if config := os.environ.get("AWA_BENCH_CARGO_CONFIG"):
+        digest.update(b"cargo-config\0" + Path(config).read_bytes())
+    return digest.hexdigest()
+
+
+def awa_locked_revision() -> dict[str, Any]:
+    lock = tomllib.loads((SCRIPT_DIR / "awa-bench/Cargo.lock").read_text())
+    packages = {p["name"]: p for p in lock["package"] if p["name"] in {"awa-model", "awa-worker", "awa-macros"}}
+    sources = {p.get("source", "path") for p in packages.values()}
+    if len(packages) != 3 or len(sources) != 1:
+        raise RuntimeError("AWA crates must resolve to one pinned source")
+    source = sources.pop()
+    sha = source.rsplit("#", 1)[-1] if source.startswith("git+") else None
+    return {"source": "awa-bench/Cargo.lock", "cargo_source": source,
+            "git_sha": sha, "git_short": sha[:12] if sha else None,
+            "packages": {name: p["version"] for name, p in packages.items()},
+            "database_driver": [{key: p[key] for key in ("name", "version", "source", "checksum") if key in p}
+                                for p in lock["package"] if p["name"].startswith("sqlx")]}
+
+
+def write_awa_build_receipt(binary: Path) -> None:
+    receipt = {**awa_locked_revision(), "executable_sha256": file_sha256(binary),
+               "adapter_input_sha256": awa_input_digest(),
+               "built_at": datetime.now(timezone.utc).isoformat(),
+               "cargo_config": Path(os.environ["AWA_BENCH_CARGO_CONFIG"]).read_text()
+                               if os.environ.get("AWA_BENCH_CARGO_CONFIG") else None,
+               "build_harness": _bench_repo_revision()}
+    binary.with_suffix(".build.json").write_text(json.dumps(receipt, indent=2) + "\n")
+
+
+def verify_awa_build(binary: Path, *, match_inputs: bool = True) -> dict[str, Any]:
+    try:
+        receipt = json.loads(binary.with_suffix(".build.json").read_text())
+        valid = receipt["executable_sha256"] == file_sha256(binary)
+        if match_inputs:
+            valid = (valid and receipt["adapter_input_sha256"] == awa_input_digest()
+                     and receipt["cargo_source"] == awa_locked_revision()["cargo_source"])
+    except (OSError, ValueError, KeyError):
+        valid = False
+    if not valid:
+        raise RuntimeError("AWA executable is missing verified build provenance or is stale; rerun without --skip-build")
+    return {**receipt, "verified": True, "source": "native executable + locked build receipt",
+            "benchmark_harness": _bench_repo_revision()}
+
+
+def _awa_native_revision() -> dict[str, Any]:
+    from .adapters import awa_binary
+    try:
+        binary, explicit = awa_binary()
+        return verify_awa_build(binary, match_inputs=not explicit)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+        return {"source": "unverified native executable", "verified": False, "note": str(error)}
+
+
+def _image_revision(image: str) -> dict[str, Any]:
+    try:
+        result = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True, check=True, timeout=10)
+        info = json.loads(result.stdout)[0]
+        return {"source": "Docker image", "image_id": info["Id"],
+                "repo_digests": info.get("RepoDigests", []),
+                "note": "Image identity captured; upstream source revision unverified"}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {"source": "Docker image unavailable", "verified": False}
 
 
 def _bench_repo_revision() -> dict[str, Any]:
@@ -84,7 +150,6 @@ def _bench_repo_revision() -> dict[str, Any]:
 
 def _pgque_submodule_revision() -> dict[str, Any]:
     """pgque upstream SHA via the submodule pointer."""
-    base = _awa_repo_revision()
     sub_path = "pgque-bench/vendor/pgque"
     status = _git(["submodule", "status", sub_path], cwd=BENCH_REPO_ROOT)
     # `git submodule status` prints " <sha> <path> (<describe>)"; leading
@@ -97,8 +162,7 @@ def _pgque_submodule_revision() -> dict[str, Any]:
             submodule_sha = m.group(1)
             submodule_describe = m.group(2)
     return {
-        **base,
-        "source": "awa repo + pgque submodule",
+        "source": "pgque submodule",
         "benchmark_harness": _bench_repo_revision(),
         "pgque_submodule_sha": submodule_sha,
         "pgque_submodule_describe": submodule_describe,
@@ -189,10 +253,10 @@ def _absurd_revision() -> dict[str, Any]:
 
 
 _CAPTURE: dict[str, Any] = {
-    "awa": _awa_repo_revision,
-    "awa-canonical": _awa_repo_revision,
-    "awa-docker": _awa_repo_revision,
-    "awa-python": _awa_repo_revision,
+    "awa": _awa_native_revision,
+    "awa-canonical": _awa_native_revision,
+    "awa-docker": lambda: _image_revision("awa-bench-docker"),
+    "awa-python": lambda: _image_revision("awa-python-bench"),
     "pgque": _pgque_submodule_revision,
     "pgmq": _pgmq_revision,
     "pgboss": _pgboss_revision,
@@ -232,6 +296,10 @@ def format_revision_oneline(system: str, entry: dict | None) -> str:
     entry = entry or {}
     rev = entry.get("revision") or {}
     parts: list[str] = []
+    if rev.get("verified") is False:
+        parts.append("**unverified artifact**")
+    if rev.get("image_id"):
+        parts.append(f"image `{rev['image_id']}` (source revision unverified)")
     short = rev.get("git_short")
     branch = rev.get("git_branch")
     dirty = rev.get("dirty")

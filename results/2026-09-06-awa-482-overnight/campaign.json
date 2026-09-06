@@ -1,0 +1,241 @@
+{
+  "started_at": "2026-09-06T10:23:42.909508+00:00",
+  "status": "complete",
+  "builds": {
+    "baseline": {
+      "source": "native executable + locked build receipt",
+      "cargo_source": "git+https://github.com/hardbyte/awa?rev=49b1a7741bc0ebdc805719bf3d0a51b4a17bba2d#49b1a7741bc0ebdc805719bf3d0a51b4a17bba2d",
+      "git_sha": "49b1a7741bc0ebdc805719bf3d0a51b4a17bba2d",
+      "git_short": "49b1a7741bc0",
+      "packages": {
+        "awa-macros": "0.7.0-alpha.1",
+        "awa-model": "0.7.0-alpha.1",
+        "awa-worker": "0.7.0-alpha.1"
+      },
+      "database_driver": [
+        {
+          "name": "sqlx",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "378620ccc25c62c89d8be1c819e76a88d59bdcc3304733330788948e619bfd71"
+        },
+        {
+          "name": "sqlx-core",
+          "version": "0.9.0",
+          "source": "git+https://github.com/transact-rs/sqlx?rev=6e57d05490859f31aa364ca69fcb379f3a2995e6#6e57d05490859f31aa364ca69fcb379f3a2995e6"
+        },
+        {
+          "name": "sqlx-macros",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "bd2b84f2bc39a5705ef27ec785a11c934a41bbd4a24941e257927cddc26b60bf"
+        },
+        {
+          "name": "sqlx-macros-core",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "fb8d96de5fdc85a5c4ec813432b523ec637e80ba98f046555f75f7908ddac7c3"
+        },
+        {
+          "name": "sqlx-mysql",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "90b8020fe17c5f2c245bfa2505d7ef59c5604839527c740266ad2214acebea27"
+        },
+        {
+          "name": "sqlx-postgres",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "87a2bdd6e83f6b3ea525ca9fee568030508b58355a43d0b2c1674d5f79dcd65e"
+        },
+        {
+          "name": "sqlx-sqlite",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "488e99c397a62007e4229aec669a179816339afc6d2620ca6fa420dbee2e982c"
+        }
+      ],
+      "executable_sha256": "78595a4db51e7778d243068591944f8f2e31a30ed9a9b820416716bb57d85cd2",
+      "adapter_input_sha256": "88563224d88eef4d35f4dd78c4f5534e35427e3ac7a291099db2a0612adb0dc5",
+      "built_at": "2026-09-06T04:05:22.915057+00:00",
+      "cargo_config": "# Diagnostic comparison only: both AWA builds use the same upstream socket fix.\n# This is not evidence for unpatched crates.io sqlx 0.9.0 performance.\n# cargo --config awa-bench/sqlx-nodelay.toml build --manifest-path awa-bench/Cargo.toml --release\n[patch.crates-io]\nsqlx-core = { git = \"https://github.com/transact-rs/sqlx\", rev = \"6e57d05490859f31aa364ca69fcb379f3a2995e6\" }\n",
+      "build_harness": {
+        "source": "benchmark repo",
+        "git_sha": "18f073929d47c6644a540a2ca7dd4e450bf1563f",
+        "git_short": "18f0739",
+        "git_branch": "brian/awa-481-benchmarks",
+        "git_tag": null,
+        "dirty": true
+      },
+      "verified": true,
+      "benchmark_harness": {
+        "source": "benchmark repo",
+        "git_sha": "5039e844b4ed7f9ade4d713f9c89100adf035ad5",
+        "git_short": "5039e84",
+        "git_branch": "brian/awa-481-benchmarks",
+        "git_tag": null,
+        "dirty": true
+      }
+    },
+    "candidate": {
+      "source": "native executable + locked build receipt",
+      "cargo_source": "git+https://github.com/hardbyte/awa?rev=59a137735e112d834b4d9431f3b93c3f20cc295d#59a137735e112d834b4d9431f3b93c3f20cc295d",
+      "git_sha": "59a137735e112d834b4d9431f3b93c3f20cc295d",
+      "git_short": "59a137735e11",
+      "packages": {
+        "awa-macros": "0.7.0-alpha.1",
+        "awa-model": "0.7.0-alpha.1",
+        "awa-worker": "0.7.0-alpha.1"
+      },
+      "database_driver": [
+        {
+          "name": "sqlx",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "378620ccc25c62c89d8be1c819e76a88d59bdcc3304733330788948e619bfd71"
+        },
+        {
+          "name": "sqlx-core",
+          "version": "0.9.0",
+          "source": "git+https://github.com/transact-rs/sqlx?rev=6e57d05490859f31aa364ca69fcb379f3a2995e6#6e57d05490859f31aa364ca69fcb379f3a2995e6"
+        },
+        {
+          "name": "sqlx-macros",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "bd2b84f2bc39a5705ef27ec785a11c934a41bbd4a24941e257927cddc26b60bf"
+        },
+        {
+          "name": "sqlx-macros-core",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "fb8d96de5fdc85a5c4ec813432b523ec637e80ba98f046555f75f7908ddac7c3"
+        },
+        {
+          "name": "sqlx-mysql",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "90b8020fe17c5f2c245bfa2505d7ef59c5604839527c740266ad2214acebea27"
+        },
+        {
+          "name": "sqlx-postgres",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "87a2bdd6e83f6b3ea525ca9fee568030508b58355a43d0b2c1674d5f79dcd65e"
+        },
+        {
+          "name": "sqlx-sqlite",
+          "version": "0.9.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "488e99c397a62007e4229aec669a179816339afc6d2620ca6fa420dbee2e982c"
+        }
+      ],
+      "executable_sha256": "5832a80e0a3380f29565c715197dabf98af91eaf4a99525b983ae2dbbb45b864",
+      "adapter_input_sha256": "bb0b7ca89556aa99cbadfc6d0da943948f756e2e6bacd3a7583439add64ccea3",
+      "built_at": "2026-09-06T10:12:22.229326+00:00",
+      "cargo_config": "# Diagnostic comparison only: both AWA builds use the same upstream socket fix.\n# This is not evidence for unpatched crates.io sqlx 0.9.0 performance.\n# cargo --config awa-bench/sqlx-nodelay.toml build --manifest-path awa-bench/Cargo.toml --release\n[patch.crates-io]\nsqlx-core = { git = \"https://github.com/transact-rs/sqlx\", rev = \"6e57d05490859f31aa364ca69fcb379f3a2995e6\" }\n",
+      "build_harness": {
+        "source": "benchmark repo",
+        "git_sha": "f110221d8d983034af9210c4fb209a4da34183fe",
+        "git_short": "f110221",
+        "git_branch": "brian/awa-481-benchmarks",
+        "git_tag": null,
+        "dirty": true
+      },
+      "verified": true,
+      "benchmark_harness": {
+        "source": "benchmark repo",
+        "git_sha": "5039e844b4ed7f9ade4d713f9c89100adf035ad5",
+        "git_short": "5039e84",
+        "git_branch": "brian/awa-481-benchmarks",
+        "git_tag": null,
+        "dirty": true
+      }
+    }
+  },
+  "protocol_executable_sha256": "74dbc3c4df2812a475d8383efe5dbc20c0fe952bb49dc9cc1faf8c90624b9778",
+  "overnight": true,
+  "cells": [
+    {
+      "name": "ref800-baseline",
+      "path": "ref800-baseline",
+      "status": "complete"
+    },
+    {
+      "name": "ref800-candidate",
+      "path": "ref800-candidate",
+      "status": "complete"
+    },
+    {
+      "name": "sat-w64-candidate",
+      "path": "sat-w64-candidate",
+      "status": "complete"
+    },
+    {
+      "name": "sat-w64-baseline",
+      "path": "sat-w64-baseline",
+      "status": "complete"
+    },
+    {
+      "name": "sat-w128-baseline",
+      "path": "sat-w128-baseline",
+      "status": "complete"
+    },
+    {
+      "name": "sat-w128-candidate",
+      "path": "sat-w128-candidate",
+      "status": "complete"
+    },
+    {
+      "name": "sat-w256-candidate",
+      "path": "sat-w256-candidate",
+      "status": "complete"
+    },
+    {
+      "name": "sat-w256-baseline",
+      "path": "sat-w256-baseline",
+      "status": "complete"
+    },
+    {
+      "name": "mvcc-soak-baseline",
+      "path": "mvcc-soak-baseline",
+      "status": "complete"
+    },
+    {
+      "name": "mvcc-soak-candidate",
+      "path": "mvcc-soak-candidate",
+      "status": "complete"
+    }
+  ],
+  "protocol_postgres": {
+    "version": "PostgreSQL 18.3 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "settings": {
+      "shared_buffers": "256MB",
+      "work_mem": "8MB",
+      "maintenance_work_mem": "128MB",
+      "autovacuum": "on",
+      "autovacuum_naptime": "1min",
+      "autovacuum_vacuum_cost_delay": "2ms",
+      "autovacuum_vacuum_cost_limit": "200",
+      "autovacuum_vacuum_scale_factor": "0.2",
+      "autovacuum_analyze_scale_factor": "0.1",
+      "max_connections": "400",
+      "synchronous_commit": "on",
+      "fsync": "on",
+      "full_page_writes": "on",
+      "checkpoint_timeout": "5min",
+      "checkpoint_completion_target": "0.9",
+      "max_wal_size": "1GB",
+      "max_locks_per_transaction": "64",
+      "wal_level": "replica",
+      "shared_preload_libraries": "pg_stat_statements"
+    }
+  },
+  "postgres_image_id": "sha256:f6d4985d97e69bb9de4d5e24f9f24cbfaa90d30877ce935a8ee872f62efbb621",
+  "postgres_limits": {
+    "NanoCpus": 4000000000,
+    "Memory": 8589934592,
+    "ShmSize": 268435456
+  },
+  "updated_at": "2026-09-06T19:07:30.227634+00:00"
+}
