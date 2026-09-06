@@ -741,6 +741,18 @@ def run_one_system(
     )
     pool.start_all()
     _check_cross_replica_drift(pool)
+    if system in {"awa", "awa-canonical"}:
+        try:
+            with psycopg.connect(pg_url(manifest.db_name), autocommit=True) as connection:
+                schema_version = connection.execute("SELECT max(version) FROM awa.schema_version").fetchone()[0]
+                backend = connection.execute("SELECT schema_name FROM awa.runtime_storage_backends WHERE backend='queue_storage'").fetchone()
+                authority = None
+                if backend:
+                    authority = connection.execute(psycopg.sql.SQL("SELECT authority FROM {}.ring_cursor_authority WHERE singleton=true").format(psycopg.sql.Identifier(backend[0]))).fetchone()[0]
+                revision["runtime_storage"] = {"schema_version":schema_version,"queue_storage_schema":backend[0] if backend else None,"ring_authority":authority}
+        except Exception:
+            pool.stop_all(timeout_s=manifest.shutdown_grace_s)
+            raise
     runtime_descriptor = pool.descriptor or {}
     runtime_event_tables = list(
         runtime_descriptor.get("event_tables") or manifest.event_tables

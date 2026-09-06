@@ -1032,6 +1032,12 @@ def capture_pg_env(database_url: str) -> dict:
         "autovacuum_analyze_scale_factor",
         "max_connections",
         "synchronous_commit",
+        "fsync",
+        "full_page_writes",
+        "checkpoint_timeout",
+        "checkpoint_completion_target",
+        "max_wal_size",
+        "max_locks_per_transaction",
         "wal_level",
         # The single check that proves a non-postgres engine (e.g. AlloyDB
         # Omni) actually loaded its engine libs rather than running as

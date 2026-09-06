@@ -88,6 +88,8 @@ def main():
                     pg_image=args.pg_image,fast=False,skip_build=True,sample_every_s=5,
                     producer_rate=rate,producer_mode=mode,target_depth=4000,worker_count=workers,
                     high_load_multiplier=1.5,awa_completion_batch_size=None,replicas=1,cli_args=cli)
+            measured = json.loads((result / "manifest.json").read_text())
+            assert measured["adapters"]["awa"]["revision"]["runtime_storage"]["ring_authority"] == "ledger", "Release gate requires ledger authority"
             shutil.move(str(result),str(args.output/name))
             campaign["cells"].append({"name":name,"path":name,"status":"complete"})
             save()
