@@ -159,9 +159,11 @@ def build_awa(skip: bool) -> None:
         verify_awa_build(binary, match_inputs=not explicit)
         return
     inputs_before = awa_input_digest()
+    cargo_config = os.environ.get("AWA_BENCH_CARGO_CONFIG")
+    cargo_args = ["--config", str(Path(cargo_config).resolve())] if cargo_config else []
     print("[harness] building awa-bench (native)...", file=sys.stderr)
     subprocess.run(
-        ["cargo", "build", "--release", "--locked"],
+        ["cargo", *cargo_args, "build", "--release", "--locked"],
         cwd=str(SCRIPT_DIR / "awa-bench"),
         env={**os.environ, "SQLX_OFFLINE": "true"},
         check=True,

@@ -25,6 +25,15 @@ from bench_harness.versions import file_sha256, verify_awa_build
 from bench_harness.writers import capture_pg_env
 
 
+def check_offered_load(summary: dict, rate: int) -> None:
+    """A fixed-rate gate is invalid if the producer cannot deliver its load."""
+    phases = summary["systems"]["awa"]["phases"]
+    for name, phase in phases.items():
+        actual = phase.get("median_enqueue_rate_per_s")
+        if actual is None or actual < rate * 0.95:
+            raise RuntimeError(f"{name}: requested {rate}/s but measured {actual}/s; workload underdriven")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path, required=True)
@@ -91,6 +100,8 @@ def main():
             measured = json.loads((result / "manifest.json").read_text())
             assert measured["adapters"]["awa"]["revision"]["runtime_storage"]["ring_authority"] == "ledger", "Release gate requires ledger authority"
             shutil.move(str(result),str(args.output/name))
+            if mode == "fixed":
+                check_offered_load(json.loads((args.output/name/"summary.json").read_text()), rate)
             campaign["cells"].append({"name":name,"path":name,"status":"complete"})
             save()
         campaign["status"]="complete"

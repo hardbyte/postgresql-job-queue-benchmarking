@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tomllib
 from datetime import datetime, timezone
 import re
@@ -65,6 +66,8 @@ def awa_input_digest() -> str:
         if path.is_file():
             digest.update(str(path.relative_to(root)).encode() + b"\0")
             digest.update(path.read_bytes())
+    if config := os.environ.get("AWA_BENCH_CARGO_CONFIG"):
+        digest.update(b"cargo-config\0" + Path(config).read_bytes())
     return digest.hexdigest()
 
 
@@ -78,13 +81,17 @@ def awa_locked_revision() -> dict[str, Any]:
     sha = source.rsplit("#", 1)[-1] if source.startswith("git+") else None
     return {"source": "awa-bench/Cargo.lock", "cargo_source": source,
             "git_sha": sha, "git_short": sha[:12] if sha else None,
-            "packages": {name: p["version"] for name, p in packages.items()}}
+            "packages": {name: p["version"] for name, p in packages.items()},
+            "database_driver": [{key: p[key] for key in ("name", "version", "source", "checksum") if key in p}
+                                for p in lock["package"] if p["name"].startswith("sqlx")]}
 
 
 def write_awa_build_receipt(binary: Path) -> None:
     receipt = {**awa_locked_revision(), "executable_sha256": file_sha256(binary),
                "adapter_input_sha256": awa_input_digest(),
                "built_at": datetime.now(timezone.utc).isoformat(),
+               "cargo_config": Path(os.environ["AWA_BENCH_CARGO_CONFIG"]).read_text()
+                               if os.environ.get("AWA_BENCH_CARGO_CONFIG") else None,
                "build_harness": _bench_repo_revision()}
     binary.with_suffix(".build.json").write_text(json.dumps(receipt, indent=2) + "\n")
 

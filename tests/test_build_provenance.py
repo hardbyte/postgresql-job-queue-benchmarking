@@ -59,3 +59,19 @@ def test_explicit_archive_keeps_its_original_revision(native_build):
     native_build.write_bytes(b"replaced executable")
     with pytest.raises(RuntimeError):
         versions.verify_awa_build(native_build, match_inputs=False)
+
+
+def test_driver_patch_is_captured_and_config_changes_invalidate_build(native_build, monkeypatch):
+    config = native_build.parent / "sqlx.toml"
+    config.write_text('[patch.crates-io]\nsqlx-core = { git="https://example.com/sqlx", rev="fixed" }')
+    monkeypatch.setenv("AWA_BENCH_CARGO_CONFIG", str(config))
+    lock = native_build.parent / "awa-bench/Cargo.lock"
+    with lock.open("a") as stream:
+        stream.write('\n[[package]]\nname="sqlx-core"\nversion="0.9.0"\nsource="git+https://example.com/sqlx#fixed"\n')
+    versions.write_awa_build_receipt(native_build)
+    receipt = versions.verify_awa_build(native_build)
+    assert receipt["database_driver"][0]["source"].endswith("#fixed")
+    assert receipt["cargo_config"] == config.read_text()
+    config.write_text("# changed")
+    with pytest.raises(RuntimeError):
+        versions.verify_awa_build(native_build)
