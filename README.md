@@ -254,3 +254,24 @@ uv run python scripts/run_awa_release_gate.py \
 Each campaign keeps its build receipts, configuration, image identity, progress,
 and per-cell manifests/summaries. Single paired cells are directional evidence;
 report variation and repeat any suspicious difference before claiming a regression.
+Fixed-rate cells fail validation when median enqueue rate is below 95% of the
+requested load. A producer bottleneck must not silently turn an 800/s gate into
+a lower-load run.
+
+Generate the report and soak figure with:
+
+```bash
+uv run python scripts/report_awa_release_gate.py results/YYYY-MM-DD-awa-release-gate
+uv run python scripts/plot_awa_soak.py results/YYYY-MM-DD-awa-release-gate
+```
+
+The figure retains compact sampled series alongside the PNG, so it can be
+regenerated without distributing the full raw CSV. Latencies are rolling-window
+p99 samples; handler completion precedes the database completion batch commit.
+
+SQLx 0.9.0 currently has a [reproduced TCP_NODELAY regression](results/2026-09-06-sqlx-copy/SUMMARY.md).
+The optional `awa-bench/sqlx-nodelay.toml` pins the merged upstream fix for
+diagnostic comparisons. Resolve the lockfile with that Cargo config, then set
+`AWA_BENCH_CARGO_CONFIG` to its absolute path when building through the harness.
+Receipts capture the config and SQLx sources. Apply it equally to both builds,
+and distinguish those results from the unpatched published dependency.

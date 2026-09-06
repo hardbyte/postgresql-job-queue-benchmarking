@@ -33,8 +33,10 @@ def report(root: Path) -> None:
         "## Reference and saturation", "",
         "Reference: W32, offered 800/s, 60s warmup + 300s clean. Saturation: W64/128/256, "
         "depth target 4,000, offered-rate ceiling 50,000/s, 60s warmup + 180s clean. Pair order alternates. "
-        "Rates and latency entries are medians of five-second windows; the latency column is the "
-        "median of window p99s, not an aggregate job-level p99.", "",
+        "Rates are sampled every five seconds. Latency uses rolling 30-second windows sampled every "
+        "five seconds; the latency column is the median of those p99 samples, not an aggregate job-level p99. "
+        "Jobs use 256-byte nominal payloads and 1 ms simulated work. Completion rates and E2E latency "
+        "are recorded at handler completion, before the database completion batch commits.", "",
         "| Workload | Build | Enqueue/s | Complete/s | E2E p99 ms | Queue depth |",
         "| --- | --- | ---: | ---: | ---: | ---: |"]
     for workload in ("ref800", "sat-w64", "sat-w128", "sat-w256"):
@@ -47,7 +49,8 @@ def report(root: Path) -> None:
     lines += ["", "## Cron control-plane probe", "",
         "Concurrent fleet publication, three steady rounds per cell. Manifests are prepared before "
         "timing, as in the runtime. Snapshot-only and publication measurements include waiting for "
-        "the shared protocol lock. These are control-plane timings, not throughput measurements; "
+        "the shared v045 protocol lock. The snapshot reference is not a v044 comparison and therefore "
+        "does not isolate the cost of introducing that lock. These are control-plane timings, not throughput measurements; "
         "small-fleet tail estimates have few samples.", "",
         "| Runtimes | Schedules | Snapshot p99 ms | Publish p99 ms | Reconcile ms | Retire ms |",
         "| ---: | ---: | ---: | ---: | ---: | ---: |"]
