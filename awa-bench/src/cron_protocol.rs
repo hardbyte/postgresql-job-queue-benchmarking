@@ -8,7 +8,7 @@ use std::{
 };
 use uuid::Uuid;
 
-async fn report(pool: &PgPool, id: Uuid, jobs: Option<&[PeriodicJob]>) -> f64 {
+async fn report(pool: &PgPool, id: Uuid, jobs: Option<&cron::PeriodicManifest>) -> f64 {
     let started = Instant::now();
     let mut tx = pool.begin().await.unwrap();
     cron::lock(&mut tx).await.unwrap();
@@ -26,11 +26,11 @@ async fn report(pool: &PgPool, id: Uuid, jobs: Option<&[PeriodicJob]>) -> f64 {
     tx.commit().await.unwrap();
     started.elapsed().as_secs_f64() * 1000.0
 }
-async fn round(pool: &PgPool, ids: &[Uuid], jobs: Option<Arc<Vec<PeriodicJob>>>) -> Vec<f64> {
+async fn round(pool: &PgPool, ids: &[Uuid], jobs: Option<Arc<cron::PeriodicManifest>>) -> Vec<f64> {
     let mut tasks = tokio::task::JoinSet::new();
     for id in ids {
         let (pool, jobs, id) = (pool.clone(), jobs.clone(), *id);
-        tasks.spawn(async move { report(&pool, id, jobs.as_deref().map(Vec::as_slice)).await });
+        tasks.spawn(async move { report(&pool, id, jobs.as_deref()).await });
     }
     let mut values = vec![];
     while let Some(value) = tasks.join_next().await {
@@ -74,13 +74,16 @@ async fn main() {
             migrations::run(&pool).await.unwrap();
             let ids: Vec<_> = (0..fleet).map(|_| Uuid::new_v4()).collect();
             let jobs = Arc::new(
-                (0..schedules)
-                    .map(|i| {
-                        PeriodicJob::builder(format!("schedule-{i:05}"), "0 0 * * *")
-                            .build_raw("probe".into(), serde_json::json!({"example":i}))
-                            .unwrap()
-                    })
-                    .collect::<Vec<_>>(),
+                cron::PeriodicManifest::new(
+                    &(0..schedules)
+                        .map(|i| {
+                            PeriodicJob::builder(format!("schedule-{i:05}"), "0 0 * * *")
+                                .build_raw("probe".into(), serde_json::json!({"example":i}))
+                                .unwrap()
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap(),
             );
             let mut baseline = vec![];
             for _ in 0..3 {
@@ -95,7 +98,12 @@ async fn main() {
             let plan = cron::reconcile(&pool, "bench-owner").await.unwrap();
             let reconcile_ms = before.elapsed().as_secs_f64() * 1000.;
             assert!(plan.applied && plan.retirements.is_empty());
-            let retirement_publication = round(&pool, &ids, Some(Arc::new(vec![]))).await;
+            let retirement_publication = round(
+                &pool,
+                &ids,
+                Some(Arc::new(cron::PeriodicManifest::new(&[]).unwrap())),
+            )
+            .await;
             let before = Instant::now();
             let retired = cron::reconcile(&pool, "bench-owner").await.unwrap();
             let retire_ms = before.elapsed().as_secs_f64() * 1000.;
