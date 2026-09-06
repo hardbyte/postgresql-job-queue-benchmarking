@@ -139,20 +139,37 @@ def _cargo_target_dir(manifest_path: Path) -> Path:
     return Path(data["target_directory"])
 
 
+def awa_binary() -> tuple[Path, bool]:
+    """Explicit archived builds allow paired runs without recompiling between cells."""
+    selected = os.environ.get("AWA_BENCH_EXECUTABLE")
+    if selected:
+        return Path(selected).resolve(), True
+    return _cargo_target_dir(SCRIPT_DIR / "awa-bench/Cargo.toml") / "release/awa-bench", False
+
+
 # ─── Build functions ─────────────────────────────────────────────────────
 
 
 def build_awa(skip: bool) -> None:
+    from .versions import awa_input_digest, verify_awa_build, write_awa_build_receipt
+    binary, explicit = awa_binary()
+    if explicit and not skip:
+        raise RuntimeError("AWA_BENCH_EXECUTABLE selects an archived build; use --skip-build")
     if skip:
+        verify_awa_build(binary, match_inputs=not explicit)
         return
+    inputs_before = awa_input_digest()
     print("[harness] building awa-bench (native)...", file=sys.stderr)
     subprocess.run(
-        ["cargo", "build", "--release"],
+        ["cargo", "build", "--release", "--locked"],
         cwd=str(SCRIPT_DIR / "awa-bench"),
         env={**os.environ, "SQLX_OFFLINE": "true"},
         check=True,
     )
 
+    if inputs_before != awa_input_digest():
+        raise RuntimeError("AWA adapter inputs changed during compilation; rebuild before benchmarking")
+    write_awa_build_receipt(binary)
 
 def _docker_build(image_tag: str, dockerfile: Path, context: Path, skip: bool) -> None:
     if skip:
@@ -330,9 +347,11 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
 
 
 def launch_awa(manifest: AdapterManifest, overrides: dict[str, str]) -> LaunchSpec:
-    target_dir = _cargo_target_dir(SCRIPT_DIR / "awa-bench" / "Cargo.toml")
+    from .versions import verify_awa_build
+    binary, explicit = awa_binary()
+    verify_awa_build(binary, match_inputs=not explicit)
     return LaunchSpec(
-        argv=[str(target_dir / "release" / "awa-bench")],
+        argv=[str(binary)],
         env=_base_env(manifest, overrides),
     )
 

@@ -669,6 +669,7 @@ def run_one_system(
     pg_image: str,
     engine: str = DEFAULT_ENGINE,
     fast: bool,
+    skip_build: bool = False,
     run_id: str,
     out_queue: "queue.Queue[Sample]",
     tracker: PhaseTracker,
@@ -694,7 +695,8 @@ def run_one_system(
     # ahead of it (`pgboss-bench` was missing at hour 2 of a 4-system
     # consolidated run despite being built at startup, because docker
     # GC reclaimed it during the long pgque phase).
-    entry.builder(False)
+    entry.builder(skip_build)
+    revision = capture_adapter_revision(system)
 
     # Sequential per-system fresh-PG isolation is the default.
     if not fast:
@@ -846,7 +848,7 @@ def run_one_system(
     # Representative descriptor for manifest inclusion. Prefer replica 0's
     # if still available; otherwise any slot's (replica 0 may have been
     # killed mid-run by a destructive phase and not restarted).
-    return pool.descriptor or {}
+    return {**(pool.descriptor or {}), "revision": revision}
 
 
 def _sleep_or_abort(seconds: float, pool: ReplicaPool) -> None:
@@ -918,6 +920,7 @@ def drive(
     if unknown:
         raise SystemExit(f"Unknown systems: {unknown}. Known: {sorted(ADAPTERS)}")
 
+    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     run_dir = _new_run_dir(scenario, engine)
     run_id = run_dir.name
     print(f"[harness] run_id = {run_id}", file=sys.stderr)
@@ -981,6 +984,7 @@ def drive(
                 pg_image=pg_image,
                 engine=engine,
             )
+            ckpt_manifest["started_at"] = started_at
             if pg_env_snapshot:
                 ckpt_manifest["postgres"] = pg_env_snapshot
             write_manifest(ckpt_manifest, run_dir / "manifest.json")
@@ -998,6 +1002,7 @@ def drive(
                 pg_image=pg_image,
                 engine=engine,
                 fast=fast,
+                skip_build=skip_build,
                 run_id=run_id,
                 out_queue=out_queue,
                 tracker=tracker,
@@ -1013,7 +1018,7 @@ def drive(
                 wait_event_sample_every_s=wait_event_sample_every_s,
             )
             # Merge the runtime descriptor the adapter emitted with the
-            # harness-proven revision block (git SHA / submodule SHA /
+            # revision captured after build and before launch (git SHA / submodule SHA /
             # pinned upstream version). The runtime half records what the
             # process claimed about itself; the harness half records what
             # we can prove by inspecting the source tree and pinned
@@ -1021,7 +1026,6 @@ def drive(
             # *exactly* which code was under test without cross-referencing
             # anything outside the run directory.
             entry = dict(descriptor or {})
-            entry["revision"] = capture_adapter_revision(system)
             adapter_descriptors[system] = entry
             completed.append(system)
             # Drain the in-flight sample queue before snapshotting so

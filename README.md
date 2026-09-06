@@ -216,3 +216,41 @@ See [CONTRIBUTING_ADAPTERS.md](./CONTRIBUTING_ADAPTERS.md) for the JSON contract
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+
+## AWA release-candidate measurements
+
+Native AWA builds use `cargo build --release --locked`. The harness records the
+resolved AWA source from `awa-bench/Cargo.lock`, hashes the executable and adapter
+inputs, and verifies that receipt before launch. A neighboring `../awa` checkout
+is not evidence of what ran. `--skip-build` refuses stale or unattributed native
+artifacts. Docker metadata records the image identity without claiming a source
+revision that has not been verified.
+
+For paired runs, archive the executable together with its `.build.json` receipt,
+then select it with `AWA_BENCH_EXECUTABLE=/absolute/path/awa-bench --skip-build`.
+Changing the current dependency pin will not relabel that archived executable.
+Build both baseline and candidate using the same adapter source and dependency
+versions, changing only the AWA Git revision.
+
+`scripts/run_awa_release_gate.py` runs alternating baseline/candidate cells at
+800 jobs/s and saturation W=64/128/256, then a fresh candidate soak: 10 minutes
+warmup, 10 minutes clean traffic, 60 minutes with an old transaction pinning the
+MVCC horizon, and 30 minutes recovery. Each throughput cell gets a fresh PostgreSQL
+instance. A separate protocol probe measures publication/reconciliation cost at
+1/10/100 instances and 10/1,000/10,000 schedules; these are control-plane latency
+measurements, not a job-throughput comparison. The probe requires an AWA revision
+with owner reconciliation and is built with `--features cron-protocol --bin
+awa-cron-protocol-bench`.
+
+```bash
+uv run python scripts/run_awa_release_gate.py \
+  --baseline /path/to/baseline/awa-bench \
+  --candidate /path/to/candidate/awa-bench \
+  --protocol-bin /path/to/candidate/awa-cron-protocol-bench \
+  --output results/YYYY-MM-DD-awa-release-gate
+```
+
+Each campaign keeps its build receipts, configuration, image identity, progress,
+and per-cell manifests/summaries. Single paired cells are directional evidence;
+report variation and repeat any suspicious difference before claiming a regression.
