@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # this system with --profiles Nxfast. 3.2.x has batch.enabled but in a
 # quick trial delivered a near-empty stream (~31 events) — needs
 # investigation before bumping the pin.
-DEBEZIUM_IMAGE = os.environ.get("DEBEZIUM_IMAGE", "quay.io/debezium/server:3.6.0.Final")
+DEBEZIUM_IMAGE = os.environ.get("DEBEZIUM_IMAGE", "quay.io/debezium/server:3.7.0.Final")
 
 
 @dataclass
@@ -62,6 +62,8 @@ class ManagedProc:
     # Extra teardown (e.g. delete a Kafka Connect connector so its slot is
     # released). Runs before the process/container is stopped.
     on_stop: Callable[[], None] | None = None
+    # Health endpoint for SUTs that stay up after their engine fails.
+    liveness_url: str | None = None
 
     def stop(self, grace_s: float = 10.0) -> None:
         if self.on_stop is not None:
@@ -217,8 +219,9 @@ def _launch_debezium_server(adapter: CdcAdapter, ctx: LaunchCtx) -> list[Managed
             stderr=(ctx.logs_dir / f"debezium-{cid}.stderr.log").open("w"),
             text=True,
         )
-        procs.append(ManagedProc(name=f"debezium-{cid}", proc=proc,
-                                 container=container))
+        procs.append(ManagedProc(
+            name=f"debezium-{cid}", proc=proc, container=container,
+            liveness_url=f"http://127.0.0.1:{8090 + cid}/q/health/live"))
     return procs
 
 
@@ -278,7 +281,7 @@ def _launch_etl(adapter: CdcAdapter, ctx: LaunchCtx) -> list[ManagedProc]:
 # Pinned like every other SUT image; `latest` resolved to the same digest
 # as v0.14.6 when pinned (2026-07), so behaviour is unchanged.
 SEQUIN_IMAGE = os.environ.get("SEQUIN_IMAGE", "sequin/sequin:v0.14.6")
-REDIS_IMAGE = "redis:7-alpine"
+REDIS_IMAGE = "redis:7.4.11-alpine"
 SEQUIN_REDIS_PORT = 16379
 
 
@@ -384,8 +387,8 @@ KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
 KAFKA_CONNECTOR = "cdc-source"
 KAFKA_SLOT = "dbz_kafka"
 # Pinned to match the compose file and the debezium-server engine version.
-KAFKA_IMAGE = "apache/kafka:3.9.0"
-KAFKA_CONNECT_IMAGE = "quay.io/debezium/connect:3.6.0.Final"
+KAFKA_IMAGE = "apache/kafka:4.3.1"
+KAFKA_CONNECT_IMAGE = "quay.io/debezium/connect:3.7.0.Final"
 
 
 def _connect_request(method: str, path: str, body: dict | None = None):

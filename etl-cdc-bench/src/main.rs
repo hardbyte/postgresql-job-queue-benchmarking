@@ -15,8 +15,8 @@ use std::time::Duration;
 use etl::config::{BatchConfig, PgConnectionConfig, PipelineConfig, TlsConfig};
 use etl::data::{Cell, OldTableRow, TableRow, UpdatedTableRow};
 use etl::destination::{
-    Destination, DestinationTableMetadata, DestinationTableSchemaStatus, DestinationWriteStatus,
-    DropTableForCopyResult, WriteEventsDurability, WriteEventsResult, WriteTableRowsResult,
+    Destination, DestinationTableMetadata, DestinationWriteStatus, DropTableForCopyResult,
+    TableCopyBatchId, WriteEventsDurability, WriteEventsResult, WriteTableRowsResult,
 };
 use etl::error::EtlResult;
 use etl::event::Event;
@@ -106,18 +106,19 @@ where
         let existing = self.store.get_destination_table_metadata(table_id).await?;
         let metadata = match existing {
             Some(metadata)
-                if metadata.snapshot_id == schema.inner().snapshot_id
-                    && metadata.replication_mask == *schema.replication_mask() =>
+                if metadata.snapshot_id() == schema.inner().snapshot_id
+                    && metadata.replication_mask() == schema.replication_mask() =>
             {
-                return Ok(());
+                if metadata.is_applied() {
+                    return Ok(());
+                }
+                metadata.to_applied()
             }
-            Some(metadata) => metadata
-                .with_schema_change(
-                    schema.inner().snapshot_id,
-                    schema.replication_mask().clone(),
-                    DestinationTableSchemaStatus::Applied,
-                )
-                .to_applied(),
+            Some(metadata) => DestinationTableMetadata::new_applied(
+                metadata.table_id().to_owned(),
+                schema.inner().snapshot_id,
+                schema.replication_mask().clone(),
+            ),
             None => DestinationTableMetadata::new_applied(
                 format!("cdc_bench_http_{}", table_id.into_inner()),
                 schema.inner().snapshot_id,
@@ -151,6 +152,7 @@ where
     async fn write_table_rows(
         &self,
         schema: &ReplicatedTableSchema,
+        _batch_id: Option<TableCopyBatchId>,
         table_rows: Vec<TableRow>,
         async_result: WriteTableRowsResult,
     ) -> EtlResult<()> {
@@ -260,6 +262,7 @@ async fn main() {
             publication_name: publication.clone(),
             pg_connection: parse_database_url(&database_url),
             store_pg_connection: None,
+            replication_slot: Default::default(),
             batch: BatchConfig {
                 max_fill_ms: 20,
                 ..Default::default()
@@ -269,8 +272,8 @@ async fn main() {
             max_table_sync_workers: 2,
             max_copy_connections_per_table: PipelineConfig::DEFAULT_MAX_COPY_CONNECTIONS_PER_TABLE,
             memory_refresh_interval_ms: PipelineConfig::DEFAULT_MEMORY_REFRESH_INTERVAL_MS,
-            replication_lag_refresh_interval_ms:
-                PipelineConfig::DEFAULT_REPLICATION_LAG_REFRESH_INTERVAL_MS,
+            table_sync_monitor_refresh_interval_ms:
+                PipelineConfig::DEFAULT_TABLE_SYNC_MONITOR_REFRESH_INTERVAL_MS,
             memory_backpressure: Some(Default::default()),
             table_sync_copy: Default::default(),
             invalidated_slot_behavior: Default::default(),
