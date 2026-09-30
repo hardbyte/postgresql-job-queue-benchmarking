@@ -85,6 +85,10 @@ func envInt(key string, def int) int {
 	return v
 }
 
+func rescueAfter(defaultSecs int) time.Duration {
+	return time.Duration(envInt("RESCUE_AFTER_SECS", defaultSecs)) * time.Second
+}
+
 func readProducerRate(def int) int {
 	path := os.Getenv("PRODUCER_RATE_CONTROL_FILE")
 	if path == "" {
@@ -287,10 +291,10 @@ func scenarioWorkerThroughput(ctx context.Context, pool *pgxpool.Pool, jobCount 
 			river.QueueDefault: {MaxWorkers: workerCount},
 		},
 		Workers:              workers,
-		JobTimeout:           -1,
+		JobTimeout:           rescueAfter(30),
 		FetchCooldown:        50 * time.Millisecond,
 		FetchPollInterval:    50 * time.Millisecond,
-		RescueStuckJobsAfter: time.Duration(envInt("RESCUE_AFTER_SECS", 30)) * time.Second,
+		RescueStuckJobsAfter: rescueAfter(30),
 	})
 	if err != nil {
 		log.Fatalf("Failed to create worker client: %v", err)
@@ -336,10 +340,10 @@ func scenarioPickupLatency(ctx context.Context, pool *pgxpool.Pool, iterations i
 			river.QueueDefault: {MaxWorkers: workerCount},
 		},
 		Workers:              workers,
-		JobTimeout:           -1,
+		JobTimeout:           rescueAfter(30),
 		FetchCooldown:        50 * time.Millisecond,
 		FetchPollInterval:    50 * time.Millisecond,
-		RescueStuckJobsAfter: time.Duration(envInt("RESCUE_AFTER_SECS", 30)) * time.Second,
+		RescueStuckJobsAfter: rescueAfter(30),
 	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
@@ -583,10 +587,10 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 			river.QueueDefault: {MaxWorkers: workerCount},
 		},
 		Workers:              workers,
-		JobTimeout:           -1,
+		JobTimeout:           rescueAfter(30),
 		FetchCooldown:        50 * time.Millisecond,
 		FetchPollInterval:    50 * time.Millisecond,
-		RescueStuckJobsAfter: time.Duration(envInt("RESCUE_AFTER_SECS", 30)) * time.Second,
+		RescueStuckJobsAfter: rescueAfter(30),
 	})
 	if err != nil {
 		log.Fatalf("long_horizon: failed to create client: %v", err)
@@ -872,7 +876,7 @@ func main() {
 
 	if scenario == "worker_only" {
 		jobDurationMs := envInt("JOB_DURATION_MS", 30000)
-		rescueAfterSecs := envInt("RESCUE_AFTER_SECS", 15)
+		rescueStuckJobsAfter := rescueAfter(15)
 
 		workers := river.NewWorkers()
 		river.AddWorker(workers, &ChaosWorker{JobDurationMs: jobDurationMs})
@@ -882,10 +886,10 @@ func main() {
 				river.QueueDefault: {MaxWorkers: workerCount},
 			},
 			Workers:              workers,
-			RescueStuckJobsAfter: time.Duration(rescueAfterSecs) * time.Second,
+			RescueStuckJobsAfter: rescueStuckJobsAfter,
 			FetchCooldown:        50 * time.Millisecond,
 			FetchPollInterval:    50 * time.Millisecond,
-			JobTimeout:           -1,
+			JobTimeout:           rescueStuckJobsAfter,
 		})
 		if err != nil {
 			log.Fatalf("Failed to create worker_only client: %v", err)

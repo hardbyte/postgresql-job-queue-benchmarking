@@ -23,8 +23,6 @@ config :oban_bench, Oban,
   engine: Oban.Engines.Basic,
   repo: ObanBench.Repo,
   queues: [benchmark: 50, chaos: 10, long_horizon_bench: 32],
-  plugins: [
-    {Oban.Plugins.Lifeline, rescue_after: :timer.seconds(rescue_after_secs)}
-  ]
+  lifeline: [rescue_after: :timer.seconds(rescue_after_secs)]
 
 config :logger, level: :warning

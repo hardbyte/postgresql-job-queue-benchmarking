@@ -51,7 +51,7 @@ class Engine:
 # disable its engine. The preload list was captured from the stock image
 # (`SHOW shared_preload_libraries`).
 ENGINES: dict[str, "Engine"] = {
-    "postgres": Engine(image="postgres:18.3-alpine"),
+    "postgres": Engine(image="postgres:18.6-alpine"),
     "alloydb-omni": Engine(
         image="gcr.io/alloydb-omni/alloydbomni:18.3",
         compose_override="docker-compose.omni.override.yml",

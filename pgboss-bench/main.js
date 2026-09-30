@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { PgBoss } = require("pg-boss");
+const { version: PGBOSS_VERSION } = require("pg-boss/package.json");
 
 const QUEUE_NAME = "long_horizon_bench";
 const DEFAULT_SAMPLE_WINDOW_S = 30;
@@ -122,10 +123,17 @@ async function waitForNextBoundary(sampleEveryS) {
   await sleep(sleepMs);
 }
 
-async function discoverEventTables(boss) {
+async function discoverQueueTable(boss) {
   const queueInfo = await boss.getQueue(QUEUE_NAME);
-  const queueTable = queueInfo && queueInfo.table ? `pgboss.${queueInfo.table}` : null;
-  return ["pgboss.queue", ...(queueTable ? [queueTable] : [])];
+  return queueInfo && queueInfo.table ? `pgboss.${queueInfo.table}` : null;
+}
+
+async function countQueuedJobs(boss, queueTable) {
+  const { rows } = await boss.getDb().executeSql(
+    `SELECT count(*)::int AS queued FROM ${queueTable} WHERE name = $1 AND state < 'active'`,
+    [QUEUE_NAME]
+  );
+  return rows[0].queued;
 }
 
 async function scenarioLongHorizon() {
@@ -163,14 +171,15 @@ async function scenarioLongHorizon() {
   await boss.deleteAllJobs(QUEUE_NAME);
 
   const schemaVersion = await boss.schemaVersion();
-  const eventTables = await discoverEventTables(boss);
+  const queueTable = await discoverQueueTable(boss);
+  const eventTables = ["pgboss.queue", ...(queueTable ? [queueTable] : [])];
 
   emit({
     kind: "descriptor",
     system: "pgboss",
     event_tables: eventTables,
     extensions: [],
-    version: "pg-boss@12.15.0",
+    version: `pg-boss@${PGBOSS_VERSION}`,
     schema_version: schemaVersion === null ? null : String(schemaVersion),
     db_name: dbName,
     started_at: nowIso(),
@@ -255,8 +264,7 @@ async function scenarioLongHorizon() {
 
         let batchCount = 0;
         if (producerMode === "depth-target") {
-          const stats = await boss.getQueueStats(QUEUE_NAME);
-          queueDepth = stats.queuedCount;
+          queueDepth = await countQueuedJobs(boss, queueTable);
           batchCount = Math.max(0, Math.min(producerBatchMax, targetDepth - queueDepth));
           if (batchCount === 0) {
             await sleep(producerBatchMs);
@@ -320,8 +328,7 @@ async function scenarioLongHorizon() {
     }
     while (!shuttingDown) {
       try {
-        const stats = await boss.getQueueStats(QUEUE_NAME);
-        queueDepth = stats.queuedCount;
+        queueDepth = await countQueuedJobs(boss, queueTable);
       } catch (err) {
         if (isConnectionLoss(err)) {
           await sleep(200);

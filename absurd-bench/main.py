@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import datetime as dt
+import importlib.metadata
 import json
 import os
 import signal
@@ -19,7 +20,7 @@ from psycopg.rows import dict_row
 
 
 ABSURD_SQL_PATH = Path(os.environ.get("ABSURD_SQL_PATH", "/opt/absurd.sql"))
-ABSURD_VERSION = "0.3.0"
+ABSURD_SDK_VERSION = importlib.metadata.version("absurd-sdk")
 QUEUE_NAME = "long_horizon_bench"
 TASK_NAME = "bench_job"
 POLL_INTERVAL_SECS = 0.05
@@ -183,6 +184,13 @@ def build_app(
     return app
 
 
+async def installed_schema_version() -> str:
+    async with await AsyncConnection.connect(database_url()) as conn:
+        cursor = await conn.execute("SELECT absurd.get_schema_version()")
+        row = await cursor.fetchone()
+    return row[0]
+
+
 async def recreate_queue(queue_name: str) -> None:
     loop = asyncio.get_running_loop()
     app = build_app(
@@ -235,6 +243,7 @@ async def scenario_long_horizon() -> None:
     payload_padding = "x" * max(0, payload_bytes - 96)
 
     ensure_schema()
+    schema_version = await installed_schema_version()
     await recreate_queue(QUEUE_NAME)
 
     db_name = database_url().rsplit("/", 1)[-1]
@@ -244,8 +253,8 @@ async def scenario_long_horizon() -> None:
             "system": "absurd",
             "event_tables": [f"absurd.t_{QUEUE_NAME}"],
             "extensions": [],
-            "version": f"absurd-sdk {ABSURD_VERSION}",
-            "schema_version": ABSURD_VERSION,
+            "version": f"absurd-sdk {ABSURD_SDK_VERSION}",
+            "schema_version": schema_version,
             "db_name": db_name,
             "started_at": now_iso(),
         }

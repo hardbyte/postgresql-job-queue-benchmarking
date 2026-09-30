@@ -6,7 +6,7 @@ Long-horizon adapter for `pgmq` using the official SQL extension API.
 - Extension API: `CREATE EXTENSION pgmq`, `pgmq.create`, `pgmq.send_batch`,
   `pgmq.read`, `pgmq.archive`
 - Expected Postgres image:
-  `ghcr.io/pgmq/pg18-pgmq:v1.10.0`
+  `ghcr.io/pgmq/pg18-pgmq:v1.13.0`
 
 This adapter is opt-in rather than part of the default long-horizon matrix
 because it requires a pgmq-enabled Postgres image. Example:
@@ -14,6 +14,6 @@ because it requires a pgmq-enabled Postgres image. Example:
 ```bash
 uv run bench run \
   --systems pgmq \
-  --pg-image ghcr.io/pgmq/pg18-pgmq:v1.10.0 \
+  --pg-image ghcr.io/pgmq/pg18-pgmq:v1.13.0 \
   --fast
 ```
