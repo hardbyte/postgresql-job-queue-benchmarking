@@ -4,7 +4,7 @@ Operational facts and empirically discovered behaviour for the six CDC arms, so 
 
 ## Debezium Server (`--system debezium-server`)
 
-- Image pinned in `cdc_harness/adapters.py` (`quay.io/debezium/server:3.6.0.Final`, override with `DEBEZIUM_IMAGE`). Env-var config rule: `debezium.sink.type` → `DEBEZIUM_SINK_TYPE` (dots and hyphens → underscores, uppercase).
+- Image pinned in `cdc_harness/adapters.py` (`quay.io/debezium/server:3.7.0.Final`, override with `DEBEZIUM_IMAGE`). Env-var config rule: `debezium.sink.type` → `DEBEZIUM_SINK_TYPE` (dots and hyphens → underscores, uppercase).
 - One sink per server → fan-out = one container per consumer, slot per consumer (`dbz_<i>`), distinct `QUARKUS_HTTP_PORT` per instance under host networking.
 - HTTP sink: success = 2xx; retries are `debezium.sink.http.retries` × `retry.interval.ms` (constant), then the server **stops** — we set retries ≈ MAX_INT so chaos phases don't kill the pipeline. Same retry loop applies per batch in batch mode.
 - **Batching requires 3.6.0.Final+** (source-verified: absent in 3.1.x–3.5.x `HttpChangeConsumer`; earlier releases silently ignore the config, which made a 3.2.2 trial look like a near-empty stream). Properties: `debezium.sink.http.batch.enabled` (default false) + `debezium.sink.http.batch.max-size` (**hyphen**, default 200). Batch body = plain JSON array of the serialized envelopes, chunked at max-size, size-flush only (a partial batch flushes with its `handleBatch` call), nulls filtered before batching; the receiver's `decode_debezium` handles it. Batching lifts the old per-event-POST cap (1/handling-latency, e.g. 40 ev/s at a 25 ms profile) that used to force `--profiles Nxfast`.
@@ -25,7 +25,7 @@ Operational facts and empirically discovered behaviour for the six CDC arms, so 
 
 ## Supabase ETL (`--system supabase-etl`)
 
-- Git-only crate: `etl = { git = "https://github.com/supabase/etl", rev = "<pin>" }` (no crates.io release, no tags). tokio 1.47. In-repo binary: `etl-cdc-bench/`.
+- Git-only crate: `etl = { git = "https://github.com/supabase/etl", rev = "<pin>" }` (no crates.io release, no tags). tokio 1.53. In-repo binary: `etl-cdc-bench/`.
 - Pipeline: `Pipeline::new(PipelineConfig{...}, MemoryStore::new(), destination)`; one pipeline per consumer = slot-per-consumer arm. **Slot identity derives from pipeline id** (no slot-name field), so orchestrator readiness uses slot *count*, not names.
 - Custom `Destination` trait is batched with async-result handles: `write_events` (streaming) + `write_table_rows` (initial copy), signalling `DestinationWriteStatus::Durable`. Events are positional `Vec<Cell>` mapped to names via `ReplicatedTableSchema`.
 - Concurrent `Pipeline::start()` races on `CREATE SCHEMA etl` — start pipelines sequentially.
@@ -34,7 +34,7 @@ Operational facts and empirically discovered behaviour for the six CDC arms, so 
 
 ## Debezium + Kafka (`--system debezium-kafka`)
 
-- The broker arm: `docker-compose.kafka.yml` runs single-node Kafka (KRaft, `apache/kafka:3.9.0`) + Debezium Kafka Connect (`3.6.0.Final`, kept in lockstep with the server arm's engine), host-networked, brought up by the adapter and persisting across cells. One PostgresConnector (single slot `dbz_kafka`, topic per table) registered via the Connect REST API; the adapter deletes the connector on teardown.
+- The broker arm: `docker-compose.kafka.yml` runs single-node Kafka (KRaft, `apache/kafka:4.3.1`) + Debezium Kafka Connect (`3.7.0.Final`, kept in lockstep with the server arm's engine), host-networked, brought up by the adapter and persisting across cells. One PostgresConnector (single slot `dbz_kafka`, topic per table) registered via the Connect REST API; the adapter deletes the connector on teardown.
 - Fan-out is at the **consumer layer**: `kafka-bridge-bench/main.py` (kafka-python) runs one consumer group per harness consumer, each reading the table topics and POSTing the Debezium envelopes to the receiver. Blocking retry with no offset commit until acked → a dead consumer's backlog is **Kafka offset lag**, not source WAL; measured sweeps show the source slot staying essentially flat through an outage.
 - kafka-python gotchas: pattern subscription only discovers topics created *after* subscribe when metadata refreshes — set `metadata_max_age_ms=5000` (Debezium creates the topic on the first row). Topic prefix + consumer groups are run-scoped so a rerun can't replay old data. Admin API (3.0.8): `list_group_offsets(group)` returns `{group: {TopicPartition: OffsetAndMetadata}}`.
 - A consumer blocked in sink retry doesn't poll; past `max.poll.interval.ms` (default 5 min) the group coordinator evicts it and the post-heal commit dies with `CommitFailedError` — only surfaces with outages >5 min. The bridge sets `max_poll_interval_ms=2h` because blocked-in-retry is the consumer model under test; it's also a faithful production failure class for naive Kafka consumers.

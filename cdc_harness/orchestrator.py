@@ -269,6 +269,17 @@ def http_json(url: str, payload: dict | None = None, timeout: float = 10.0):
             return None  # plain-text endpoints ("ok")
 
 
+LIVENESS_FAILURES_BEFORE_ABORT = 6
+
+
+def liveness_ok(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=1.0) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, OSError):
+        return False
+
+
 # ── Preflight ────────────────────────────────────────────────────────────
 
 
@@ -954,11 +965,24 @@ def main(argv: list[str] | None = None) -> int:
             watched = [(receiver, "receiver"), (loadgen, "loadgen")] + [
                 (m.proc, m.name) for m in adapter_procs
             ]
+            liveness_failures = {m.name: 0 for m in adapter_procs if m.liveness_url}
             while time.monotonic() < deadline:
                 for proc, name in watched:
                     if proc.poll() is not None:
                         raise SystemExit(
                             f"{name} exited unexpectedly (rc={proc.returncode}); "
+                            f"see {logs_dir}"
+                        )
+                for managed in adapter_procs:
+                    if managed.liveness_url is None:
+                        continue
+                    if liveness_ok(managed.liveness_url):
+                        liveness_failures[managed.name] = 0
+                        continue
+                    liveness_failures[managed.name] += 1
+                    if liveness_failures[managed.name] >= LIVENESS_FAILURES_BEFORE_ABORT:
+                        raise SystemExit(
+                            f"{managed.name} failed liveness at {managed.liveness_url}; "
                             f"see {logs_dir}"
                         )
                 time.sleep(0.5)

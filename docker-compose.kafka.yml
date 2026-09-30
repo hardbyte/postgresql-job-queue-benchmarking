@@ -5,7 +5,7 @@
 #   docker compose -f docker-compose.kafka.yml up -d
 services:
   kafka:
-    image: apache/kafka:3.9.0
+    image: apache/kafka:4.3.1
     network_mode: host
     environment:
       KAFKA_NODE_ID: "1"
@@ -31,7 +31,7 @@ services:
       retries: 20
 
   connect:
-    image: quay.io/debezium/connect:3.6.0.Final
+    image: quay.io/debezium/connect:3.7.0.Final
     network_mode: host
     depends_on:
       kafka:
