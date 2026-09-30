@@ -3,7 +3,7 @@
 Long-horizon adapter for `pg-boss` using the official npm package.
 
 - Runtime: `node:22-alpine`
-- Library pin: `pg-boss@12.15.0`
+- Library pin: `pg-boss@12.35.1`
 - Schema install: `await boss.start()`
 - Queue setup: `await boss.createQueue(queue, { partition: true })`
 

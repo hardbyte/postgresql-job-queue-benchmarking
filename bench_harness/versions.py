@@ -5,10 +5,11 @@ one half of the story: it records whatever the process chose to claim about
 itself at start-of-run. This module records the other half — what the
 harness can prove by inspecting the source tree and pinned manifests:
 
-- `awa*`: the git SHA / branch / dirty state of the awa checkout (since
-  the native `awa-bench`, the Docker image, and the Python wheel all compile
-  from it). This is the canonical answer to "which commit of awa was
-  benchmarked?".
+- `awa` / `awa-canonical` / `awa-docker`: the awa crate version and git
+  SHA resolved in `awa-bench/Cargo.lock`, which is what the native binary
+  and the Docker image compile.
+- `awa-python`: the git SHA / branch / dirty state of the `../awa`
+  checkout the Python wheel is built from.
 - `pgque`: the submodule SHA of `pgque-bench/vendor/pgque` (that SQL is
   embedded into the image at build time).
 - `procrastinate` / `river` / `oban`: the pinned upstream library version
@@ -65,6 +66,25 @@ def _awa_repo_revision() -> dict[str, Any]:
     }
 
 
+_AWA_LOCK_RE = re.compile(
+    r'^name = "awa-model"\nversion = "([^"]+)"\nsource = "([^"]+)"$', re.MULTILINE
+)
+
+
+def _awa_bench_revision() -> dict[str, Any]:
+    """awa as resolved by awa-bench's lockfile — shared by awa, awa-canonical, awa-docker."""
+    m = _AWA_LOCK_RE.search(_read(SCRIPT_DIR / "awa-bench" / "Cargo.lock"))
+    source = m.group(2) if m else None
+    return {
+        "source": "awa-bench/Cargo.lock",
+        "library": "awa",
+        "pinned_version": m.group(1) if m else None,
+        "lock_source": source,
+        "git_sha": source.rpartition("#")[2] if source and "#" in source else None,
+        "benchmark_harness": _bench_repo_revision(),
+    }
+
+
 def _bench_repo_revision() -> dict[str, Any]:
     """Git state of the benchmark harness checkout used to drive the run."""
     sha = _git(["rev-parse", "HEAD"], cwd=BENCH_REPO_ROOT)
@@ -84,7 +104,7 @@ def _bench_repo_revision() -> dict[str, Any]:
 
 def _pgque_submodule_revision() -> dict[str, Any]:
     """pgque upstream SHA via the submodule pointer."""
-    base = _awa_repo_revision()
+    base = _bench_repo_revision()
     sub_path = "pgque-bench/vendor/pgque"
     status = _git(["submodule", "status", sub_path], cwd=BENCH_REPO_ROOT)
     # `git submodule status` prints " <sha> <path> (<describe>)"; leading
@@ -98,8 +118,7 @@ def _pgque_submodule_revision() -> dict[str, Any]:
             submodule_describe = m.group(2)
     return {
         **base,
-        "source": "awa repo + pgque submodule",
-        "benchmark_harness": _bench_repo_revision(),
+        "source": "benchmark repo + pgque submodule",
         "pgque_submodule_sha": submodule_sha,
         "pgque_submodule_describe": submodule_describe,
     }
@@ -189,9 +208,9 @@ def _absurd_revision() -> dict[str, Any]:
 
 
 _CAPTURE: dict[str, Any] = {
-    "awa": _awa_repo_revision,
-    "awa-canonical": _awa_repo_revision,
-    "awa-docker": _awa_repo_revision,
+    "awa": _awa_bench_revision,
+    "awa-canonical": _awa_bench_revision,
+    "awa-docker": _awa_bench_revision,
     "awa-python": _awa_repo_revision,
     "pgque": _pgque_submodule_revision,
     "pgmq": _pgmq_revision,
@@ -212,7 +231,10 @@ def capture_adapter_revision(system: str) -> dict[str, Any]:
     """
     getter = _CAPTURE.get(system)
     if getter is None:
-        return {"source": "unknown", "note": f"no version capture registered for {system!r}"}
+        return {
+            "source": "unknown",
+            "note": f"no version capture registered for {system!r}",
+        }
     return getter()
 
 
@@ -252,7 +274,9 @@ def format_revision_oneline(system: str, entry: dict | None) -> str:
     pinned = rev.get("pinned_version") or rev.get("pinned_version_constraint")
     library = rev.get("library")
     if pinned:
-        parts.append(f"{library or 'upstream'} `{pinned}`" if library else f"`{pinned}`")
+        parts.append(
+            f"{library or 'upstream'} `{pinned}`" if library else f"`{pinned}`"
+        )
     adapter_version = entry.get("version")
     schema_version = entry.get("schema_version")
     runtime_bits: list[str] = []

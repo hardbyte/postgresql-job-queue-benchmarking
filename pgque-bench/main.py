@@ -287,7 +287,7 @@ async def scenario_long_horizon() -> None:
     work_ms = env_int("JOB_WORK_MS", 1)
     # Batch size for the documented bulk-insert API
     # (`pgque.send_batch(queue, type, payloads text[])`, vendored at
-    # vendor/pgque/sql/pgque-api/send.sql).
+    # vendor/pgque/sql/pgque.sql).
     #
     # Default 128 matches the other bulk-producer adapters (pgmq,
     # pg-boss, absurd) so a stock cross-system run measures pgque on
@@ -548,7 +548,7 @@ async def scenario_long_horizon() -> None:
                 else:
                     # Documented bulk path:
                     # `pgque.send_batch(queue, type, payloads text[])` —
-                    # see vendor/pgque/sql/pgque-api/send.sql lines 101-115.
+                    # see vendor/pgque/sql/pgque.sql.
                     # Default type 'default' matches the no-type send()
                     # overloads used elsewhere in this adapter.
                     async with producer_conn.cursor() as cur:

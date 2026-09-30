@@ -186,7 +186,7 @@ Workload modes: `--mode events` (single table), `ledger` (cross-table transfers,
 
 - **Public APIs only.** Each adapter integrates the system the way a real consumer would. No reaching into internal modules, no privileged SQL.
 - **Subprocess contract.** Adapters are language-agnostic processes that emit one JSON sample per line on stdout. Adding a system means writing one binary that respects the contract — see [CONTRIBUTING_ADAPTERS.md](./CONTRIBUTING_ADAPTERS.md).
-- **One Postgres for everyone.** All systems run against the same `postgres:18.3-alpine` instance with the same `postgres.conf` (the CDC bench adds a logical-WAL overlay, `docker-compose.cdc.yml`, shared by all CDC arms). The compose default caps Postgres at 4 CPUs for repeatable laptop and CI runs; set `POSTGRES_CPUS=N` for a larger machine envelope.
+- **One Postgres for everyone.** All systems run against the same `postgres:18.6-alpine` instance with the same `postgres.conf` (the CDC bench adds a logical-WAL overlay, `docker-compose.cdc.yml`, shared by all CDC arms). The compose default caps Postgres at 4 CPUs for repeatable laptop and CI runs; set `POSTGRES_CPUS=N` for a larger machine envelope.
 - **Harness-owned measurement.** The load generator and the delivery-terminating receiver belong to the harness, not the SUT, so latency, loss, and duplicate accounting are computed identically for every system.
 - **Long-horizon.** Bloat, WAL retention, and latency drift only show up after the first few minutes; default scenarios run tens of minutes and the flagship sweeps run hours.
 

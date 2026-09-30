@@ -14,8 +14,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 QUEUE_NAME = "long_horizon_bench"
-PGMQ_PG_IMAGE = "ghcr.io/pgmq/pg18-pgmq:v1.11.1"
-PGMQ_UPSTREAM_VERSION = "v1.11.1"
+PGMQ_PG_IMAGE = "ghcr.io/pgmq/pg18-pgmq:v1.13.0"
+PGMQ_UPSTREAM_VERSION = "v1.13.0"
 
 
 def database_url() -> str:

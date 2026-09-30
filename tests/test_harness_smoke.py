@@ -447,6 +447,7 @@ def test_versions_upstream_pins_resolve():
     assert capture_adapter_revision("pgmq").get("pinned_version")
     assert capture_adapter_revision("pgboss").get("pinned_version")
     assert capture_adapter_revision("absurd").get("pinned_version")
+    assert capture_adapter_revision("awa").get("git_sha")
 
 
 def test_readme_includes_versions_table(tmp_path: Path):
