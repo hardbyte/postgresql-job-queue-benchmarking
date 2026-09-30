@@ -1,0 +1,1 @@
+"""Kafka-compatible broker benchmark."""

@@ -1,5 +1,8 @@
 # postgresql-job-queue-benchmarking
 
+The [Kafka-compatible broker benchmark](broker-bench/README.md) compares
+kafgres and Apache Kafka as a separate message-bus workload.
+
 Benchmarking harnesses for two families of PostgreSQL-backed infrastructure:
 
 - **[Job queues](#the-job-queue-bench)** — eight Postgres-backed queue systems compared on throughput, latency tail, bloat, and chaos recovery.
