@@ -311,6 +311,15 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         "LEASE_ROTATE_MS",
         "BENCH_QUEUE_COUNT",
         "BENCH_DLQ_ENABLED",
+        "JOB_PAYLOAD_KIND",
+        # Per-system lease / timeout / batching knobs. Long-running-job
+        # scenarios need them above the job duration.
+        "RESCUE_AFTER_SECS",
+        "VISIBILITY_TIMEOUT_S",
+        "CONSUMER_BATCH_SIZE",
+        "SUBSCRIBER_BATCH_SIZE",
+        "CLAIM_TIMEOUT_SECS",
+        "MAX_CONNECTIONS",
     ):
         if key in os.environ:
             env[key] = os.environ[key]
@@ -361,12 +370,20 @@ def _docker_launch(
         container_dir = str(Path(container_control).parent)
         mounts.append((host_dir, container_dir))
         env["PRODUCER_RATE_CONTROL_FILE"] = container_control
+        gate_file = env.get("CONSUMER_GATE_FILE")
+        if gate_file:
+            env["CONSUMER_GATE_FILE"] = str(
+                Path(container_dir) / Path(gate_file).name
+            )
     # Docker containers reach PG via host networking.
     # `-i` keeps stdin open so the harness pacer can write ENQUEUE tokens
     # to the container's stdin (without it, `docker run` closes stdin
     # immediately and the in-container adapter sees EOF on its first
     # readline()).
     argv = ["docker", "run", "--rm", "-i", "--network", "host"]
+    cidfile = overrides.get("DOCKER_CIDFILE_HOST")
+    if cidfile:
+        argv.extend(["--cidfile", cidfile])
     for host_path, container_path in mounts:
         argv.extend(["-v", f"{host_path}:{container_path}"])
     for k, v in env.items():

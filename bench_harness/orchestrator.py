@@ -27,6 +27,7 @@ from typing import Iterable
 import psycopg
 
 from . import adapters as adapters_mod
+from . import cpu as cpu_mod
 from . import writers as writers_mod
 from .adapters import (
     ADAPTERS,
@@ -38,6 +39,7 @@ from .adapters import (
     pg_url,
 )
 from .metrics import MetricsDaemon, PollTargets, parse_adapter_record
+from .hooks import CONSUMER_GATE_CLOSED, write_control_file
 from .phases import (
     Phase,
     PhaseType,
@@ -107,8 +109,27 @@ def _run_cmd(
     )
 
 
+def _pg_stat_statements_enabled() -> bool:
+    return os.environ.get("BENCH_PG_STAT_STATEMENTS", "") in {"1", "true", "yes", "on"}
+
+
 def _compose_env(pg_image: str) -> dict[str, str]:
-    return {"POSTGRES_IMAGE": pg_image}
+    env = {"POSTGRES_IMAGE": pg_image}
+    if _pg_stat_statements_enabled():
+        env["PG_SHARED_PRELOAD_LIBRARIES"] = "pg_stat_statements"
+    return env
+
+
+def _postgres_container_id(pg_image: str, engine: str = DEFAULT_ENGINE) -> str | None:
+    result = subprocess.run(
+        [*_compose_prefix(engine), "ps", "-q", "postgres"],
+        cwd=str(SCRIPT_DIR),
+        env={**os.environ, **_compose_env(pg_image)},
+        capture_output=True,
+        text=True,
+    )
+    container_id = result.stdout.strip().splitlines()
+    return container_id[0] if result.returncode == 0 and container_id else None
 
 
 def _compose_prefix(engine: str) -> list[str]:
@@ -266,6 +287,8 @@ def preflight_database(manifest: AdapterManifest, *, recreate: bool = False) -> 
 
     target_url = pg_url(manifest.db_name)
     required_exts = list(manifest.extensions) + ["pgstattuple"]
+    if _pg_stat_statements_enabled():
+        required_exts.append("pg_stat_statements")
     with psycopg.connect(target_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             for ext in required_exts:
@@ -277,6 +300,12 @@ def preflight_database(manifest: AdapterManifest, *, recreate: bool = False) -> 
                         f"{exc}. Ensure the Postgres image provides this "
                         f"extension (e.g. via a custom Dockerfile)."
                     ) from exc
+            if _pg_stat_statements_enabled():
+                cur.execute(
+                    f'ALTER DATABASE "{manifest.db_name}" '
+                    "SET pg_stat_statements.track = 'all'"
+                )
+                cur.execute("SELECT pg_stat_statements_reset()")
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -349,6 +378,11 @@ def _launch_one_replica(
     # values carry through; stamp the id last so it can't be overridden.
     instance_overrides = dict(overrides)
     instance_overrides["BENCH_INSTANCE_ID"] = str(instance_id)
+    control_host = overrides.get("PRODUCER_RATE_CONTROL_FILE_HOST")
+    if control_host:
+        cidfile = _cidfile_path(Path(control_host).parent, instance_id)
+        cidfile.unlink(missing_ok=True)
+        instance_overrides["DOCKER_CIDFILE_HOST"] = str(cidfile)
     spec = entry.launcher(manifest, instance_overrides)
     env = {**os.environ, **spec.env}
     print(
@@ -388,7 +422,8 @@ def _launch_one_replica(
             target_rate = int(_pacer_setting("PRODUCER_RATE", "0"))
         except ValueError:
             target_rate = 0
-        if target_rate > 0 and proc.stdin is not None:
+        rate_file = instance_overrides.get("PRODUCER_RATE_CONTROL_FILE_HOST")
+        if (target_rate > 0 or rate_file) and proc.stdin is not None:
             try:
                 batch_max = int(_pacer_setting("PRODUCER_BATCH_MAX", "128"))
             except ValueError:
@@ -403,6 +438,7 @@ def _launch_one_replica(
                     target_rate=target_rate,
                     batch_max=batch_max,
                     batch_ms=batch_ms,
+                    rate_file=rate_file,
                 ),
                 stop_event=stop_event,
                 log_prefix=f"-{system}-{instance_id}",
@@ -469,6 +505,42 @@ def _launch_one_replica(
     except RuntimeError as exc:
         raise _abort(str(exc)) from exc
     return proc, tailer, stop_event, descriptor
+
+
+def _cidfile_path(control_dir: Path, instance_id: int) -> Path:
+    return control_dir / f"cid-{instance_id}"
+
+
+def _cpu_probe(
+    pool: ReplicaPool, control_dir: Path, postgres_container_id: str | None
+):
+    """Cumulative CPU seconds: "" → Postgres, "replica-<i>" → adapter i.
+
+    Docker-launched replicas are read through the container ID docker
+    writes to the per-replica cidfile; native replicas through their pid.
+    """
+
+    def _probe() -> dict[str, float]:
+        out: dict[str, float] = {}
+        if postgres_container_id:
+            pg_seconds = cpu_mod.container_cpu_seconds(postgres_container_id)
+            if pg_seconds is not None:
+                out[""] = pg_seconds
+        for slot in pool.slots:
+            if slot.process is None or slot.process.poll() is not None:
+                continue
+            container_id = cpu_mod.read_cidfile(
+                _cidfile_path(control_dir, slot.instance_id)
+            )
+            if container_id:
+                seconds = cpu_mod.container_cpu_seconds(container_id)
+            else:
+                seconds = cpu_mod.process_cpu_seconds(slot.process.pid)
+            if seconds is not None:
+                out[f"replica-{slot.instance_id}"] = seconds
+        return out
+
+    return _probe
 
 
 def build_replica_pool(
@@ -645,6 +717,38 @@ def _emit_wait_event_snapshot(
     )
 
 
+def _emit_phase_start(
+    *,
+    phase: Phase,
+    run_id: str,
+    system: str,
+    bench_start: float,
+    out_queue: "queue.Queue[Sample]",
+) -> None:
+    """Record the exact elapsed_s a phase began so summaries can time
+    events (e.g. drain-to-empty) from the boundary instead of from the
+    first periodic sample that happens to land in the phase."""
+    from .sample import now_iso
+
+    elapsed = round(time.time() - bench_start, 3)
+    out_queue.put(
+        Sample(
+            run_id=run_id,
+            system=system,
+            instance_id=0,
+            elapsed_s=elapsed,
+            sampled_at=now_iso(),
+            phase_label=phase.label,
+            phase_type=phase.type.value,
+            subject_kind="phase",
+            subject=phase.label,
+            metric="phase_start_elapsed_s",
+            value=elapsed,
+            window_s=0.0,
+        )
+    )
+
+
 def _drain_loop(
     out_queue: "queue.Queue[Sample]", writer: RawCsvWriter, stop_event: threading.Event
 ) -> None:
@@ -682,6 +786,7 @@ def run_one_system(
     replicas: int = 1,
     wait_events_enabled: bool = True,
     wait_event_sample_every_s: float = 1.0,
+    adapter_env: dict[str, str] | None = None,
 ) -> dict:
     entry = ADAPTERS[system]
     manifest = AdapterManifest.load(entry.bench_dir)
@@ -712,9 +817,16 @@ def run_one_system(
     }
     if awa_completion_batch_size is not None:
         overrides["AWA_COMPLETION_BATCH_SIZE"] = str(awa_completion_batch_size)
+    overrides.update(adapter_env or {})
     control_dir = Path(tempfile.mkdtemp(prefix=f"bench-control-{system}-"))
     control_file = control_dir / "producer_rate.txt"
-    control_file.write_text(str(producer_rate))
+    initial_rate = phases[0].rate_override(replicas)
+    write_control_file(control_file, producer_rate if initial_rate is None else initial_rate)
+    consumer_gate_file: Path | None = None
+    if any(p.type is PhaseType.PRELOAD for p in phases):
+        consumer_gate_file = control_dir / "consumer_gate.txt"
+        write_control_file(consumer_gate_file, CONSUMER_GATE_CLOSED)
+        overrides["CONSUMER_GATE_FILE"] = str(consumer_gate_file)
     overrides["PRODUCER_RATE_CONTROL_FILE"] = str(control_file)
     overrides["PRODUCER_RATE_CONTROL_FILE_HOST"] = str(control_file)
     overrides["PRODUCER_RATE_CONTROL_FILE_CONTAINER"] = "/control/producer_rate.txt"
@@ -760,6 +872,9 @@ def run_one_system(
         bench_start=bench_start,
         get_phase=tracker.get,
         period_s=sample_every_s,
+        cpu_probe=_cpu_probe(
+            pool, control_dir, _postgres_container_id(pg_image, engine)
+        ),
     )
     daemon.start()
 
@@ -799,10 +914,22 @@ def run_one_system(
         "admin_database_url": pg_url("postgres"),
         "system_database_url": pg_url(manifest.db_name),
         "system_database_name": manifest.db_name,
+        "consumer_gate_file": str(consumer_gate_file) if consumer_gate_file else None,
     }
+    phase_rates = [
+        producer_rate if rate is None else rate
+        for rate in (p.rate_override(replicas) for p in phases)
+    ]
     try:
-        for phase in phases:
+        for phase_index, phase in enumerate(phases):
             tracker.set(phase.label, phase.type.value)
+            _emit_phase_start(
+                phase=phase,
+                run_id=run_id,
+                system=system,
+                bench_start=bench_start,
+                out_queue=out_queue,
+            )
             print(
                 f"[{system}] phase {phase.label} ({phase.type.value}) "
                 f"for {phase.duration_s}s",
@@ -813,11 +940,17 @@ def run_one_system(
                 phase=phase,
                 state=phase_state,
             )
+            write_control_file(control_file, phase_rates[phase_index])
             registry.enter(runtime)
             try:
                 _sleep_or_abort(phase.duration_s, pool)
             finally:
                 registry.exit(runtime)
+                # Switch to the next phase's rate before the (possibly slow)
+                # boundary snapshots so e.g. a preload doesn't leak base-rate
+                # jobs into the following drain.
+                if phase_index + 1 < len(phases):
+                    write_control_file(control_file, phase_rates[phase_index + 1])
                 # Phase-boundary snapshot: pgstattuple / pgstatindex.
                 daemon.phase_boundary_snapshot()
                 # Wait-event histogram snapshot for this phase. Drains
@@ -913,6 +1046,7 @@ def drive(
     cli_args: list[str],
     wait_events_enabled: bool = True,
     wait_event_sample_every_s: float = 1.0,
+    adapter_env: dict[str, str] | None = None,
 ) -> Path:
     unknown = [s for s in systems if s not in ADAPTERS]
     if unknown:
@@ -1011,6 +1145,7 @@ def drive(
                 replicas=replicas,
                 wait_events_enabled=wait_events_enabled,
                 wait_event_sample_every_s=wait_event_sample_every_s,
+                adapter_env=adapter_env,
             )
             # Merge the runtime descriptor the adapter emitted with the
             # harness-proven revision block (git SHA / submodule SHA /
@@ -1189,6 +1324,32 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "aggregate. Divide --producer-rate by --replicas to hold total "
         "offered load constant across replica counts.",
     )
+    parser.add_argument(
+        "--job-payload-bytes",
+        type=int,
+        default=None,
+        help="Approximate job payload size (JOB_PAYLOAD_BYTES; adapter default 256).",
+    )
+    parser.add_argument(
+        "--job-payload-kind",
+        choices=["random"],
+        default=None,
+        help="'random' pads payloads with incompressible base64 so TOAST "
+        "compression can't hide their size (JOB_PAYLOAD_KIND).",
+    )
+    parser.add_argument(
+        "--job-work-ms",
+        type=int,
+        default=None,
+        help="Synthetic per-job work time in ms (JOB_WORK_MS; adapter default 1).",
+    )
+    parser.add_argument(
+        "--queue-count",
+        type=int,
+        default=None,
+        help="Logical queues per adapter (BENCH_QUEUE_COUNT). Producers "
+        "round-robin across them; see docs/method.md for per-system support.",
+    )
     # Wait-event sampling — pg_ash-style ASH. ON by default; the overhead
     # is a single short SELECT against pg_stat_activity per second
     # (< 0.1% of one core). See docs/wait-events.md.
@@ -1298,6 +1459,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         cli_args=list(sys.argv),
         wait_events_enabled=config.wait_events,
         wait_event_sample_every_s=config.wait_event_sample_every,
+        adapter_env=config.adapter_env(),
     )
     return 0
 

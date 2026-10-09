@@ -308,6 +308,9 @@ def compute_summary(
             # (top-N histogram per phase) and don't fit the generic
             # (median, peak, count) shape — skip them in the bucket pass.
             continue
+        if row.get("subject_kind") == "phase":
+            # Phase-boundary markers; consumed by the drain timing below.
+            continue
         if row.get("subject_kind") == "pg_activity":
             # Rich active-transaction rows intentionally carry query text
             # and backend identity in `subject`. They are raw diagnostics,
@@ -582,12 +585,34 @@ def compute_summary(
                 phase_label=phase_label,
                 metric="pg_db_xacts_total",
             )
+            phase_block.update(
+                _resource_phase_metrics(
+                    rows, system=system, phase_label=phase_label
+                )
+            )
             phase_block["replicas"] = replicas
             wait = _wait_event_summary(
                 rows, system=system, phase_label=phase_label
             )
             if wait is not None:
                 phase_block["wait_events"] = wait
+
+    drain_labels = [p.label for p in ordered_phases if p.type is PhaseType.DRAIN]
+    for system, system_block in out_systems.items():
+        for phase in ordered_phases:
+            if phase.type is PhaseType.PRELOAD and phase.label in system_block["phases"]:
+                # Compare with `jobs_enqueued` to spot a producer that
+                # couldn't sustain the preload rate.
+                system_block["phases"][phase.label]["preload_jobs_requested"] = (
+                    phase.int_param("jobs", 0)
+                )
+        for label in drain_labels:
+            drain = _drain_stats(rows, system=system, phase_label=label)
+            if drain is not None and label in system_block["phases"]:
+                system_block["phases"][label]["drain"] = drain
+        run_block = _run_totals(rows, system=system, phases=phases)
+        if run_block:
+            system_block["run"] = run_block
 
     return {
         "run_id": run_id,
@@ -598,6 +623,352 @@ def compute_summary(
         ],
         "systems": out_systems,
     }
+
+
+def _integrated_adapter_count(
+    rows: list[dict], *, system: str, phase_labels: set[str] | None, metric: str
+) -> float | None:
+    """Sum of rate * window over every replica's samples: an event count.
+
+    Adapters report per-tick rates; multiplying by the tick window and
+    summing recovers the count without needing cumulative counters in
+    the adapter contract. Accurate to within tick-timing jitter.
+    """
+    total = 0.0
+    seen = False
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["metric"] != metric
+            or row.get("subject_kind") != "adapter"
+        ):
+            continue
+        if phase_labels is not None and row["phase_label"] not in phase_labels:
+            continue
+        try:
+            value = float(row["value"])
+            window = float(row.get("window_s") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        seen = True
+        total += value * window
+    return total if seen else None
+
+
+def _cluster_series(
+    rows: list[dict],
+    *,
+    system: str,
+    metric: str,
+    phase_labels: set[str] | None = None,
+    subject_kind: str = "cluster",
+) -> list[tuple[float, float]]:
+    """(elapsed_s, value) points, summed across subjects per tick."""
+    per_elapsed: dict[float, float] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["metric"] != metric
+            or row["subject_kind"] != subject_kind
+        ):
+            continue
+        if phase_labels is not None and row["phase_label"] not in phase_labels:
+            continue
+        try:
+            elapsed = float(row["elapsed_s"])
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+        per_elapsed[elapsed] = per_elapsed.get(elapsed, 0.0) + value
+    return sorted(per_elapsed.items())
+
+
+def _per_subject_counter_rate(
+    rows: list[dict], *, system: str, phase_label: str, metric: str
+) -> float | None:
+    """Rate of a monotonic counter that several subjects report (e.g. one
+    CPU counter per adapter replica). Sums positive tick-to-tick deltas per
+    subject, so a replica restart (counter reset) doesn't go negative."""
+    per_subject: dict[str, list[tuple[float, float]]] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row["subject_kind"] != "cluster"
+        ):
+            continue
+        try:
+            point = (float(row["elapsed_s"]), float(row["value"]))
+        except (TypeError, ValueError):
+            continue
+        per_subject.setdefault(row["subject"], []).append(point)
+    total = 0.0
+    span = 0.0
+    for points in per_subject.values():
+        points.sort()
+        if len(points) < 2:
+            continue
+        total += sum(
+            max(0.0, later[1] - earlier[1])
+            for earlier, later in zip(points, points[1:])
+        )
+        span = max(span, points[-1][0] - points[0][0])
+    if span <= 0:
+        return None
+    return total / span
+
+
+def _resource_phase_metrics(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict:
+    """Per-phase connection, CPU, write-amplification and size metrics."""
+    labels = {phase_label}
+    out: dict = {}
+    for key, metric in (
+        ("pg_db_tup_updated_per_s", "pg_db_tup_updated_total"),
+        ("pg_db_tup_inserted_per_s", "pg_db_tup_inserted_total"),
+        ("pg_db_tup_deleted_per_s", "pg_db_tup_deleted_total"),
+        ("pg_stmt_calls_per_s", "pg_stmt_calls_total"),
+        ("pg_notify_calls_per_s", "pg_stmt_notify_calls_total"),
+    ):
+        out[key] = _cluster_counter_rate(
+            rows, system=system, phase_label=phase_label, metric=metric
+        )
+    out["pg_cpu_cores"] = _per_subject_counter_rate(
+        rows, system=system, phase_label=phase_label, metric="pg_cpu_seconds_total"
+    )
+    out["adapter_cpu_cores"] = _per_subject_counter_rate(
+        rows,
+        system=system,
+        phase_label=phase_label,
+        metric="adapter_cpu_seconds_total",
+    )
+    for key, metric in (
+        ("pg_backends", "pg_backends_total"),
+        ("pg_backends_listening", "pg_backends_listening"),
+    ):
+        values = [v for _, v in _cluster_series(
+            rows, system=system, metric=metric, phase_labels=labels
+        )]
+        out[f"median_{key}"] = _median(values)
+        out[f"peak_{key}"] = _peak(values)
+
+    jobs_enqueued = _integrated_adapter_count(
+        rows, system=system, phase_labels=labels, metric="enqueue_rate"
+    )
+    jobs_completed = _integrated_adapter_count(
+        rows, system=system, phase_labels=labels, metric="completion_rate"
+    )
+    out["jobs_enqueued"] = jobs_enqueued
+    out["jobs_completed"] = jobs_completed
+    wal_delta = _cluster_counter_delta(
+        rows, system=system, phase_label=phase_label, metric="pg_wal_bytes"
+    )
+    jobs = max(jobs_enqueued or 0.0, jobs_completed or 0.0)
+    out["wal_bytes_per_job"] = (
+        wal_delta / jobs if wal_delta is not None and jobs >= 1.0 else None
+    )
+
+    for key, metric, subject_kind in (
+        ("database_size_mb", "pg_database_size_mb", "cluster"),
+        ("event_relation_size_mb", "total_relation_size_mb", "table"),
+        ("event_toast_size_mb", "toast_size_mb", "table"),
+        ("event_indexes_size_mb", "indexes_size_mb", "table"),
+    ):
+        series = _cluster_series(
+            rows,
+            system=system,
+            metric=metric,
+            phase_labels=labels,
+            subject_kind=subject_kind,
+        )
+        if series:
+            out[f"{key}_start"] = series[0][1]
+            out[f"{key}_end"] = series[-1][1]
+            out[f"{key}_peak"] = _peak([v for _, v in series])
+    return out
+
+
+def _adapter_series(
+    rows: list[dict], *, system: str, phase_label: str | None, metric: str
+) -> list[tuple[float, float]]:
+    """(elapsed_s, value) per tick, summed across replicas by sample ordinal.
+    `phase_label=None` spans the whole run."""
+    per_instance: dict[str, list[tuple[str, float, float]]] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or (phase_label is not None and row["phase_label"] != phase_label)
+            or row["metric"] != metric
+            or row.get("subject_kind") != "adapter"
+        ):
+            continue
+        try:
+            point = (str(row.get("sampled_at") or ""), float(row["elapsed_s"]), float(row["value"]))
+        except (TypeError, ValueError):
+            continue
+        per_instance.setdefault(str(row.get("instance_id") or ""), []).append(point)
+    per_sample: dict[int, list[float]] = {}
+    for points in per_instance.values():
+        for idx, (_, elapsed, value) in enumerate(sorted(points)):
+            slot = per_sample.setdefault(idx, [elapsed, 0.0])
+            slot[0] = min(slot[0], elapsed)
+            slot[1] += value
+    return [(elapsed, value) for elapsed, value in (per_sample[i] for i in sorted(per_sample))]
+
+
+def _phase_start_elapsed(
+    rows: list[dict], *, system: str, phase_label: str
+) -> float | None:
+    for row in rows:
+        if (
+            row["system"] == system
+            and row.get("subject_kind") == "phase"
+            and row["phase_label"] == phase_label
+            and row["metric"] == "phase_start_elapsed_s"
+        ):
+            try:
+                return float(row["value"])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _drain_stats(rows: list[dict], *, system: str, phase_label: str) -> dict | None:
+    """Drain-phase shape: time to empty and throughput over the drain.
+
+    The backlog is `total_backlog` where the adapter reports it, else
+    `queue_depth` (available jobs only). `drain_time_s` is measured from
+    the phase start to the first sample at zero, so it carries up to one
+    sample period of quantisation; None if the queue never emptied.
+    Throughput is split into (up to) deciles of the draining span so a
+    slowdown as the backlog shrinks (or a speed-up) is visible;
+    `drain_tail_to_head_ratio` compares the last 30% to the first 30%.
+    """
+    backlog_metric = (
+        "total_backlog"
+        if _adapter_series(
+            rows, system=system, phase_label=phase_label, metric="total_backlog"
+        )
+        else "queue_depth"
+    )
+    backlog = _adapter_series(
+        rows, system=system, phase_label=phase_label, metric=backlog_metric
+    )
+    completions = _adapter_series(
+        rows, system=system, phase_label=phase_label, metric="completion_rate"
+    )
+    if not backlog and not completions:
+        return None
+    start_t = _phase_start_elapsed(rows, system=system, phase_label=phase_label)
+    if start_t is None:
+        start_t = min(t for t, _ in (backlog or completions))
+    # The backlog the drain starts from is the last observation before the
+    # phase began (the first in-phase sample has already drained some).
+    before = [
+        v
+        for t, v in _adapter_series(
+            rows, system=system, phase_label=None, metric=backlog_metric
+        )
+        if t <= start_t
+    ]
+    drain_time_s: float | None = None
+    for t, value in backlog:
+        if value <= 0:
+            drain_time_s = t - start_t
+            break
+    # Samples whose window lies inside the draining span. The sample that
+    # first sees an empty queue is excluded: its window is partly idle.
+    draining = [
+        (t, v)
+        for t, v in completions
+        if drain_time_s is None or t - start_t < drain_time_s
+    ]
+    deciles: list[float | None] = []
+    head_tail_ratio: float | None = None
+    if draining:
+        n = len(draining)
+        buckets = min(10, n)
+        for i in range(buckets):
+            chunk = draining[i * n // buckets : (i + 1) * n // buckets]
+            deciles.append(_median([v for _, v in chunk]))
+        k = max(1, (n * 3) // 10)
+        head = _median([v for _, v in draining[:k]])
+        tail = _median([v for _, v in draining[-k:]])
+        if head and tail is not None:
+            head_tail_ratio = tail / head
+    jobs_drained = _integrated_adapter_count(
+        rows, system=system, phase_labels={phase_label}, metric="completion_rate"
+    )
+    return {
+        "backlog_at_start": before[-1] if before else (backlog[0][1] if backlog else None),
+        "drain_time_s": drain_time_s,
+        "jobs_drained": jobs_drained,
+        "mean_drain_rate_per_s": (
+            jobs_drained / drain_time_s
+            if jobs_drained is not None and drain_time_s
+            else None
+        ),
+        "drain_throughput_deciles": deciles,
+        "drain_tail_to_head_ratio": head_tail_ratio,
+    }
+
+
+def _run_totals(rows: list[dict], *, system: str, phases: list[Phase]) -> dict:
+    """Whole-run job accounting and storage settle-back.
+
+    `completion_excess` > 0 means more completions than enqueues were
+    observed — duplicate execution (e.g. a lease or visibility timeout
+    shorter than the job). Small values within a few jobs are tick-timing
+    noise. Database size baseline is the first sample of the run (normally
+    warmup); `size_settle_s` is how long after the first drain phase began
+    until the database was back within max(10%, 8 MB) of that baseline.
+    """
+    enqueued = _integrated_adapter_count(
+        rows, system=system, phase_labels=None, metric="enqueue_rate"
+    )
+    completed = _integrated_adapter_count(
+        rows, system=system, phase_labels=None, metric="completion_rate"
+    )
+    out: dict = {}
+    if enqueued is not None or completed is not None:
+        out["jobs_enqueued_total"] = enqueued
+        out["jobs_completed_total"] = completed
+        if enqueued is not None and completed is not None:
+            out["completion_excess"] = completed - enqueued
+    size = _cluster_series(rows, system=system, metric="pg_database_size_mb")
+    if size:
+        baseline = size[0][1]
+        out["database_size_mb_baseline"] = baseline
+        out["database_size_mb_peak"] = _peak([v for _, v in size])
+        out["database_size_mb_final"] = size[-1][1]
+        first_drain = next((p for p in phases if p.type is PhaseType.DRAIN), None)
+        drain_start = None
+        if first_drain is not None:
+            drain_start = _phase_start_elapsed(
+                rows, system=system, phase_label=first_drain.label
+            )
+            if drain_start is None:
+                drain_start = next(
+                    (
+                        t
+                        for t, _ in _cluster_series(
+                            rows,
+                            system=system,
+                            metric="pg_database_size_mb",
+                            phase_labels={first_drain.label},
+                        )
+                    ),
+                    None,
+                )
+        if drain_start is not None:
+            threshold = baseline + max(baseline * 0.10, 8.0)
+            out["size_settle_s"] = next(
+                (t - drain_start for t, v in size if t >= drain_start and v <= threshold),
+                None,
+            )
+    return out
 
 
 def _chaos_aggregates(

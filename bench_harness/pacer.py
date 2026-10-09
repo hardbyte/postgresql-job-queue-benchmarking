@@ -34,6 +34,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import IO
 
 
@@ -42,6 +43,18 @@ class PacerConfig:
     target_rate: int  # jobs/s (offered)
     batch_max: int = 128  # max rows per ENQUEUE token
     batch_ms: int = 25  # tick cadence in ms
+    # Producer rate control file (the same one adapter-paced producers
+    # re-read). When set, its value replaces `target_rate` so phase-level
+    # rate changes reach harness-paced adapters too.
+    rate_file: str | None = None
+    rate_file_poll_s: float = 0.25
+
+
+def read_rate_file(path: str, default: float) -> float:
+    try:
+        return max(0.0, float(Path(path).read_text().strip()))
+    except (OSError, ValueError):
+        return default
 
 
 class FixedRatePacer:
@@ -74,7 +87,18 @@ class FixedRatePacer:
         period_s = self._cfg.batch_ms / 1000.0
         last_tick = time.monotonic()
         credit = 0.0
+        target_rate = float(self._cfg.target_rate)
+        last_rate_read = float("-inf")
         while not self._stop.is_set():
+            if (
+                self._cfg.rate_file
+                and last_tick - last_rate_read >= self._cfg.rate_file_poll_s
+            ):
+                last_rate_read = last_tick
+                new_rate = read_rate_file(self._cfg.rate_file, target_rate)
+                if new_rate == 0.0:
+                    credit = 0.0
+                target_rate = new_rate
             # Sleep until next tick boundary; if we ran long, don't compound
             # the overrun by sleeping beyond it.
             elapsed = time.monotonic() - last_tick
@@ -87,7 +111,7 @@ class FixedRatePacer:
             now = time.monotonic()
             dt_s = now - last_tick
             last_tick = now
-            credit += self._cfg.target_rate * dt_s
+            credit += target_rate * dt_s
             whole = int(credit)
             if whole < 1:
                 continue

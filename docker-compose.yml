@@ -17,6 +17,8 @@ services:
       - "postgres"
       - "-c"
       - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "shared_preload_libraries=${PG_SHARED_PRELOAD_LIBRARIES:-}"
     deploy:
       resources:
         limits:
@@ -27,3 +29,4 @@ services:
       interval: 2s
       timeout: 5s
       retries: 10
+      start_period: 120s

@@ -76,6 +76,29 @@ class CliConfig(BaseModel):
     wait_events: bool = True
     wait_event_sample_every: Annotated[float, Field(gt=0.0)] = 1.0
 
+    # ── Workload shape (forwarded to adapters as env) ──────────────────
+    job_payload_bytes: Annotated[int | None, Field(ge=1)] = None
+    job_payload_kind: Literal["random"] | None = None
+    job_work_ms: Annotated[int | None, Field(ge=0)] = None
+    queue_count: Annotated[int | None, Field(ge=1)] = None
+
+    def adapter_env(self) -> dict[str, str]:
+        """Adapter env overrides for the workload-shape flags that were set."""
+        env: dict[str, str] = {}
+        if self.job_payload_bytes is not None:
+            env["JOB_PAYLOAD_BYTES"] = str(self.job_payload_bytes)
+        if self.job_payload_kind is not None:
+            env["JOB_PAYLOAD_KIND"] = self.job_payload_kind
+        if self.job_work_ms is not None:
+            env["JOB_WORK_MS"] = str(self.job_work_ms)
+        if self.queue_count is not None:
+            env["BENCH_QUEUE_COUNT"] = str(self.queue_count)
+            if self.queue_count > 1:
+                # Adapters whose depth probe is per-queue (awa, pgque)
+                # refresh one queue per tick instead of all of them.
+                env["BENCH_DEPTH_ROTATE"] = "1"
+        return env
+
     @field_validator("engine")
     @classmethod
     def _engine_must_be_known(cls, v: str) -> str:
@@ -156,6 +179,10 @@ class CliConfig(BaseModel):
             replicas=args.replicas,
             wait_events=getattr(args, "wait_events", True),
             wait_event_sample_every=getattr(args, "wait_event_sample_every", 1.0),
+            job_payload_bytes=getattr(args, "job_payload_bytes", None),
+            job_payload_kind=getattr(args, "job_payload_kind", None),
+            job_work_ms=getattr(args, "job_work_ms", None),
+            queue_count=getattr(args, "queue_count", None),
         )
 
 

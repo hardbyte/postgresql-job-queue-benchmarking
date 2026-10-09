@@ -183,7 +183,11 @@ class WaitEventSampler:
     # ── data ingestion (worker thread) ─────────────────────────────────
     def _run(self) -> None:
         try:
-            conn = psycopg.connect(self.database_url, autocommit=True)
+            conn = psycopg.connect(
+                self.database_url,
+                autocommit=True,
+                application_name="bench-harness-wait-events",
+            )
         except psycopg.Error as exc:
             print(
                 f"[wait-events] failed to connect to "

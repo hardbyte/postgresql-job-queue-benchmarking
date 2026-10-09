@@ -34,6 +34,11 @@ class PhaseType(str, Enum):
     PG_BACKEND_KILL = "pg-backend-kill"
     POOL_EXHAUSTION = "pool-exhaustion"
     REPEATED_KILL = "repeated-kill"
+    # Backlog phases. `preload` offers a fixed job count with consumers
+    # held behind the adapter's consumer gate; `drain` stops the producer
+    # and opens the gate so the backlog is worked off at full speed.
+    PRELOAD = "preload"
+    DRAIN = "drain"
     # CDC-suite phase types (docs/cdc-harness-design.md §9). Consumer-level
     # chaos is applied through the receiver's control API, not the replica
     # pool — the hooks live in cdc_harness, not bench_harness.hooks.
@@ -63,6 +68,8 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.PG_BACKEND_KILL:  ("#D86A3A", 0.30),
     PhaseType.POOL_EXHAUSTION:  ("#C8884A", 0.30),
     PhaseType.REPEATED_KILL:    ("#B04040", 0.35),
+    PhaseType.PRELOAD:          ("#8FB3D9", 0.30),
+    PhaseType.DRAIN:            ("#7FBF9F", 0.30),
     PhaseType.CONSUMER_DEAD:    ("#C04A4A", 0.35),
     PhaseType.CONSUMER_SLOW:    ("#D8A03A", 0.30),
     PhaseType.SINK_OUTAGE:      ("#A03030", 0.40),
@@ -88,6 +95,8 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.PG_BACKEND_KILL:  True,
     PhaseType.POOL_EXHAUSTION:  True,
     PhaseType.REPEATED_KILL:    True,
+    PhaseType.PRELOAD:          True,
+    PhaseType.DRAIN:            True,
     PhaseType.CONSUMER_DEAD:    True,
     PhaseType.CONSUMER_SLOW:    True,
     PhaseType.SINK_OUTAGE:      True,
@@ -122,6 +131,35 @@ class Phase:
             if k == name:
                 return v
         return default
+
+    def rate_override(self, replicas: int = 1) -> float | None:
+        """Per-replica producer rate this phase pins, or None for the base.
+
+        `rate=N` is a per-replica jobs/s value usable on any phase type.
+        `preload(jobs=N)` spreads N jobs evenly over the phase across all
+        replicas; `drain` always stops the producer.
+        """
+        if self.type is PhaseType.DRAIN:
+            return 0.0
+        if self.type is PhaseType.PRELOAD:
+            jobs = self.int_param("jobs", 0)
+            if jobs <= 0:
+                raise ValueError(
+                    f"phase {self.label!r}: preload requires jobs=<N> with N > 0"
+                )
+            return jobs / self.duration_s / max(replicas, 1)
+        raw = self.param("rate")
+        if raw is None:
+            return None
+        try:
+            rate = float(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"phase {self.label!r}: param 'rate' must be a number, got {raw!r}"
+            ) from exc
+        if rate < 0:
+            raise ValueError(f"phase {self.label!r}: param 'rate' must be >= 0")
+        return rate
 
     def int_param(self, name: str, default: int) -> int:
         raw = self.param(name)
@@ -302,6 +340,45 @@ SCENARIOS: dict[str, list[str]] = {
         "warmup=warmup:30s",
         "clean_1=clean:5m",
     ],
+    # Many low-traffic queues vs one queue at the same total rate. Run once
+    # with `--queue-count 1` and once with e.g. `--queue-count 500` at the
+    # same `--producer-rate`; compare backend counts, xacts/s, CPU and
+    # NOTIFY load. The idle tail isolates per-queue polling cost.
+    "queue_fanout": [
+        "warmup=warmup:2m",
+        "clean_1=clean:20m",
+        "idle_1=idle-background(rate=0):10m",
+    ],
+    # Large payloads at a moderate fixed rate. Run once per size with
+    # `--job-payload-bytes {16384,65536,262144} --job-payload-kind random`;
+    # the drain tail shows what the tables (and TOAST) look like once
+    # the queue is empty again.
+    "large_payload": [
+        "warmup=warmup:2m",
+        "clean_1=clean:20m",
+        "drain_1=drain:10m",
+    ],
+    # Long-running jobs. Pair with `--job-work-ms 120000` and >= 500 total
+    # workers (e.g. `--replicas 2 --worker-count 250`). The preload parks
+    # 500 jobs behind the consumer gate; `hold` opens it so every job is
+    # running and none can complete yet (pure heartbeat / lease cost).
+    # `steady` then runs continuous long jobs at `--producer-rate`.
+    "long_jobs": [
+        "warmup=warmup(rate=0):1m",
+        "preload=preload(jobs=500):30s",
+        "hold=drain:100s",
+        "release=drain:60s",
+        "steady=clean:30m",
+        "tail=drain:5m",
+    ],
+    # Preload a large backlog with consumers gated, then drain it at full
+    # speed and watch table/index sizes settle back towards baseline.
+    "backlog_drain": [
+        "warmup=warmup(rate=0):1m",
+        "preload=preload(jobs=1000000):10m",
+        "drain=drain:30m",
+        "settle=idle-background(rate=0):30m",
+    ],
     # Replaces the legacy chaos.py `scenario_crash_recovery`. Harsh kill
     # of replica 0, then restart and measure recovery. Pass/fail answers
     # (`jobs_lost`, `recovery_time`) are derived from the shared raw.csv
@@ -388,6 +465,16 @@ def resolve_scenario(
         if phase.label in labels_seen:
             raise ValueError(f"Duplicate phase label: {phase.label!r}")
         labels_seen.add(phase.label)
+    drained = False
+    for phase in phases:
+        phase.rate_override()
+        if phase.type is PhaseType.DRAIN:
+            drained = True
+        elif phase.type is PhaseType.PRELOAD and drained:
+            raise ValueError(
+                f"preload phase {phase.label!r} follows a drain phase; the "
+                "consumer gate is one-shot, so all preloads must come first"
+            )
     if phases[0].type is not PhaseType.WARMUP:
         raise ValueError(
             "First phase must be type warmup so samples can be excluded "
@@ -484,6 +571,7 @@ def default_registry() -> HookRegistry:
     registry.register(PhaseType.REPEATED_KILL,
                       enter=hooks.enter_repeated_kill,
                       exit=hooks.exit_repeated_kill)
-    # warmup, clean, recovery — no extra runtime action; the adapter's
+    registry.register(PhaseType.DRAIN, enter=hooks.enter_drain)
+    # warmup, clean, recovery, preload — no extra runtime action; the adapter's
     # steady workload carries the load.
     return registry

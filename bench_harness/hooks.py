@@ -164,14 +164,22 @@ def exit_active_readers(runtime: PhaseRuntime) -> None:
 # clean workload, which is strictly worse data but not a failure.
 
 
+def write_control_file(path: str | Path, value: object) -> None:
+    """Atomically replace a control file so a polling adapter never reads
+    it half-written (an empty read falls back to the launch-time rate)."""
+    target = Path(path)
+    tmp = target.with_name(f".{target.name}.tmp")
+    tmp.write_text(str(value))
+    os.replace(tmp, target)
+
+
 def enter_high_load(runtime: PhaseRuntime) -> None:
     multiplier = float(runtime.state.get("high_load_multiplier", 1.5))
     base = float(runtime.state.get("base_producer_rate", 800.0))
     control_file = runtime.state.get("producer_rate_control_file")
     if not control_file:
         return
-    with Path(control_file).open("w") as fh:
-        fh.write(str(base * multiplier))
+    write_control_file(control_file, base * multiplier)
 
 
 def exit_high_load(runtime: PhaseRuntime) -> None:
@@ -179,8 +187,25 @@ def exit_high_load(runtime: PhaseRuntime) -> None:
     control_file = runtime.state.get("producer_rate_control_file")
     if not control_file:
         return
-    with Path(control_file).open("w") as fh:
-        fh.write(base)
+    write_control_file(control_file, base)
+
+
+# ─── preload / drain ─────────────────────────────────────────────────────
+#
+# The producer rate for both is pinned by the orchestrator through the rate
+# control file (see Phase.rate_override). The only extra action is opening
+# the consumer gate: adapters launched with CONSUMER_GATE_FILE hold their
+# consumers until the file reads `open`. The gate is one-shot.
+
+
+CONSUMER_GATE_OPEN = "open"
+CONSUMER_GATE_CLOSED = "closed"
+
+
+def enter_drain(runtime: PhaseRuntime) -> None:
+    gate_file = runtime.state.get("consumer_gate_file")
+    if gate_file:
+        write_control_file(str(gate_file), CONSUMER_GATE_OPEN)
 
 
 # ─── kill-worker / start-worker ──────────────────────────────────────────

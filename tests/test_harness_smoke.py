@@ -1409,3 +1409,200 @@ def test_argparse_wait_event_flags():
     )
     assert ns.wait_events is False
     assert ns.wait_event_sample_every == 0.5
+
+
+# ─── Backlog / workload-shape scenarios ─────────────────────────────
+
+from bench_harness.adapters import _docker_launch
+from bench_harness.hooks import enter_drain
+from bench_harness.pacer import FixedRatePacer, PacerConfig
+from bench_harness.phases import PhaseRuntime
+
+
+def test_phase_rate_overrides():
+    assert parse_phase_spec("w=warmup:10s").rate_override() is None
+    assert parse_phase_spec("w=warmup(rate=0):10s").rate_override() == 0.0
+    assert parse_phase_spec("d=drain:10s").rate_override(replicas=2) == 0.0
+    # 1000 jobs over 10s split across 2 replicas → 50 jobs/s per replica.
+    assert parse_phase_spec("p=preload(jobs=1000):10s").rate_override(replicas=2) == 50.0
+    with pytest.raises(ValueError, match="jobs"):
+        parse_phase_spec("p=preload:10s").rate_override()
+    with pytest.raises(ValueError, match="rate"):
+        parse_phase_spec("c=clean(rate=-1):10s").rate_override()
+
+
+def test_preload_after_drain_rejected():
+    with pytest.raises(ValueError, match="one-shot"):
+        resolve_scenario(
+            None,
+            [
+                "w=warmup:10s",
+                "p1=preload(jobs=10):10s",
+                "d=drain:10s",
+                "p2=preload(jobs=10):10s",
+            ],
+        )
+
+
+def test_drain_hook_opens_consumer_gate(tmp_path: Path):
+    gate = tmp_path / "consumer_gate.txt"
+    gate.write_text("closed")
+    enter_drain(
+        PhaseRuntime(
+            database_url="postgres://unused",
+            phase=parse_phase_spec("d=drain:10s"),
+            state={"consumer_gate_file": str(gate)},
+        )
+    )
+    assert gate.read_text() == "open"
+
+
+def test_pacer_follows_rate_file(tmp_path: Path):
+    import io
+    import threading
+    import time
+
+    rate_file = tmp_path / "rate.txt"
+    rate_file.write_text("1000")
+    sink = io.StringIO()
+    stop = threading.Event()
+    pacer = FixedRatePacer(
+        stdin=sink,
+        cfg=PacerConfig(
+            target_rate=0,
+            batch_max=50,
+            batch_ms=10,
+            rate_file=str(rate_file),
+            rate_file_poll_s=0.01,
+        ),
+        stop_event=stop,
+    )
+    pacer.start()
+    time.sleep(0.3)
+    rate_file.write_text("0")
+    time.sleep(0.1)
+    emitted_while_on = sink.getvalue().count("ENQUEUE")
+    time.sleep(0.3)
+    stop.set()
+    pacer.join(timeout=1.0)
+    assert emitted_while_on > 0
+    assert sink.getvalue().count("ENQUEUE") == emitted_while_on
+
+
+def test_workload_shape_flags_map_to_adapter_env():
+    from bench_harness.orchestrator import build_parser
+
+    ns = build_parser().parse_args(
+        [
+            "run",
+            "--scenario",
+            "large_payload",
+            "--job-payload-bytes",
+            "65536",
+            "--job-payload-kind",
+            "random",
+            "--job-work-ms",
+            "120000",
+            "--queue-count",
+            "500",
+        ]
+    )
+    assert CliConfig.from_namespace(ns).adapter_env() == {
+        "JOB_PAYLOAD_BYTES": "65536",
+        "JOB_PAYLOAD_KIND": "random",
+        "JOB_WORK_MS": "120000",
+        "BENCH_QUEUE_COUNT": "500",
+        "BENCH_DEPTH_ROTATE": "1",
+    }
+    assert CliConfig(**_config_kwargs()).adapter_env() == {}
+
+
+def test_docker_launch_maps_gate_file_and_cidfile(tmp_path: Path):
+    manifest = AdapterManifest(
+        system="pgmq",
+        db_name="pgmq_bench",
+        event_tables=[],
+        event_indexes=[],
+        extensions=[],
+    )
+    spec = _docker_launch(
+        "pgmq-bench",
+        manifest,
+        {
+            "PRODUCER_RATE_CONTROL_FILE_HOST": str(tmp_path / "producer_rate.txt"),
+            "PRODUCER_RATE_CONTROL_FILE_CONTAINER": "/control/producer_rate.txt",
+            "CONSUMER_GATE_FILE": str(tmp_path / "consumer_gate.txt"),
+            "DOCKER_CIDFILE_HOST": str(tmp_path / "cid-0"),
+        },
+    )
+    assert "CONSUMER_GATE_FILE=/control/consumer_gate.txt" in spec.argv
+    assert spec.argv[spec.argv.index("--cidfile") + 1] == str(tmp_path / "cid-0")
+    assert not any(arg.startswith("DOCKER_CIDFILE_HOST=") for arg in spec.argv)
+
+
+def _write_rows(path: Path, rows: list[list[str]]) -> None:
+    with path.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(RAW_CSV_HEADER)
+        writer.writerows(rows)
+
+
+def test_summary_backlog_drain_metrics(tmp_path: Path):
+    def row(elapsed, phase, ptype, kind, subject, metric, value, window="0"):
+        return [
+            "test", "awa", "0", str(elapsed), f"2026-05-01T00:00:{int(elapsed):02d}Z",
+            phase, ptype, kind, subject, metric, str(value), window,
+        ]
+
+    rows = [
+        row(0, "warmup", "warmup", "cluster", "", "pg_database_size_mb", 20),
+        row(10, "preload", "preload", "phase", "preload", "phase_start_elapsed_s", 10),
+        row(15, "preload", "preload", "adapter", "", "enqueue_rate", 100, "5"),
+        row(20, "preload", "preload", "adapter", "", "enqueue_rate", 100, "5"),
+        row(15, "preload", "preload", "cluster", "", "pg_wal_bytes", 0),
+        row(20, "preload", "preload", "cluster", "", "pg_wal_bytes", 100_000),
+        row(20, "preload", "preload", "cluster", "", "pg_database_size_mb", 120),
+        row(20, "preload", "preload", "cluster", "", "pg_backends_total", 7),
+        row(20, "preload", "preload", "adapter", "", "queue_depth", 1000),
+        row(21, "drain", "drain", "phase", "drain", "phase_start_elapsed_s", 21),
+    ]
+    # Drain: backlog 1000 → 0 by t=41; completions slow down as it drains.
+    for elapsed, backlog, rate in [(26, 750, 50), (31, 500, 50), (36, 250, 50), (41, 0, 25), (46, 0, 0)]:
+        rows.append(row(elapsed, "drain", "drain", "adapter", "", "queue_depth", backlog))
+        rows.append(row(elapsed, "drain", "drain", "adapter", "", "completion_rate", rate, "5"))
+    rows.append(row(46, "drain", "drain", "cluster", "", "pg_database_size_mb", 60))
+    rows.append(row(56, "settle", "idle-background", "cluster", "", "pg_database_size_mb", 25))
+    raw = tmp_path / "raw.csv"
+    _write_rows(raw, rows)
+
+    phases = resolve_scenario(
+        None,
+        [
+            "warmup=warmup(rate=0):10s",
+            "preload=preload(jobs=1000):10s",
+            "drain=drain:25s",
+            "settle=idle-background(rate=0):10s",
+        ],
+    )
+    summary = compute_summary(raw, run_id="test", scenario=None, phases=phases)
+    system = summary["systems"]["awa"]
+    preload = system["phases"]["preload"]
+    assert preload["jobs_enqueued"] == 1000.0
+    assert preload["preload_jobs_requested"] == 1000
+    assert preload["wal_bytes_per_job"] == 100.0
+    assert preload["peak_pg_backends"] == 7.0
+    assert "phase_start_elapsed_s@preload" not in preload["metrics"]
+
+    drain = system["phases"]["drain"]["drain"]
+    assert drain["backlog_at_start"] == 1000.0  # last pre-drain observation
+    assert drain["drain_time_s"] == 20.0  # phase start 21 → empty at 41
+    assert drain["jobs_drained"] == 875.0
+    assert drain["drain_throughput_deciles"] == [50.0, 50.0, 50.0]
+
+    run = system["run"]
+    assert run["jobs_enqueued_total"] == 1000.0
+    assert run["completion_excess"] == -125.0
+    assert run["database_size_mb_baseline"] == 20.0
+    assert run["database_size_mb_peak"] == 120.0
+    # Back within max(10%, 8 MB) of baseline at t=56, 35 s after drain start.
+    assert run["size_settle_s"] == 35.0
