@@ -63,6 +63,31 @@ def _queue_names() -> list[str]:
     return [f"{QUEUE_NAME}_{i}" for i in range(n)]
 
 
+def payload_padding(length: int) -> str:
+    """JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s."""
+    length = max(0, length)
+    if os.environ.get("JOB_PAYLOAD_KIND") == "random":
+        import base64
+
+        return base64.b64encode(os.urandom(length))[:length].decode()
+    return "x" * length
+
+
+async def wait_for_consumer_gate(shutdown: asyncio.Event) -> None:
+    """Return once CONSUMER_GATE_FILE reads `open` (immediately if unset)."""
+    path = os.environ.get("CONSUMER_GATE_FILE")
+    if not path:
+        return
+    while not shutdown.is_set():
+        try:
+            with open(path) as fh:
+                if fh.read().strip() == "open":
+                    return
+        except OSError:
+            pass
+        await asyncio.sleep(0.2)
+
+
 def _pgque_consumer_mode() -> str:
     """PGQUE_CONSUMER_MODE: `subconsumer` (default, per-replica
     cooperative consumer) or `shared` (legacy single-name)."""
@@ -346,7 +371,7 @@ async def scenario_long_horizon() -> None:
     completed = 0
     queue_depth = 0
     current_producer_target_rate = float(producer_rate)
-    payload_padding = "x" * max(0, payload_bytes - 64)
+    padding = payload_padding(payload_bytes - 64)
 
     shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -480,6 +505,10 @@ async def scenario_long_horizon() -> None:
                     )
                 except asyncio.TimeoutError:
                     continue
+                # Tokens still buffered when the rate drops to zero (e.g. a
+                # preload ending) are discarded, not inserted.
+                if effective_rate <= 0:
+                    continue
                 # Cap to producer_batch_max in case the pacer was
                 # configured larger than the local cap.
                 batch_count = min(batch_count, producer_batch_max)
@@ -522,7 +551,7 @@ async def scenario_long_horizon() -> None:
                         {
                             "seq": seq,
                             "created_at": _now_iso(),
-                            "padding": payload_padding,
+                            "padding": padding,
                         }
                     )
                 )
@@ -660,6 +689,7 @@ async def scenario_long_horizon() -> None:
         consumer_mode = _pgque_consumer_mode()
         subconsumer = _subconsumer_name() if consumer_mode == "subconsumer" else None
         fail_mode = _worker_fail_mode()
+        await wait_for_consumer_gate(shutdown)
         listen_conn = await aconnect()
         try:
             async with listen_conn.cursor() as cur:
@@ -806,18 +836,28 @@ async def scenario_long_horizon() -> None:
                 await asyncio.sleep(0.25)
             return
         depth_queues = _queue_names()
+        # BENCH_DEPTH_ROTATE=1 (set by the harness for --queue-count > 1):
+        # refresh one queue per tick and sum the last known values so
+        # observer load doesn't scale with the queue count.
+        rotate = os.environ.get("BENCH_DEPTH_ROTATE") == "1" and len(depth_queues) > 1
+        per_queue = [0] * len(depth_queues)
+        cursor = 0
         while not shutdown.is_set():
-            total = 0
+            if rotate:
+                cursor = (cursor + 1) % len(depth_queues)
+                polled = [cursor]
+            else:
+                polled = range(len(depth_queues))
             try:
                 async with depth_conn.cursor() as cur:
-                    for q in depth_queues:
+                    for idx in polled:
                         await cur.execute(
                             "SELECT pending_events FROM pgque.get_consumer_info(%s, %s)",
-                            (q, CONSUMER_NAME),
+                            (depth_queues[idx], CONSUMER_NAME),
                         )
                         row = await cur.fetchone()
-                        total += int(row["pending_events"]) if row else 0
-                queue_depth = total
+                        per_queue[idx] = int(row["pending_events"]) if row else 0
+                queue_depth = sum(per_queue)
             except Exception:
                 await depth_conn.reconnect()
             # Fast poll so the producer's depth-target backoff sees

@@ -77,9 +77,31 @@ defmodule ObanBench.LongHorizon do
     :ets.insert(:long_horizon_state, {:producer_target_rate, producer_rate * 1.0})
     :ets.new(:long_horizon_lat, [:public, :named_table, :duplicate_bag])
 
-    Oban.scale_queue(queue: @queue, limit: worker_count)
+    queues = queue_names()
+    per_queue_limit = max(1, div(worker_count, length(queues)))
+    Oban.scale_queue(queue: @queue, limit: per_queue_limit)
 
-    padding = String.duplicate("x", max(0, payload_bytes - 32))
+    Enum.each(tl(queues), fn name ->
+      Oban.start_queue(queue: name, limit: per_queue_limit)
+    end)
+
+    :ets.insert(:long_horizon_state, {:queues, List.to_tuple(queues)})
+
+    case System.get_env("CONSUMER_GATE_FILE") do
+      nil ->
+        :ok
+
+      gate_file ->
+        Enum.each(queues, fn name -> Oban.pause_queue(queue: name) end)
+
+        spawn(fn ->
+          wait_for_consumer_gate(gate_file)
+          IO.puts(:stderr, "[oban] consumer gate open; resuming queues")
+          Enum.each(queues, fn name -> Oban.resume_queue(queue: name) end)
+        end)
+    end
+
+    padding = payload_padding(payload_bytes - 32)
 
     _producer =
       spawn(fn ->
@@ -99,6 +121,53 @@ defmodule ObanBench.LongHorizon do
 
     # Block forever — the harness SIGTERMs the container.
     Process.sleep(:infinity)
+  end
+
+  # BENCH_QUEUE_COUNT queues; queue 0 keeps the legacy name.
+  defp queue_names do
+    count = max(1, env_int("BENCH_QUEUE_COUNT", 1))
+    ["long_horizon_bench" | Enum.map(1..(count - 1)//1, &"long_horizon_bench_#{&1}")]
+  end
+
+  # JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s.
+  defp payload_padding(length) do
+    length = max(0, length)
+
+    if System.get_env("JOB_PAYLOAD_KIND") == "random" do
+      length |> :crypto.strong_rand_bytes() |> Base.encode64() |> binary_part(0, length)
+    else
+      String.duplicate("x", length)
+    end
+  end
+
+  defp wait_for_consumer_gate(path) do
+    case File.read(path) do
+      {:ok, contents} ->
+        if String.trim(contents) == "open" do
+          :ok
+        else
+          Process.sleep(200)
+          wait_for_consumer_gate(path)
+        end
+
+      _ ->
+        Process.sleep(200)
+        wait_for_consumer_gate(path)
+    end
+  end
+
+  # Jobs are spread over the queues by sequence number; with one queue the
+  # worker's default queue is used.
+  defp new_job(seq, padding) do
+    case :ets.lookup(:long_horizon_state, :queues) do
+      [{:queues, queues}] when tuple_size(queues) > 1 ->
+        LongHorizonWorker.new(%{seq: seq, padding: padding},
+          queue: elem(queues, rem(seq, tuple_size(queues)))
+        )
+
+      _ ->
+        LongHorizonWorker.new(%{seq: seq, padding: padding})
+    end
   end
 
   defp producer_loop("fixed", rate, _target_depth, _padding, _control_file, _batch_max, _batch_ms)
@@ -250,7 +319,7 @@ defmodule ObanBench.LongHorizon do
   # batch_max > 1 → Oban.insert_all/2 (documented bulk path).
   defp insert_batch(seq, 1, padding, batch_max) when batch_max <= 1 do
     try do
-      case Oban.insert(LongHorizonWorker.new(%{seq: seq, padding: padding})) do
+      case Oban.insert(new_job(seq, padding)) do
         {:ok, _} -> :ok
         _ -> :error
       end
@@ -265,7 +334,7 @@ defmodule ObanBench.LongHorizon do
   defp insert_batch(seq, batch_count, padding, _batch_max) do
     changesets =
       for i <- 0..(batch_count - 1) do
-        LongHorizonWorker.new(%{seq: seq + i, padding: padding})
+        new_job(seq + i, padding)
       end
 
     try do
@@ -297,12 +366,7 @@ defmodule ObanBench.LongHorizon do
 
       depth =
         try do
-          case Repo.one(
-                 from(j in "oban_jobs",
-                   where: j.state == "available" and j.queue == "long_horizon_bench",
-                   select: count(j.id)
-                 )
-               ) do
+          case Repo.one(depth_query()) do
             n when is_integer(n) -> n
             _ -> 0
           end
@@ -318,6 +382,24 @@ defmodule ObanBench.LongHorizon do
           :ets.insert(:long_horizon_state, {:queue_depth, value})
           depth_loop()
       end
+    end
+  end
+
+  defp depth_query do
+    case :ets.lookup(:long_horizon_state, :queues) do
+      [{:queues, queues}] when tuple_size(queues) > 1 ->
+        names = Tuple.to_list(queues)
+
+        from(j in "oban_jobs",
+          where: j.state == "available" and j.queue in ^names,
+          select: count(j.id)
+        )
+
+      _ ->
+        from(j in "oban_jobs",
+          where: j.state == "available" and j.queue == "long_horizon_bench",
+          select: count(j.id)
+        )
     end
   end
 

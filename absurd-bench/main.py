@@ -53,6 +53,37 @@ def env_str(key: str, default: str) -> str:
     return value if value is not None else default
 
 
+def queue_names() -> list[str]:
+    """BENCH_QUEUE_COUNT queues; queue 0 keeps the legacy name."""
+    count = max(1, env_int("BENCH_QUEUE_COUNT", 1))
+    return [QUEUE_NAME] + [f"{QUEUE_NAME}_{i}" for i in range(1, count)]
+
+
+def payload_padding(length: int) -> str:
+    """JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s."""
+    length = max(0, length)
+    if os.environ.get("JOB_PAYLOAD_KIND") == "random":
+        import base64
+
+        return base64.b64encode(os.urandom(length))[:length].decode()
+    return "x" * length
+
+
+async def wait_for_consumer_gate(shutdown: asyncio.Event) -> None:
+    """Return once CONSUMER_GATE_FILE reads `open` (immediately if unset)."""
+    path = os.environ.get("CONSUMER_GATE_FILE")
+    if not path:
+        return
+    while not shutdown.is_set():
+        try:
+            with open(path) as fh:
+                if fh.read().strip() == "open":
+                    return
+        except OSError:
+            pass
+        await asyncio.sleep(0.2)
+
+
 def read_producer_rate(default: int) -> int:
     control_file = os.environ.get("PRODUCER_RATE_CONTROL_FILE")
     if not control_file:
@@ -208,13 +239,24 @@ async def recreate_queue(queue_name: str) -> None:
         await app.close()
 
 
-async def count_by_state(conn: AsyncConnection, queue_name: str) -> dict[str, int]:
+async def count_by_state(conn: AsyncConnection, queue_names: list[str]) -> dict[str, int]:
+    # One statement across every queue table so observer load doesn't
+    # scale with BENCH_QUEUE_COUNT.
+    union = sql.SQL(" UNION ALL ").join(
+        sql.SQL("SELECT state FROM absurd.{}").format(sql.Identifier(f"t_{q}"))
+        for q in queue_names
+    )
     async with conn.cursor() as cur:
         await cur.execute(
             sql.SQL(
                 "SELECT state::text AS state, count(*)::bigint AS count "
+                "FROM ({}) AS t GROUP BY state"
+            ).format(union)
+            if len(queue_names) > 1
+            else sql.SQL(
+                "SELECT state::text AS state, count(*)::bigint AS count "
                 "FROM absurd.{} GROUP BY state"
-            ).format(sql.Identifier(f"t_{queue_name}"))
+            ).format(sql.Identifier(f"t_{queue_names[0]}"))
         )
         rows = await cur.fetchall()
     return {row["state"]: int(row["count"]) for row in rows}
@@ -240,11 +282,13 @@ async def scenario_long_horizon() -> None:
     producer_batch_ms = env_int("PRODUCER_BATCH_MS", 25)
     producer_batch_max = env_int("PRODUCER_BATCH_MAX", 128)
     latency_window_s = env_int("LATENCY_WINDOW_MS", 30_000) / 1000.0
-    payload_padding = "x" * max(0, payload_bytes - 96)
+    padding = payload_padding(payload_bytes - 96)
+    queues = queue_names()
 
     ensure_schema()
     schema_version = await installed_schema_version()
-    await recreate_queue(QUEUE_NAME)
+    for queue in queues:
+        await recreate_queue(queue)
 
     db_name = database_url().rsplit("/", 1)[-1]
     emit(
@@ -322,14 +366,18 @@ async def scenario_long_horizon() -> None:
 
     producer_conn = ReconnectingConn(await connect())
     depth_conn = ReconnectingConn(await connect())
-    worker_app = build_app(
-        QUEUE_NAME,
-        loop=loop,
-        subscriber_latencies_ms=subscriber_latencies_ms,
-        end_to_end_latencies_ms=end_to_end_latencies_ms,
-        completed_counter=completed_counter,
-        work_ms=work_ms,
-    )
+    # Absurd workers are per queue: one app (and connection) per queue.
+    worker_apps = [
+        build_app(
+            queue,
+            loop=loop,
+            subscriber_latencies_ms=subscriber_latencies_ms,
+            end_to_end_latencies_ms=end_to_end_latencies_ms,
+            completed_counter=completed_counter,
+            work_ms=work_ms,
+        )
+        for queue in queues
+    ]
 
     async def producer() -> None:
         nonlocal enqueued, current_producer_target_rate, current_queue_depth
@@ -338,6 +386,7 @@ async def scenario_long_horizon() -> None:
                 await asyncio.sleep(0.25)
             return
         seq = 0
+        batch_index = 0
         next_t = loop.time()
         while not shutdown.is_set():
             target_rate = read_producer_rate(producer_rate)
@@ -350,6 +399,7 @@ async def scenario_long_horizon() -> None:
                     continue
             else:
                 if target_rate <= 0:
+                    next_t = loop.time()
                     await asyncio.sleep(producer_batch_ms / 1000.0)
                     continue
                 credit = max(0.0, (loop.time() - next_t) * target_rate + 1.0)
@@ -363,13 +413,16 @@ async def scenario_long_horizon() -> None:
                     {
                         "seq": seq,
                         "enqueued_at_ms": enqueued_at_ms,
-                        "payload_padding": payload_padding,
+                        "payload_padding": padding,
                     }
                 )
 
             started = monotonic()
             try:
-                await enqueue_batch(producer_conn.conn, QUEUE_NAME, batch)
+                await enqueue_batch(
+                    producer_conn.conn, queues[batch_index % len(queues)], batch
+                )
+                batch_index += 1
             except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
                 await producer_conn.reconnect()
                 continue
@@ -395,7 +448,7 @@ async def scenario_long_horizon() -> None:
             return
         while not shutdown.is_set():
             try:
-                counts = await count_by_state(depth_conn.conn, QUEUE_NAME)
+                counts = await count_by_state(depth_conn.conn, queues)
             except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
                 await depth_conn.reconnect()
                 continue
@@ -492,27 +545,35 @@ async def scenario_long_horizon() -> None:
     # §1, §3). 10s is short enough to clear within a chaos-recovery window
     # and long enough to absorb a worker hiccup.
     claim_timeout_secs = env_int("CLAIM_TIMEOUT_SECS", 10)
-    worker_task = asyncio.create_task(
-        worker_app.start_worker(
-            concurrency=worker_count,
+    per_queue_concurrency = max(1, worker_count // len(queues))
+
+    async def run_worker(app: AsyncAbsurd) -> None:
+        await wait_for_consumer_gate(shutdown)
+        if shutdown.is_set():
+            return
+        await app.start_worker(
+            concurrency=per_queue_concurrency,
             poll_interval=POLL_INTERVAL_SECS,
             claim_timeout=claim_timeout_secs,
         )
-    )
+
+    worker_tasks = [asyncio.create_task(run_worker(app)) for app in worker_apps]
     tasks = [
         asyncio.create_task(producer()),
         asyncio.create_task(depth_task()),
         asyncio.create_task(sampler()),
-        worker_task,
+        *worker_tasks,
     ]
 
     await shutdown.wait()
-    worker_app.stop_worker()
+    for app in worker_apps:
+        app.stop_worker()
     for task in tasks:
-        if task is not worker_task:
+        if task not in worker_tasks:
             task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
-    await worker_app.close()
+    for app in worker_apps:
+        await app.close()
     await producer_conn.close()
     await depth_conn.close()
 

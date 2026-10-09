@@ -42,6 +42,31 @@ def env_str(key: str, default: str) -> str:
     return value if value is not None else default
 
 
+def payload_padding(length: int) -> str:
+    """JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s."""
+    length = max(0, length)
+    if os.environ.get("JOB_PAYLOAD_KIND") == "random":
+        import base64
+
+        return base64.b64encode(os.urandom(length))[:length].decode()
+    return "x" * length
+
+
+async def wait_for_consumer_gate(shutdown: asyncio.Event) -> None:
+    """Return once CONSUMER_GATE_FILE reads `open` (immediately if unset)."""
+    path = os.environ.get("CONSUMER_GATE_FILE")
+    if not path:
+        return
+    while not shutdown.is_set():
+        try:
+            with open(path) as fh:
+                if fh.read().strip() == "open":
+                    return
+        except OSError:
+            pass
+        await asyncio.sleep(0.2)
+
+
 def read_producer_rate(default: int) -> int:
     control_file = os.environ.get("PRODUCER_RATE_CONTROL_FILE")
     if not control_file:
@@ -286,6 +311,18 @@ async def scenario_long_horizon() -> None:
     producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
     queue = "procrastinate_longhorizon_bench"
+    # BENCH_QUEUE_COUNT queues (queue 0 keeps the legacy name). One worker
+    # serves all of them, procrastinate's native multi-queue model.
+    queues = [queue] + [
+        f"{queue}_{i}" for i in range(1, max(1, env_int("BENCH_QUEUE_COUNT", 1)))
+    ]
+    # Jobs carry JOB_PAYLOAD_BYTES of padding only with the opt-in random
+    # payload kind; otherwise they hold just seq and timestamp.
+    padding = (
+        payload_padding(env_int("JOB_PAYLOAD_BYTES", 256) - 96)
+        if os.environ.get("JOB_PAYLOAD_KIND") == "random"
+        else None
+    )
     # Parse the URL path so query params like ?sslmode=disable don't leak
     # into the descriptor's reported db_name.
     db_name = (urlparse(database_url()).path or "/").lstrip("/") or "procrastinate_bench"
@@ -340,7 +377,7 @@ async def scenario_long_horizon() -> None:
 
     async with lh_app.open_async():
         worker = lh_app._worker(
-            queues=[queue],
+            queues=queues,
             concurrency=worker_count,
             wait=True,
             fetch_job_polling_interval=0.05,
@@ -351,9 +388,19 @@ async def scenario_long_horizon() -> None:
             update_heartbeat_interval=5,
             stalled_worker_timeout=15,
         )
-        worker_task = asyncio.create_task(worker.run())
-
         shutdown = asyncio.Event()
+
+        worker_started = False
+
+        async def run_worker() -> None:
+            nonlocal worker_started
+            await wait_for_consumer_gate(shutdown)
+            if not shutdown.is_set():
+                worker_started = True
+                await worker.run()
+
+        worker_task = asyncio.create_task(run_worker())
+
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -364,7 +411,9 @@ async def scenario_long_horizon() -> None:
         async def producer() -> None:
             nonlocal enqueued, current_producer_target_rate
             seq = 0
-            deferrer = long_horizon_task.configure(queue=queue)
+            deferrers = [long_horizon_task.configure(queue=q) for q in queues]
+            batch_index = 0
+            extra = {} if padding is None else {"padding": padding}
             next_t = loop.time()
             rate_credit = 0.0
             last_credit_tick = loop.time()
@@ -404,11 +453,14 @@ async def scenario_long_horizon() -> None:
                             continue
                         batch_count = min(producer_batch_max, int(rate_credit))
                         rate_credit -= batch_count
+                deferrer = deferrers[batch_index % len(deferrers)]
+                batch_index += 1
                 try:
                     if batch_count == 1:
                         await deferrer.defer_async(
                             seq=seq,
                             created_at_iso=_now_iso(),
+                            **extra,
                         )
                     else:
                         # Documented bulk path: `Task.batch_defer_async`
@@ -416,7 +468,7 @@ async def scenario_long_horizon() -> None:
                         # multi-row INSERT via JobManager.batch_defer_jobs_async.
                         # Docs: https://procrastinate.readthedocs.io/en/stable/howto/advanced/batch.html
                         kwargs_list = [
-                            {"seq": seq + i, "created_at_iso": _now_iso()}
+                            {"seq": seq + i, "created_at_iso": _now_iso(), **extra}
                             for i in range(batch_count)
                         ]
                         await deferrer.batch_defer_async(*kwargs_list)
@@ -444,8 +496,12 @@ async def scenario_long_horizon() -> None:
                             await cur.execute(
                                 "SELECT count(*)::bigint AS cnt "
                                 "FROM procrastinate_jobs "
-                                "WHERE queue_name = %s AND status = 'todo'",
-                                (queue,),
+                                + (
+                                    "WHERE queue_name = ANY(%s) AND status = 'todo'"
+                                    if len(queues) > 1
+                                    else "WHERE queue_name = %s AND status = 'todo'"
+                                ),
+                                (queues if len(queues) > 1 else queue,),
                             )
                             row = await cur.fetchone()
                             queue_depth = int(row["cnt"]) if row else 0
@@ -511,7 +567,8 @@ async def scenario_long_horizon() -> None:
             shutdown.set()
             for t in tasks:
                 t.cancel()
-            worker.stop()
+            if worker_started:
+                worker.stop()
             try:
                 await asyncio.wait_for(
                     asyncio.gather(worker_task, *tasks, return_exceptions=True),

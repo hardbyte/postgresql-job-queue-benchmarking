@@ -284,6 +284,41 @@ fn read_producer_rate(default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// `JOB_PAYLOAD_KIND=random` swaps the compressible `x` filler for
+/// base64-alphabet noise so TOAST compression can't shrink large payloads.
+fn payload_padding(len: usize) -> String {
+    if std::env::var("JOB_PAYLOAD_KIND").as_deref() != Ok("random") {
+        return "x".repeat(len);
+    }
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15 ^ now_epoch_ms() as u64;
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ALPHABET[(state >> 58) as usize] as char
+        })
+        .collect()
+}
+
+/// Blocks until `CONSUMER_GATE_FILE` reads `open` (returns immediately when
+/// the variable is unset). Consumers start only after this resolves.
+async fn wait_for_consumer_gate(shutdown: &AtomicBool) {
+    let Ok(path) = std::env::var("CONSUMER_GATE_FILE") else {
+        return;
+    };
+    while !shutdown.load(Ordering::Relaxed) {
+        if std::fs::read_to_string(&path)
+            .map(|raw| raw.trim() == "open")
+            .unwrap_or(false)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 fn now_iso_ms() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -714,9 +749,21 @@ pub async fn run() {
             .build()
             .expect("Failed to build client"),
     };
-    client.start().await.expect("Failed to start client");
-
+    let client = Arc::new(client);
     let shutdown = Arc::new(AtomicBool::new(false));
+    if std::env::var("CONSUMER_GATE_FILE").is_ok() {
+        let gated_client = Arc::clone(&client);
+        let gate_shutdown = Arc::clone(&shutdown);
+        tokio::spawn(async move {
+            wait_for_consumer_gate(&gate_shutdown).await;
+            if !gate_shutdown.load(Ordering::Relaxed) {
+                eprintln!("[awa] consumer gate open; starting workers");
+                gated_client.start().await.expect("Failed to start client");
+            }
+        });
+    } else {
+        client.start().await.expect("Failed to start client");
+    }
 
     // ── Producer ────────────────────────────────────────────────────
     let producer_pool = pool.clone();
@@ -727,7 +774,7 @@ pub async fn run() {
     let producer_target_rate_metric = Arc::clone(&producer_target_rate);
     let producer_call_latencies_window = Arc::clone(&producer_call_latencies);
     let producer_latencies_window = Arc::clone(&producer_latencies);
-    let padding = "x".repeat(payload_bytes.saturating_sub(32) as usize);
+    let padding = payload_padding(payload_bytes.saturating_sub(32) as usize);
     let producer_priority_pattern = priority_pattern.clone();
     let producer_queue_names = queue_names.clone();
     // Build the QueueStorage handle once outside the producer loop;
@@ -820,6 +867,11 @@ pub async fn run() {
                     }
                     Err(_) => continue, // timeout — re-check shutdown
                 };
+                // Tokens still buffered in the pipe when the rate drops to
+                // zero (e.g. a preload ending) are discarded, not inserted.
+                if current_rate == 0 {
+                    continue;
+                }
                 n.min(producer_batch_max)
             } else {
                 let current_rate = read_producer_rate(producer_rate);
@@ -935,6 +987,15 @@ pub async fn run() {
                 return;
             }
             let depth_queue_names = queue_names.clone();
+            // BENCH_DEPTH_ROTATE=1 (set by the harness for --queue-count > 1):
+            // refresh one queue per tick and report the sum of the last
+            // known per-queue values, so observer load stays constant
+            // instead of scaling with the queue count.
+            let rotate_depth = std::env::var("BENCH_DEPTH_ROTATE").as_deref() == Ok("1")
+                && depth_queue_names.len() > 1;
+            let mut per_queue_depths: Vec<(u64, u64, u64, u64)> =
+                vec![(0, 0, 0, 0); depth_queue_names.len()];
+            let mut rotate_cursor: usize = 0;
             // Cache the QueueStorage handle outside the loop; it carries
             // only schema strings and config, but constructing one per
             // poll iteration was unnecessary churn at the previous 200 ms
@@ -955,7 +1016,15 @@ pub async fn run() {
                         let depth_store = cached_depth_store
                             .as_ref()
                             .expect("queue storage cached_depth_store");
-                        for q in &depth_queue_names {
+                        let polled: Vec<usize> = if rotate_depth {
+                            rotate_cursor = (rotate_cursor + 1) % depth_queue_names.len();
+                            vec![rotate_cursor]
+                        } else {
+                            (0..depth_queue_names.len()).collect()
+                        };
+                        for &queue_index in &polled {
+                            let q = &depth_queue_names[queue_index];
+                            let mut queue_depths = (0_u64, 0_u64, 0_u64, 0_u64);
                             // queue_counts_fast: index-only depth probe.
                             // queue_counts (exact) scans done_entries +
                             // lease_claims by queue, both unindexed on
@@ -963,8 +1032,8 @@ pub async fn run() {
                             // load and competes with the worker hot path.
                             match depth_store.queue_counts_fast(&depth_pool, q.as_str()).await {
                                 Ok(counts) => {
-                                    total_available += counts.available as u64;
-                                    total_running += counts.running as u64;
+                                    queue_depths.0 = counts.available as u64;
+                                    queue_depths.1 = counts.running as u64;
                                     match sqlx::query_as::<_, (i64, i64)>(sqlx::AssertSqlSafe(format!(
                                         r#"
                                         SELECT
@@ -980,8 +1049,8 @@ pub async fn run() {
                                     .await
                                     {
                                         Ok((retryable, scheduled)) => {
-                                            total_retryable += retryable as u64;
-                                            total_scheduled += scheduled as u64;
+                                            queue_depths.2 = retryable as u64;
+                                            queue_depths.3 = scheduled as u64;
                                         }
                                         Err(err) => {
                                             eprintln!("[awa] deferred depth poll failed for {q}: {err}");
@@ -992,6 +1061,13 @@ pub async fn run() {
                                     eprintln!("[awa] queue depth poll failed for {q}: {err}");
                                 }
                             }
+                            per_queue_depths[queue_index] = queue_depths;
+                        }
+                        for depths in &per_queue_depths {
+                            total_available += depths.0;
+                            total_running += depths.1;
+                            total_retryable += depths.2;
+                            total_scheduled += depths.3;
                         }
                         queue_depth.store(total_available, Ordering::Relaxed);
                         running_depth.store(total_running, Ordering::Relaxed);

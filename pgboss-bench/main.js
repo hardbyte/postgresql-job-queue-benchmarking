@@ -57,6 +57,43 @@ function emit(record) {
   process.stdout.write(`${JSON.stringify(record)}\n`);
 }
 
+// BENCH_QUEUE_COUNT queues; queue 0 keeps the legacy name.
+function queueNames() {
+  const count = Math.max(1, envInt("BENCH_QUEUE_COUNT", 1));
+  const names = [QUEUE_NAME];
+  for (let i = 1; i < count; i += 1) {
+    names.push(`${QUEUE_NAME}_${i}`);
+  }
+  return names;
+}
+
+// JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s.
+function payloadPadding(length) {
+  const n = Math.max(0, length);
+  if (process.env.JOB_PAYLOAD_KIND === "random") {
+    return require("node:crypto").randomBytes(n).toString("base64").slice(0, n);
+  }
+  return "x".repeat(n);
+}
+
+// Resolves once CONSUMER_GATE_FILE reads `open` (immediately if unset).
+async function waitForConsumerGate(isShuttingDown) {
+  const path = process.env.CONSUMER_GATE_FILE;
+  if (!path) {
+    return;
+  }
+  while (!isShuttingDown()) {
+    try {
+      if (require("node:fs").readFileSync(path, "utf8").trim() === "open") {
+        return;
+      }
+    } catch {
+      // gate file not written yet
+    }
+    await sleep(200);
+  }
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -128,7 +165,16 @@ async function discoverQueueTable(boss) {
   return queueInfo && queueInfo.table ? `pgboss.${queueInfo.table}` : null;
 }
 
-async function countQueuedJobs(boss, queueTable) {
+async function countQueuedJobs(boss, queueTable, queues = [QUEUE_NAME]) {
+  if (queues.length > 1) {
+    // One statement over the partitioned parent so observer load doesn't
+    // scale with BENCH_QUEUE_COUNT.
+    const { rows } = await boss.getDb().executeSql(
+      `SELECT count(*)::int AS queued FROM pgboss.job WHERE name = ANY($1) AND state < 'active'`,
+      [queues]
+    );
+    return rows[0].queued;
+  }
   const { rows } = await boss.getDb().executeSql(
     `SELECT count(*)::int AS queued FROM ${queueTable} WHERE name = $1 AND state < 'active'`,
     [QUEUE_NAME]
@@ -165,10 +211,13 @@ async function scenarioLongHorizon() {
 
   await boss.start();
 
-  if (!(await boss.getQueue(QUEUE_NAME))) {
-    await boss.createQueue(QUEUE_NAME, { partition: true });
+  const queues = queueNames();
+  for (const name of queues) {
+    if (!(await boss.getQueue(name))) {
+      await boss.createQueue(name, { partition: true });
+    }
+    await boss.deleteAllJobs(name);
   }
-  await boss.deleteAllJobs(QUEUE_NAME);
 
   const schemaVersion = await boss.schemaVersion();
   const queueTable = await discoverQueueTable(boss);
@@ -185,7 +234,7 @@ async function scenarioLongHorizon() {
     started_at: nowIso(),
   });
 
-  const payloadPadding = "x".repeat(Math.max(0, payloadBytes - 96));
+  const padding = payloadPadding(payloadBytes - 96);
   const producerLatencies = new TimedWindow();
   const subscriberLatencies = new TimedWindow();
   const endToEndLatencies = new TimedWindow();
@@ -211,13 +260,7 @@ async function scenarioLongHorizon() {
   process.on("SIGINT", beginShutdown);
   process.on("SIGTERM", beginShutdown);
 
-  const workId = await boss.work(
-    QUEUE_NAME,
-    {
-      pollingIntervalSeconds: 0.5,
-      localConcurrency: workerCount,
-      batchSize: subscriberBatchSize,
-    },
+  const handleJobs = (
     async (jobs) => {
       const startedAtMs = Date.now();
       for (const job of jobs) {
@@ -240,6 +283,33 @@ async function scenarioLongHorizon() {
     }
   );
 
+  // pg-boss workers are per queue; worker concurrency is split across them.
+  const perQueueConcurrency = Math.max(1, Math.floor(workerCount / queues.length));
+  const workIds = new Map();
+  const startWorkers = (async () => {
+    await waitForConsumerGate(() => shuttingDown);
+    for (const name of queues) {
+      if (shuttingDown) {
+        return;
+      }
+      workIds.set(
+        name,
+        await boss.work(
+          name,
+          {
+            pollingIntervalSeconds: 0.5,
+            localConcurrency: perQueueConcurrency,
+            batchSize: subscriberBatchSize,
+          },
+          handleJobs
+        )
+      );
+    }
+  })();
+  if (!process.env.CONSUMER_GATE_FILE) {
+    await startWorkers;
+  }
+
   // Catch connection-loss errors from any boss.* call and let the
   // task loop continue. Without this, a single FATAL 57P0x from
   // chaos_postgres_restart / chaos_pg_backend_kill crashed the whole
@@ -257,6 +327,7 @@ async function scenarioLongHorizon() {
 
   const producerTask = (async () => {
     let nextAt = nowMonoMs();
+    let batchIndex = 0;
     while (!shuttingDown) {
       try {
         const targetRate = readProducerRate(producerRate);
@@ -264,13 +335,18 @@ async function scenarioLongHorizon() {
 
         let batchCount = 0;
         if (producerMode === "depth-target") {
-          queueDepth = await countQueuedJobs(boss, queueTable);
+          queueDepth = await countQueuedJobs(boss, queueTable, queues);
           batchCount = Math.max(0, Math.min(producerBatchMax, targetDepth - queueDepth));
           if (batchCount === 0) {
             await sleep(producerBatchMs);
             continue;
           }
         } else {
+          if (targetRate <= 0) {
+            nextAt = nowMonoMs();
+            await sleep(100);
+            continue;
+          }
           const now = nowMonoMs();
           const credit = Math.max(0, ((now - nextAt) * targetRate) / 1000 + 1);
           batchCount = Math.max(1, Math.min(producerBatchMax, Math.floor(credit)));
@@ -283,13 +359,14 @@ async function scenarioLongHorizon() {
             data: {
               seq,
               enqueued_at_ms: Date.now(),
-              payload_padding: payloadPadding,
+              payload_padding: padding,
             },
           });
         }
 
         const started = nowMonoMs();
-        await boss.insert(QUEUE_NAME, jobs);
+        await boss.insert(queues[batchIndex % queues.length], jobs);
+        batchIndex += 1;
         const elapsed = nowMonoMs() - started;
         const perJobLatency = elapsed / Math.max(jobs.length, 1);
         const sampleTs = nowMonoMs();
@@ -328,7 +405,7 @@ async function scenarioLongHorizon() {
     }
     while (!shuttingDown) {
       try {
-        queueDepth = await countQueuedJobs(boss, queueTable);
+        queueDepth = await countQueuedJobs(boss, queueTable, queues);
       } catch (err) {
         if (isConnectionLoss(err)) {
           await sleep(200);
@@ -405,7 +482,10 @@ async function scenarioLongHorizon() {
   })();
 
   await shutdownPromise;
-  await boss.offWork(QUEUE_NAME, { id: workId, wait: true }).catch(() => {});
+  await startWorkers.catch(() => {});
+  for (const [name, id] of workIds) {
+    await boss.offWork(name, { id, wait: true }).catch(() => {});
+  }
   await Promise.allSettled([producerTask, depthTask, samplerTask]);
   await boss.stop({ graceful: true }).catch(() => {});
 }

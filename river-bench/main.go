@@ -6,6 +6,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -106,6 +108,47 @@ func readProducerRate(def int) int {
 		return 0
 	}
 	return int(value)
+}
+
+// queueNames returns BENCH_QUEUE_COUNT queue names; queue 0 keeps the
+// legacy default queue.
+func queueNames() []string {
+	count := envInt("BENCH_QUEUE_COUNT", 1)
+	names := []string{river.QueueDefault}
+	for i := 1; i < count; i++ {
+		names = append(names, fmt.Sprintf("long_horizon_bench_%d", i))
+	}
+	return names
+}
+
+// payloadPadding returns JOB_PAYLOAD_KIND=random base64 noise (so TOAST
+// compression can't shrink it), otherwise the legacy `x` filler.
+func payloadPadding(length int) string {
+	length = maxInt(0, length)
+	if os.Getenv("JOB_PAYLOAD_KIND") != "random" {
+		return strings.Repeat("x", length)
+	}
+	raw := make([]byte, length)
+	if _, err := rand.Read(raw); err != nil {
+		log.Fatalf("payload padding: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(raw)[:length]
+}
+
+// waitForConsumerGate blocks until CONSUMER_GATE_FILE reads "open" or
+// shutdown closes. Returns false on shutdown.
+func waitForConsumerGate(shutdown <-chan struct{}) bool {
+	path := os.Getenv("CONSUMER_GATE_FILE")
+	for {
+		if buf, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(buf)) == "open" {
+			return true
+		}
+		select {
+		case <-shutdown:
+			return false
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
 
 func mustPool(ctx context.Context) *pgxpool.Pool {
@@ -582,10 +625,15 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &LongHorizonWorker{state: state})
 
+	queues := queueNames()
+	perQueueWorkers := maxInt(1, workerCount/len(queues))
+	queueConfigs := make(map[string]river.QueueConfig, len(queues))
+	for _, name := range queues {
+		queueConfigs[name] = river.QueueConfig{MaxWorkers: perQueueWorkers}
+	}
+
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
-		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: workerCount},
-		},
+		Queues:               queueConfigs,
 		Workers:              workers,
 		JobTimeout:           rescueAfter(30),
 		FetchCooldown:        50 * time.Millisecond,
@@ -595,15 +643,35 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	if err != nil {
 		log.Fatalf("long_horizon: failed to create client: %v", err)
 	}
-	if err := client.Start(ctx); err != nil {
-		log.Fatalf("long_horizon: failed to start client: %v", err)
+	shutdown := make(chan struct{})
+	if os.Getenv("CONSUMER_GATE_FILE") == "" {
+		if err := client.Start(ctx); err != nil {
+			log.Fatalf("long_horizon: failed to start client: %v", err)
+		}
+	} else {
+		go func() {
+			if !waitForConsumerGate(shutdown) {
+				return
+			}
+			fmt.Fprintln(os.Stderr, "[river] consumer gate open; starting workers")
+			if err := client.Start(ctx); err != nil {
+				log.Fatalf("long_horizon: failed to start client: %v", err)
+			}
+		}()
 	}
 
-	shutdown := make(chan struct{})
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
-	padding := strings.Repeat("x", maxInt(0, payloadBytes-32))
+	padding := payloadPadding(payloadBytes - 32)
+	// Spread jobs across queues per job; nil opts keeps the single-queue
+	// insert identical to the legacy path.
+	insertOptsFor := func(seq int64) *river.InsertOpts {
+		if len(queues) == 1 {
+			return nil
+		}
+		return &river.InsertOpts{Queue: queues[seq%int64(len(queues))]}
+	}
 
 	// Producer
 	var producerWG sync.WaitGroup
@@ -669,7 +737,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 			}
 
 			if batchCount == 1 {
-				_, err := client.Insert(ctx, LongHorizonArgs{Seq: seq, Padding: padding}, nil)
+				_, err := client.Insert(ctx, LongHorizonArgs{Seq: seq, Padding: padding}, insertOptsFor(seq))
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "[river] producer insert failed: %v\n", err)
 					continue
@@ -682,7 +750,8 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 				params := make([]river.InsertManyParams, 0, batchCount)
 				for i := 0; i < batchCount; i++ {
 					params = append(params, river.InsertManyParams{
-						Args: LongHorizonArgs{Seq: seq + int64(i), Padding: padding},
+						Args:       LongHorizonArgs{Seq: seq + int64(i), Padding: padding},
+						InsertOpts: insertOptsFor(seq + int64(i)),
 					})
 				}
 				_, err := client.InsertManyFast(ctx, params)
