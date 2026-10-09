@@ -16,7 +16,7 @@ import re
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import psycopg
 
@@ -29,6 +29,9 @@ class PollTargets:
 
     event_tables: list[str]  # schema.table
     event_indexes: list[str]  # schema.indexname
+    # {state: count SQL} from adapter.json -> state_queries; empty unless the
+    # run's phases need DB-side job-state counts.
+    state_queries: dict[str, str] = field(default_factory=dict)
 
 
 def _next_aligned_tick(now: float, period_s: int) -> float:
@@ -709,6 +712,17 @@ class MetricsDaemon(threading.Thread):
                     subject="",
                     metric="pg_db_tup_deleted_total",
                     value=float(db_tup_deleted),
+                )
+
+            for state, state_sql in self.targets.state_queries.items():
+                row = self._tick_query(conn, cur, state_sql)
+                if row is None or row[0] is None:
+                    continue
+                self._emit(
+                    subject_kind="job_state",
+                    subject=state,
+                    metric="job_state_count",
+                    value=float(row[0]),
                 )
 
             rows = self._tick_query(conn, cur, _ACTIVE_XACT_SQL, fetchall=True) or []

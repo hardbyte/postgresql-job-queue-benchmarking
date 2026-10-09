@@ -32,7 +32,30 @@ RATE_METRICS = {
     "completed_original_priority_1_rate",
     "completed_original_priority_4_rate",
     "aged_completion_rate",
+    "scheduled_completion_rate",
+    "injected_failure_rate",
+    "retried_completion_rate",
+    "poison_exhausted_rate",
 }
+
+# Cumulative per-replica gauges for the scheduled-herd workload; the
+# summary reads the last value each replica reported in a phase.
+SCHEDULE_GAUGE_METRICS = (
+    "schedule_lateness_p50_ms",
+    "schedule_lateness_p95_ms",
+    "schedule_lateness_p99_ms",
+    "schedule_lateness_max_ms",
+    "schedule_started_total",
+    "schedule_enqueued_total",
+    "schedule_early_total",
+    "schedule_preload_s",
+)
+
+FAILURE_RATE_METRICS = (
+    "injected_failure_rate",
+    "retried_completion_rate",
+    "poison_exhausted_rate",
+)
 
 LATENCY_METRICS = {
     "producer_p50_ms",
@@ -482,8 +505,25 @@ def compute_summary(
             )
             target.update(agg)
 
+    _attach_retry_storm_recovery(rows, phases=ordered_phases, out_systems=out_systems)
+
     for system, system_block in out_systems.items():
         for phase_label, phase_block in system_block["phases"].items():
+            schedule = _schedule_summary(rows, system=system, phase_label=phase_label)
+            if schedule is not None:
+                phase_block["schedule"] = schedule
+            failure = _failure_summary(rows, system=system, phase_label=phase_label)
+            if failure is not None:
+                phase_block["failure_injection"] = failure
+            phase_block["peak_table_size_mb"] = _peak(
+                _phase_summed_values(
+                    rows,
+                    system=system,
+                    phase_label=phase_label,
+                    metric="total_relation_size_mb",
+                    subject_kind="table",
+                )
+            )
             dead_tup = _phase_summed_values(
                 rows,
                 system=system,
@@ -615,6 +655,264 @@ def compute_summary(
         ],
         "systems": out_systems,
     }
+
+
+def _last_adapter_values(
+    rows: list[dict], *, system: str, phase_label: str, metric: str
+) -> dict[str, float]:
+    """Last value each replica reported for ``metric`` within the phase."""
+    latest: dict[str, tuple[float, float]] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row.get("subject_kind") != "adapter"
+        ):
+            continue
+        try:
+            elapsed_s = float(row["elapsed_s"])
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+        instance_id = str(row.get("instance_id") or "0")
+        if instance_id not in latest or elapsed_s >= latest[instance_id][0]:
+            latest[instance_id] = (elapsed_s, value)
+    return {instance_id: value for instance_id, (_, value) in latest.items()}
+
+
+def _schedule_summary(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    """Scheduled-herd outcome as of the end of ``phase_label``.
+
+    Lateness percentiles are cumulative per replica, so the maximum across
+    replicas is reported (exact for a single replica). ``drain_s`` is the
+    lateness of the last herd job to start, i.e. the time from the due
+    instant to the herd being fully picked up; it is only reported once
+    every enqueued herd job has started.
+    """
+    last = {
+        metric: _last_adapter_values(
+            rows, system=system, phase_label=phase_label, metric=metric
+        )
+        for metric in SCHEDULE_GAUGE_METRICS
+    }
+    if not any(last.values()):
+        return None
+
+    def _max(metric: str) -> float | None:
+        values = last[metric].values()
+        return float(max(values)) if values else None
+
+    def _sum(metric: str) -> float | None:
+        values = last[metric].values()
+        return float(sum(values)) if values else None
+
+    started = _sum("schedule_started_total")
+    enqueued = _sum("schedule_enqueued_total")
+    lateness_max_ms = _max("schedule_lateness_max_ms")
+    complete = bool(enqueued) and started is not None and started >= enqueued
+    return {
+        "lateness_p50_ms": _max("schedule_lateness_p50_ms"),
+        "lateness_p95_ms": _max("schedule_lateness_p95_ms"),
+        "lateness_p99_ms": _max("schedule_lateness_p99_ms"),
+        "lateness_max_ms": lateness_max_ms,
+        "started": started,
+        "enqueued": enqueued,
+        "early_starts": _sum("schedule_early_total"),
+        "preload_s": _max("schedule_preload_s"),
+        "herd_complete": complete,
+        "drain_s": (
+            lateness_max_ms / 1000.0
+            if complete and lateness_max_ms is not None
+            else None
+        ),
+    }
+
+
+def _integrated_count(
+    rows: list[dict], *, system: str, phase_label: str, metric: str
+) -> float | None:
+    """Sum of rate * window over every adapter sample of ``metric``."""
+    total = 0.0
+    seen = False
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row.get("subject_kind") != "adapter"
+        ):
+            continue
+        try:
+            value = float(row["value"])
+            window_s = float(row.get("window_s") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        seen = True
+        total += value * window_s
+    return total if seen else None
+
+
+def _failure_summary(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    """Per-phase failure-injection counts and good-job throughput."""
+    counts = {
+        metric: _integrated_count(
+            rows, system=system, phase_label=phase_label, metric=metric
+        )
+        for metric in FAILURE_RATE_METRICS
+    }
+    if all(value is None for value in counts.values()):
+        return None
+    completions = aggregate_replica_metric_series(
+        rows,
+        system=system,
+        phase_label=phase_label,
+        metric="completion_rate",
+        subject_kind="adapter",
+    )
+    retried = aggregate_replica_metric_series(
+        rows,
+        system=system,
+        phase_label=phase_label,
+        metric="retried_completion_rate",
+        subject_kind="adapter",
+    )
+    good = [
+        completed - (retried[idx] if idx < len(retried) else 0.0)
+        for idx, completed in enumerate(completions)
+    ]
+    return {
+        "failed_attempts": counts["injected_failure_rate"],
+        "retried_completions": counts["retried_completion_rate"],
+        "poison_exhausted": counts["poison_exhausted_rate"],
+        "completions": _integrated_count(
+            rows, system=system, phase_label=phase_label, metric="completion_rate"
+        ),
+        "median_good_completion_rate": _median(good),
+    }
+
+
+def _timeline(
+    rows: list[dict],
+    *,
+    system: str,
+    phase_labels: list[str],
+    metric: str,
+    subject_kind: str,
+    subject: str | None = None,
+) -> list[tuple[float, float]]:
+    """(elapsed_s, value) points, max-reduced across replicas per tick."""
+    per_elapsed: dict[float, float] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] not in phase_labels
+            or row["metric"] != metric
+            or row.get("subject_kind") != subject_kind
+        ):
+            continue
+        if subject is not None and row.get("subject") != subject:
+            continue
+        try:
+            elapsed_s = float(row["elapsed_s"])
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+        per_elapsed[elapsed_s] = max(value, per_elapsed.get(elapsed_s, value))
+    return sorted(per_elapsed.items())
+
+
+def _attach_retry_storm_recovery(
+    rows: list[dict], *, phases: list[Phase], out_systems: dict[str, dict]
+) -> None:
+    """Recovery after a retry-storm span, attached to the following phase.
+
+    - ``retry_backlog_drain_s``: storm end until the DB-side ``retryable``
+      job-state count first returns to its pre-storm baseline median (every
+      transient retry has run and every poison job has exhausted).
+    - ``latency_recovery_s``: storm end until ``claim_p99_ms`` first returns
+      to within 25% of the baseline median.
+    Storm end is the last sample observed in the storm span.
+    """
+    for i, phase in enumerate(phases):
+        if phase.type is PhaseType.RETRY_STORM:
+            continue
+        storm_labels: list[str] = []
+        for prev in reversed(phases[:i]):
+            if prev.type is not PhaseType.RETRY_STORM:
+                break
+            storm_labels.append(prev.label)
+        if not storm_labels:
+            continue
+        baseline_label: str | None = None
+        for prev in reversed(phases[: i - len(storm_labels)]):
+            if prev.type is PhaseType.CLEAN:
+                baseline_label = prev.label
+                break
+        after_labels = [p.label for p in phases[i:]]
+        for system, system_block in out_systems.items():
+            storm_points = [
+                elapsed
+                for metric, kind in (
+                    ("completion_rate", "adapter"),
+                    ("job_state_count", "job_state"),
+                )
+                for elapsed, _ in _timeline(
+                    rows,
+                    system=system,
+                    phase_labels=storm_labels,
+                    metric=metric,
+                    subject_kind=kind,
+                )
+            ]
+            if not storm_points:
+                continue
+            storm_end = max(storm_points)
+            result: dict[str, float | None] = {}
+            for key, metric, kind, subject, slack in (
+                ("retry_backlog_drain_s", "job_state_count", "job_state", "retryable", 1.0),
+                ("latency_recovery_s", "claim_p99_ms", "adapter", None, 1.25),
+            ):
+                baseline_values = (
+                    [
+                        value
+                        for _, value in _timeline(
+                            rows,
+                            system=system,
+                            phase_labels=[baseline_label],
+                            metric=metric,
+                            subject_kind=kind,
+                            subject=subject,
+                        )
+                    ]
+                    if baseline_label
+                    else []
+                )
+                after = _timeline(
+                    rows,
+                    system=system,
+                    phase_labels=after_labels,
+                    metric=metric,
+                    subject_kind=kind,
+                    subject=subject,
+                )
+                threshold = (_median(baseline_values) or 0.0) * slack
+                result[key] = next(
+                    (
+                        elapsed - storm_end
+                        for elapsed, value in after
+                        if elapsed > storm_end and value <= threshold
+                    ),
+                    None,
+                )
+            target = system_block["phases"].setdefault(
+                phase.label, {"phase_type": phase.type.value, "metrics": {}}
+            )
+            target["storm_recovery"] = result
 
 
 def _chaos_aggregates(

@@ -10,6 +10,7 @@ ENV PATH="/root/.local/bin:${PATH}"
 WORKDIR /app
 # Build context is REPO_ROOT (see bench_harness/adapters.py). Copy adapter +
 # vendored pgque submodule (sql/pgque.sql is loaded at startup).
+COPY adapter_common ./adapter_common
 COPY pgque-bench ./pgque-bench
 
 WORKDIR /app/pgque-bench

@@ -42,6 +42,9 @@ class PhaseType(str, Enum):
     NEIGHBOUR_OLTP = "neighbour-oltp"
     LOGICAL_STREAM = "logical-stream"
     LOGICAL_STALL = "logical-stall"
+    # Workload-shape phases driven through adapter control files.
+    RETRY_STORM = "retry-storm"
+    SCHEDULE_PRELOAD = "schedule-preload"
     # CDC-suite phase types (docs/cdc-harness-design.md §9). Consumer-level
     # chaos is applied through the receiver's control API, not the replica
     # pool — the hooks live in cdc_harness, not bench_harness.hooks.
@@ -74,6 +77,8 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.NEIGHBOUR_OLTP:   ("#5FA8A0", 0.25),
     PhaseType.LOGICAL_STREAM:   ("#7FA6D8", 0.25),
     PhaseType.LOGICAL_STALL:    ("#D8A03A", 0.30),
+    PhaseType.RETRY_STORM:      ("#C86A8A", 0.30),
+    PhaseType.SCHEDULE_PRELOAD: ("#6CAFAF", 0.25),
     PhaseType.CONSUMER_DEAD:    ("#C04A4A", 0.35),
     PhaseType.CONSUMER_SLOW:    ("#D8A03A", 0.30),
     PhaseType.SINK_OUTAGE:      ("#A03030", 0.40),
@@ -102,6 +107,8 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.NEIGHBOUR_OLTP:   True,
     PhaseType.LOGICAL_STREAM:   True,
     PhaseType.LOGICAL_STALL:    True,
+    PhaseType.RETRY_STORM:      True,
+    PhaseType.SCHEDULE_PRELOAD: True,
     PhaseType.CONSUMER_DEAD:    True,
     PhaseType.CONSUMER_SLOW:    True,
     PhaseType.SINK_OUTAGE:      True,
@@ -413,6 +420,36 @@ SCENARIOS: dict[str, list[str]] = {
         "stall_1=logical-stall:15m",
         "catchup_1=logical-stream:15m",
     ],
+    # Scheduled-job thundering herd. The preload phase enqueues `count`
+    # jobs all due at the end of the phase (delay defaults to the phase
+    # duration) while the steady immediate stream keeps flowing; `due`
+    # observes the herd coming due and draining. Adapters report
+    # schedule_lateness_* for the herd; claim_* stays immediate-only.
+    "scheduled_burst": [
+        "warmup=warmup:5m",
+        "baseline=clean:5m",
+        "preload=schedule-preload(count=100000):5m",
+        "due=clean:10m",
+        "after=clean:5m",
+    ],
+    # Steady promotion accuracy: the herd is spread uniformly over a
+    # window instead of sharing one instant.
+    "scheduled_spread": [
+        "warmup=warmup:5m",
+        "preload=schedule-preload(count=60000,delay=2m,spread=10m):2m",
+        "spread=clean:10m",
+        "after=clean:5m",
+    ],
+    # Failure churn: a share of jobs fail transiently and retry with each
+    # system's own backoff, a small share are poison (always fail until
+    # max attempts), then injection stops and the retry backlog drains.
+    # Runs with JOB_MAX_ATTEMPTS=5 unless the environment overrides it.
+    "retry_storm": [
+        "warmup=warmup:5m",
+        "baseline=clean:10m",
+        "storm=retry-storm(transient_pct=30,poison_pct=1):20m",
+        "recovery=recovery:20m",
+    ],
 }
 
 # Phase types whose hooks create a logical replication slot. The harness
@@ -592,6 +629,11 @@ def default_registry() -> HookRegistry:
                       enter=hooks.enter_logical_stall,
                       exit=hooks.exit_logical_stall,
                       teardown=hooks.teardown_logical_replication)
+    registry.register(PhaseType.RETRY_STORM,
+                      enter=hooks.enter_retry_storm,
+                      exit=hooks.exit_retry_storm)
+    registry.register(PhaseType.SCHEDULE_PRELOAD,
+                      enter=hooks.enter_schedule_preload)
     # warmup, clean, recovery — no extra runtime action; the adapter's
     # steady workload carries the load.
     return registry

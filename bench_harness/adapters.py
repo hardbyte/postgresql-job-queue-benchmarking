@@ -83,6 +83,10 @@ class AdapterManifest:
     # slow-drain shutdown paths (e.g. pgmq archive, absurd fail-task-run)
     # can override via `adapter.json -> shutdown_grace_s`.
     shutdown_grace_s: float = 10.0
+    # Optional `{state: SQL}` map of single-value count queries (scheduled,
+    # retryable, dead, ...). Polled by the metrics daemon only for runs whose
+    # phases need DB-side job-state counts (retry-storm, schedule-preload).
+    state_queries: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Sensible defaults: standalone systems are their own family and
@@ -106,6 +110,7 @@ class AdapterManifest:
             family=data.get("family", "") or "",
             display_name=data.get("display_name", "") or "",
             shutdown_grace_s=float(data.get("shutdown_grace_s", 10.0)),
+            state_queries=dict(data.get("state_queries", {})),
         )
 
 
@@ -155,9 +160,17 @@ def build_awa(skip: bool) -> None:
     )
 
 
+def adapter_image(image: str) -> str:
+    """Docker image reference for an adapter. ``BENCH_IMAGE_TAG`` gives a
+    worktree its own adapter images instead of the shared ``latest``."""
+    tag = os.environ.get("BENCH_IMAGE_TAG")
+    return f"{image}:{tag}" if tag else image
+
+
 def _docker_build(image_tag: str, dockerfile: Path, context: Path, skip: bool) -> None:
     if skip:
         return
+    image_tag = adapter_image(image_tag)
     print(f"[harness] docker build {image_tag}...", file=sys.stderr)
     subprocess.run(
         ["docker", "build", "-f", str(dockerfile), "-t", image_tag, "."],
@@ -352,6 +365,11 @@ def launch_awa_canonical(manifest: AdapterManifest, overrides: dict[str, str]) -
     return launch_awa(manifest, merged)
 
 
+# Control files the orchestrator creates next to the producer-rate file
+# (same directory, so the existing /control mount covers them).
+SCENARIO_CONTROL_FILE_KEYS = ("JOB_FAILURE_CONTROL_FILE", "SCHEDULE_CONTROL_FILE")
+
+
 ADAPTER_CONTAINER_LABEL = "bench.pg_port"
 
 
@@ -385,6 +403,9 @@ def _docker_launch(
         container_dir = str(Path(container_control).parent)
         mounts.append((host_dir, container_dir))
         env["PRODUCER_RATE_CONTROL_FILE"] = container_control
+        for key in SCENARIO_CONTROL_FILE_KEYS:
+            if key in env:
+                env[key] = str(Path(container_dir) / Path(env[key]).name)
     # Docker containers reach PG via host networking.
     # `-i` keeps stdin open so the harness pacer can write ENQUEUE tokens
     # to the container's stdin (without it, `docker run` closes stdin
@@ -399,7 +420,7 @@ def _docker_launch(
         argv.extend(["-v", f"{host_path}:{container_path}"])
     for k, v in env.items():
         argv.extend(["-e", f"{k}={v}"])
-    argv.append(image)
+    argv.append(adapter_image(image))
     return LaunchSpec(argv=argv, env={}, mounts=mounts)
 
 

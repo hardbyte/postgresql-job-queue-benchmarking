@@ -12,7 +12,7 @@ defmodule ObanBench.LongHorizon do
   """
 
   import Ecto.Query
-  alias ObanBench.{Repo, LongHorizonWorker}
+  alias ObanBench.{Repo, LongHorizonWorker, ScenarioControls}
 
   @queue :long_horizon_bench
   @latency_window_s 30.0
@@ -76,6 +76,7 @@ defmodule ObanBench.LongHorizon do
     :ets.insert(:long_horizon_state, {:queue_depth, 0})
     :ets.insert(:long_horizon_state, {:producer_target_rate, producer_rate * 1.0})
     :ets.new(:long_horizon_lat, [:public, :named_table, :duplicate_bag])
+    ScenarioControls.init()
 
     Oban.scale_queue(queue: @queue, limit: worker_count)
 
@@ -92,6 +93,13 @@ defmodule ObanBench.LongHorizon do
           producer_batch_max,
           producer_batch_ms
         )
+      end)
+
+    _herd =
+      spawn(fn ->
+        ScenarioControls.herd_loop(fn seq, size, run_at_ms ->
+          insert_herd(seq, size, run_at_ms, padding)
+        end)
       end)
 
     _sampler = spawn(fn -> sampler_loop(sample_every_s) end)
@@ -250,7 +258,7 @@ defmodule ObanBench.LongHorizon do
   # batch_max > 1 → Oban.insert_all/2 (documented bulk path).
   defp insert_batch(seq, 1, padding, batch_max) when batch_max <= 1 do
     try do
-      case Oban.insert(LongHorizonWorker.new(%{seq: seq, padding: padding})) do
+      case Oban.insert(LongHorizonWorker.new(job_args(seq, padding), job_opts())) do
         {:ok, _} -> :ok
         _ -> :error
       end
@@ -265,7 +273,7 @@ defmodule ObanBench.LongHorizon do
   defp insert_batch(seq, batch_count, padding, _batch_max) do
     changesets =
       for i <- 0..(batch_count - 1) do
-        LongHorizonWorker.new(%{seq: seq + i, padding: padding})
+        LongHorizonWorker.new(job_args(seq + i, padding), job_opts())
       end
 
     try do
@@ -281,6 +289,38 @@ defmodule ObanBench.LongHorizon do
       RuntimeError -> :stopping
     catch
       :exit, _reason -> :stopping
+    end
+  end
+
+  defp job_args(seq, padding) do
+    Map.merge(%{seq: seq, padding: padding}, ScenarioControls.tag(seq))
+  end
+
+  # [] keeps the worker's defaults; JOB_MAX_ATTEMPTS overrides max attempts.
+  defp job_opts do
+    case ScenarioControls.max_attempts() do
+      nil -> []
+      n -> [max_attempts: n]
+    end
+  end
+
+  defp insert_herd(seq, size, run_at_ms, padding) do
+    opts = [scheduled_at: DateTime.from_unix!(run_at_ms, :millisecond)] ++ job_opts()
+
+    changesets =
+      for i <- 0..(size - 1) do
+        LongHorizonWorker.new(%{seq: seq + i, padding: padding, run_at_ms: run_at_ms}, opts)
+      end
+
+    try do
+      case Oban.insert_all(changesets) do
+        jobs when is_list(jobs) -> :ok
+        _ -> :error
+      end
+    rescue
+      _ -> :error
+    catch
+      :exit, _reason -> :error
     end
   end
 
@@ -361,7 +401,7 @@ defmodule ObanBench.LongHorizon do
         {"completion_rate", cmp_rate, sample_every_s},
         {"queue_depth", depth * 1.0, 0},
         {"producer_target_rate", producer_target_rate, 0}
-      ],
+      ] ++ ScenarioControls.metrics(dt_s, sample_every_s),
       fn {name, value, window_s} ->
         if MapSet.member?(@observer_metrics, name) and not observer_enabled?() do
           :ok
@@ -469,8 +509,44 @@ end
 defmodule ObanBench.LongHorizonWorker do
   use Oban.Worker, queue: :long_horizon_bench, max_attempts: 3
 
+  alias ObanBench.ScenarioControls
+
   @impl Oban.Worker
-  def perform(%Oban.Job{inserted_at: inserted_at}) do
+  def perform(%Oban.Job{args: args, attempt: attempt, max_attempts: max_attempts} = job) do
+    if ScenarioControls.tagged?(args) do
+      perform_tagged(args, attempt, max_attempts)
+    else
+      perform_untagged(job)
+    end
+  end
+
+  defp perform_tagged(args, attempt, max_attempts) do
+    ScenarioControls.on_start(args)
+
+    case ScenarioControls.failure_outcome(args, attempt, max_attempts) do
+      nil ->
+        work_ms =
+          case :ets.lookup(:long_horizon_state, :work_ms) do
+            [{:work_ms, v}] -> v
+            _ -> 1
+          end
+
+        if work_ms > 0, do: Process.sleep(work_ms)
+        ScenarioControls.on_complete(args)
+
+        unless Map.has_key?(args, "run_at_ms") do
+          :ets.update_counter(:long_horizon_state, :completed, 1)
+        end
+
+        :ok
+
+      outcome ->
+        ScenarioControls.record_failure(args, outcome)
+        {:error, "injected #{args["fail"]} failure (attempt #{attempt})"}
+    end
+  end
+
+  defp perform_untagged(%Oban.Job{inserted_at: inserted_at}) do
     now = DateTime.utc_now()
     latency_ms = max(0, DateTime.diff(now, inserted_at, :millisecond))
     ts_ms = System.monotonic_time(:millisecond)

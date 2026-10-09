@@ -10,5 +10,10 @@
     "public.procrastinate_jobs_queueing_lock_idx",
     "public.procrastinate_jobs_id_lock_idx"
   ],
-  "extensions": []
+  "extensions": [],
+  "state_queries": {
+    "scheduled": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'todo' AND attempts = 0 AND scheduled_at > now()",
+    "retryable": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'todo' AND attempts > 0",
+    "dead": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'failed'"
+  }
 }

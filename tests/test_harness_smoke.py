@@ -1628,3 +1628,216 @@ def test_pacer_follows_rate_control_file(tmp_path: Path):
         pacer.join(timeout=1.0)
     # ~1000 jobs at 2000/s over 0.5 s; well above the 100/s launch rate.
     assert sink.jobs > 500
+# ─── Scheduled-herd and retry-storm scenarios ───────────────────────
+
+import json as _json
+import sys as _sys
+
+from bench_harness.adapters import _docker_launch
+from bench_harness.hooks import (
+    enter_retry_storm,
+    enter_schedule_preload,
+    exit_retry_storm,
+    schedule_preload_command,
+)
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter_common"))
+import bench_controls  # noqa: E402
+
+
+def _runtime(spec: str, state: dict) -> PhaseRuntime:
+    return PhaseRuntime(database_url="", phase=parse_phase_spec(spec), state=state)
+
+
+def test_retry_storm_hook_writes_plan_and_clears_on_exit(tmp_path: Path):
+    control = tmp_path / "job_failure.json"
+    runtime = _runtime(
+        "storm=retry-storm(transient_pct=25,poison_pct=2):60s",
+        {"job_failure_control_file": str(control)},
+    )
+    enter_retry_storm(runtime)
+    assert _json.loads(control.read_text()) == {
+        "poison_pct": 2.0,
+        "transient_failures": 1,
+        "transient_pct": 25.0,
+    }
+    exit_retry_storm(runtime)
+    assert _json.loads(control.read_text()) == {}
+
+
+def test_retry_storm_hook_rejects_over_100_percent(tmp_path: Path):
+    runtime = _runtime(
+        "storm=retry-storm(transient_pct=90,poison_pct=20):60s",
+        {"job_failure_control_file": str(tmp_path / "f.json")},
+    )
+    with pytest.raises(ValueError):
+        enter_retry_storm(runtime)
+
+
+def test_schedule_preload_delay_defaults_to_phase_duration():
+    runtime = _runtime("preload=schedule-preload(count=500):5m", {})
+    command = schedule_preload_command(runtime, now_s=1000.0)
+    assert command == {
+        "id": "preload-1000000",
+        "count": 500,
+        "run_at_ms": 1_300_000,
+        "spread_ms": 0,
+    }
+    spread = schedule_preload_command(
+        _runtime("p=schedule-preload(count=10,delay=30s,spread=2m):1m", {}),
+        now_s=1000.0,
+    )
+    assert spread["run_at_ms"] == 1_030_000
+    assert spread["spread_ms"] == 120_000
+
+
+def test_schedule_preload_requires_control_file():
+    with pytest.raises(RuntimeError):
+        enter_schedule_preload(_runtime("p=schedule-preload(count=10):1m", {}))
+
+
+def test_docker_launch_maps_scenario_control_files_into_mount(tmp_path: Path):
+    manifest = AdapterManifest(
+        system="river", db_name="river_bench", event_tables=[], event_indexes=[],
+        extensions=[],
+    )
+    spec = _docker_launch(
+        "river-bench",
+        manifest,
+        {
+            "PRODUCER_RATE_CONTROL_FILE": str(tmp_path / "producer_rate.txt"),
+            "PRODUCER_RATE_CONTROL_FILE_HOST": str(tmp_path / "producer_rate.txt"),
+            "PRODUCER_RATE_CONTROL_FILE_CONTAINER": "/control/producer_rate.txt",
+            "JOB_FAILURE_CONTROL_FILE": str(tmp_path / "job_failure.json"),
+            "SCHEDULE_CONTROL_FILE": str(tmp_path / "schedule.json"),
+        },
+    )
+    assert "JOB_FAILURE_CONTROL_FILE=/control/job_failure.json" in spec.argv
+    assert "SCHEDULE_CONTROL_FILE=/control/schedule.json" in spec.argv
+    assert f"{tmp_path}:/control" in spec.argv
+
+
+def test_failure_tags_hit_requested_shares_evenly():
+    plan = {"transient_pct": 30, "poison_pct": 1, "transient_failures": 2}
+    tags = [bench_controls.failure_tag(plan, seq) for seq in range(10_000)]
+    assert sum(t.get("fail") == "poison" for t in tags) == 100
+    assert sum(t.get("fail") == "transient" for t in tags) == 3000
+    assert all(t.get("fail_attempts") == 2 for t in tags if t.get("fail") == "transient")
+    # Spread, not one contiguous run: every 1000-seq window sees poison.
+    for start in range(0, 10_000, 1000):
+        assert any(t.get("fail") == "poison" for t in tags[start:start + 1000])
+    assert bench_controls.failure_tag({}, 7) == {}
+
+
+def test_failure_outcome_respects_attempt_budget():
+    outcome = bench_controls.failure_outcome
+    assert outcome({"fail": "transient", "fail_attempts": 1}, 1, 5) == "retry"
+    assert outcome({"fail": "transient", "fail_attempts": 1}, 2, 5) is None
+    assert outcome({"fail": "poison"}, 4, 5) == "retry"
+    assert outcome({"fail": "poison"}, 5, 5) == "exhausted"
+    assert outcome({"fail": "poison"}, 50, None) == "retry"
+    assert outcome({"seq": 1}, 1, 5) is None
+
+
+def test_herd_batches_cover_count_and_spread_window():
+    burst = list(bench_controls.herd_batches({"count": 1201, "run_at_ms": 5000}))
+    assert sum(n for n, _ in burst) == 1201
+    assert {at for _, at in burst} == {5000}
+    spread = list(
+        bench_controls.herd_batches({"count": 1200, "run_at_ms": 5000, "spread_ms": 60_000})
+    )
+    assert sum(n for n, _ in spread) == 1200
+    assert max(n for n, _ in spread) == 2  # <= 100 ms of window per batch
+    assert spread[0][1] == 5000
+    assert 5000 + 59_000 < spread[-1][1] < 5000 + 60_000
+
+
+def _adapter_row(elapsed, label, ptype, metric, value, window=0.0, instance="0"):
+    return [
+        "test", "awa", instance, str(elapsed), "2026-05-01T00:00:00Z",
+        label, ptype, "adapter", "", metric, str(value), str(window),
+    ]
+
+
+def _state_row(elapsed, label, ptype, state, value):
+    return [
+        "test", "awa", "0", str(elapsed), "2026-05-01T00:00:00Z",
+        label, ptype, "job_state", state, "job_state_count", str(value), "0.0",
+    ]
+
+
+def test_summary_reports_schedule_herd_outcome(tmp_path: Path):
+    raw_path = tmp_path / "raw.csv"
+    rows = [
+        _adapter_row(10, "preload", "schedule-preload", "schedule_enqueued_total", 1000),
+        _adapter_row(10, "preload", "schedule-preload", "schedule_preload_s", 1.5),
+        _adapter_row(20, "due", "clean", "schedule_enqueued_total", 1000),
+        _adapter_row(20, "due", "clean", "schedule_started_total", 600),
+        _adapter_row(20, "due", "clean", "schedule_lateness_p99_ms", 900),
+        _adapter_row(20, "due", "clean", "schedule_lateness_max_ms", 950),
+        _adapter_row(30, "due", "clean", "schedule_enqueued_total", 1000),
+        _adapter_row(30, "due", "clean", "schedule_started_total", 1000),
+        _adapter_row(30, "due", "clean", "schedule_lateness_p50_ms", 400),
+        _adapter_row(30, "due", "clean", "schedule_lateness_p99_ms", 1800),
+        _adapter_row(30, "due", "clean", "schedule_lateness_max_ms", 2100),
+        _adapter_row(30, "due", "clean", "schedule_early_total", 0),
+        _adapter_row(30, "due", "clean", "scheduled_completion_rate", 40, 10.0),
+    ]
+    with raw_path.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(RAW_CSV_HEADER)
+        writer.writerows(rows)
+    phases = [
+        parse_phase_spec("warmup=warmup:10s"),
+        parse_phase_spec("preload=schedule-preload(count=1000):10s"),
+        parse_phase_spec("due=clean:20s"),
+    ]
+    summary = compute_summary(raw_path, run_id="t", scenario=None, phases=phases)
+    blocks = summary["systems"]["awa"]["phases"]
+    assert blocks["preload"]["schedule"]["herd_complete"] is False
+    assert blocks["preload"]["schedule"]["preload_s"] == 1.5
+    due = blocks["due"]["schedule"]
+    assert due["herd_complete"] is True
+    assert due["lateness_p50_ms"] == 400
+    assert due["lateness_p99_ms"] == 1800
+    assert due["drain_s"] == 2.1
+    assert blocks["due"]["metrics"]["scheduled_completion_rate"]["median"] == 40
+
+
+def test_summary_reports_retry_storm_counts_and_recovery(tmp_path: Path):
+    raw_path = tmp_path / "raw.csv"
+    rows = []
+    for elapsed in (10, 20):
+        rows.append(_adapter_row(elapsed, "baseline", "clean", "claim_p99_ms", 10))
+        rows.append(_adapter_row(elapsed, "baseline", "clean", "completion_rate", 100, 10))
+        rows.append(_state_row(elapsed, "baseline", "clean", "retryable", 0))
+    for elapsed in (30, 40):
+        rows.append(_adapter_row(elapsed, "storm", "retry-storm", "claim_p99_ms", 50))
+        rows.append(_adapter_row(elapsed, "storm", "retry-storm", "completion_rate", 100, 10))
+        rows.append(_adapter_row(elapsed, "storm", "retry-storm", "injected_failure_rate", 31, 10))
+        rows.append(_adapter_row(elapsed, "storm", "retry-storm", "retried_completion_rate", 30, 10))
+        rows.append(_adapter_row(elapsed, "storm", "retry-storm", "poison_exhausted_rate", 0.2, 10))
+        rows.append(_state_row(elapsed, "storm", "retry-storm", "retryable", 300))
+    for elapsed, p99, retryable in ((50, 30, 120), (60, 12, 5), (70, 11, 0)):
+        rows.append(_adapter_row(elapsed, "recovery", "recovery", "claim_p99_ms", p99))
+        rows.append(_state_row(elapsed, "recovery", "recovery", "retryable", retryable))
+    with raw_path.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(RAW_CSV_HEADER)
+        writer.writerows(rows)
+    phases = [
+        parse_phase_spec("warmup=warmup:10s"),
+        parse_phase_spec("baseline=clean:20s"),
+        parse_phase_spec("storm=retry-storm:20s"),
+        parse_phase_spec("recovery=recovery:30s"),
+    ]
+    summary = compute_summary(raw_path, run_id="t", scenario="retry_storm", phases=phases)
+    blocks = summary["systems"]["awa"]["phases"]
+    failure = blocks["storm"]["failure_injection"]
+    assert failure["failed_attempts"] == 620
+    assert failure["retried_completions"] == 600
+    assert failure["poison_exhausted"] == 4
+    assert failure["median_good_completion_rate"] == 70
+    assert blocks["storm"]["metrics"]["job_state_count@retryable"]["peak"] == 300
+    recovery = blocks["recovery"]["storm_recovery"]
+    assert recovery == {"retry_backlog_drain_s": 30.0, "latency_recovery_s": 20.0}

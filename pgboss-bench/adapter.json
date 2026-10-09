@@ -6,5 +6,10 @@
     "pgboss.queue"
   ],
   "event_indexes": [],
-  "extensions": []
+  "extensions": [],
+  "state_queries": {
+    "scheduled": "SELECT count(*) FROM pgboss.job WHERE name = 'long_horizon_bench' AND state = 'created' AND start_after > now()",
+    "retryable": "SELECT count(*) FROM pgboss.job WHERE name = 'long_horizon_bench' AND state = 'retry'",
+    "dead": "SELECT count(*) FROM pgboss.job WHERE name = 'long_horizon_bench' AND state = 'failed'"
+  }
 }

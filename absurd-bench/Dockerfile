@@ -12,6 +12,7 @@ ENV PATH="/root/.local/bin:${PATH}"
 ENV ABSURD_SQL_PATH="/opt/absurd.sql"
 
 WORKDIR /app
+COPY adapter_common ./adapter_common
 COPY absurd-bench ./absurd-bench
 
 WORKDIR /app/absurd-bench
