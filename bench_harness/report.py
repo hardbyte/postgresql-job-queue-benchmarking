@@ -40,7 +40,27 @@ DEFAULT_TIMELINE_METRICS = [
     "pg_wal_bytes",
     "relfilenode_churn_total",
     "pg_db_xacts_total",
+    "catalog_n_dead_tup",
+    # Neighbour-impact scenarios (neighbour_oltp, logical_replication).
+    "neighbour_tps",
+    "neighbour_latency_p99_ms",
+    "slot_confirmed_lag_bytes",
+    "slot_retained_wal_bytes",
 ]
+
+# Non-adapter timeline metrics: which subject_kind carries them and how to
+# reduce several subjects at one tick. Anything unlisted is an adapter metric.
+TIMELINE_SUBJECT_KINDS: dict[str, tuple[str, str]] = {
+    "n_dead_tup": ("table", "sum"),
+    "catalog_n_dead_tup": ("catalog", "sum"),
+    "pg_wal_bytes": ("cluster", "last"),
+    "relfilenode_churn_total": ("cluster", "last"),
+    "pg_db_xacts_total": ("cluster", "last"),
+    "neighbour_tps": ("neighbour", "last"),
+    "neighbour_latency_p99_ms": ("neighbour", "last"),
+    "slot_confirmed_lag_bytes": ("replication_slot", "max"),
+    "slot_retained_wal_bytes": ("replication_slot", "max"),
+}
 
 DEFAULT_PHASE_FILTER = "steady"
 
@@ -64,6 +84,11 @@ METRIC_LABELS = {
     "pg_wal_bytes": "WAL bytes (cumulative)",
     "relfilenode_churn_total": "Relfilenode churn (cumulative TRUNCATE/rewrite)",
     "pg_db_xacts_total": "Background transactions (cumulative)",
+    "catalog_n_dead_tup": "Catalog dead tuples (pg_class/attribute/depend/type)",
+    "neighbour_tps": "Neighbour pgbench TPS",
+    "neighbour_latency_p99_ms": "Neighbour pgbench latency p99",
+    "slot_confirmed_lag_bytes": "Logical slot lag (bytes)",
+    "slot_retained_wal_bytes": "Logical slot retained WAL (bytes)",
 }
 
 TIMELINE_PRESETS = [
@@ -128,55 +153,35 @@ def _timeline_series(rows: list[dict], systems: list[str]) -> dict[str, dict[str
             if not selected:
                 continue
 
-            # Adapter metrics are one value per tick. Table metrics such as
-            # n_dead_tup need summing across subjects for each timestamp.
-            if metric == "n_dead_tup":
-                per_elapsed: dict[tuple[float, str, str], float] = {}
-                for row in selected:
-                    if row["subject_kind"] != "table":
-                        continue
-                    key = (
-                        float(row["elapsed_s"]),
-                        row["phase_label"],
-                        row["phase_type"],
-                    )
-                    per_elapsed[key] = per_elapsed.get(key, 0.0) + float(row["value"])
-                points = [
+            subject_kind, reduce = TIMELINE_SUBJECT_KINDS.get(
+                metric, ("adapter", "")
+            )
+            per_elapsed: dict[tuple[float, str, str], list[float]] = {}
+            for row in selected:
+                if row["subject_kind"] != subject_kind:
+                    continue
+                key = (
+                    float(row["elapsed_s"]),
+                    row["phase_label"],
+                    row["phase_type"],
+                )
+                per_elapsed.setdefault(key, []).append(float(row["value"]))
+            points = []
+            for (elapsed, phase_label, phase_type), values in sorted(per_elapsed.items()):
+                if reduce == "sum" or metric in RATE_METRICS:
+                    value = float(sum(values))
+                elif reduce == "max" or metric in LATENCY_METRICS or metric in DEPTH_METRICS:
+                    value = float(max(values))
+                else:
+                    value = float(values[-1])
+                points.append(
                     {
                         "elapsed_s": elapsed,
                         "phase_label": phase_label,
                         "phase_type": phase_type,
                         "value": value,
                     }
-                    for (elapsed, phase_label, phase_type), value in sorted(per_elapsed.items())
-                ]
-            else:
-                per_elapsed: dict[tuple[float, str, str], list[float]] = {}
-                for row in selected:
-                    if row["subject_kind"] != "adapter":
-                        continue
-                    key = (
-                        float(row["elapsed_s"]),
-                        row["phase_label"],
-                        row["phase_type"],
-                    )
-                    per_elapsed.setdefault(key, []).append(float(row["value"]))
-                points = []
-                for (elapsed, phase_label, phase_type), values in sorted(per_elapsed.items()):
-                    if metric in RATE_METRICS:
-                        value = float(sum(values))
-                    elif metric in LATENCY_METRICS or metric in DEPTH_METRICS:
-                        value = float(max(values))
-                    else:
-                        value = float(values[-1])
-                    points.append(
-                        {
-                            "elapsed_s": elapsed,
-                            "phase_label": phase_label,
-                            "phase_type": phase_type,
-                            "value": value,
-                        }
-                    )
+                )
 
             if points:
                 out[metric][system] = points
@@ -312,6 +317,66 @@ def _phase_table(summary: dict, systems: list[str], phases: list[Phase], system_
     )
 
 
+def _fmt(value: object, digits: int = 1) -> str:
+    if value is None:
+        return "–"
+    return f"{float(value):,.{digits}f}"
+
+
+def _neighbour_table(
+    summary: dict,
+    systems: list[str],
+    phases: list[Phase],
+    system_meta: dict[str, dict[str, str]],
+) -> str | None:
+    """Neighbour-impact rows (pgbench neighbour, logical slot, catalog).
+    None when the run has no neighbour or logical phases."""
+    headers = [
+        "System", "Phase", "Type", "Queue throughput/s",
+        "Neighbour TPS", "Neighbour p50 ms", "Neighbour p99 ms",
+        "p99 vs baseline", "Slot lag peak MB", "Retained WAL peak MB",
+        "catalog_xmin age peak", "Catalog dead tup peak", "WAL/job bytes",
+    ]
+    rows: list[str] = []
+    for system in systems:
+        phase_map = summary["systems"].get(system, {}).get("phases", {})
+        for phase in phases:
+            block = phase_map.get(phase.label)
+            if not block or not (block.get("neighbour") or block.get("logical")):
+                continue
+            neighbour = block.get("neighbour") or {}
+            logical = block.get("logical") or {}
+            catalog = block.get("catalog") or {}
+            mb = 1024 * 1024
+            lag_peak = logical.get("slot_lag_bytes_peak")
+            retained_peak = logical.get("retained_wal_bytes_peak")
+            cells = [
+                html.escape(system_meta[system]["display_name"]),
+                html.escape(phase.label),
+                html.escape(block.get("phase_type", "")),
+                _fmt(block.get("median_throughput_per_s")),
+                _fmt(neighbour.get("tps")),
+                _fmt(neighbour.get("latency_p50_ms"), 2),
+                _fmt(neighbour.get("latency_p99_ms"), 2),
+                _fmt(neighbour.get("latency_p99_ms_vs_baseline"), 2),
+                _fmt(lag_peak / mb if lag_peak is not None else None, 2),
+                _fmt(retained_peak / mb if retained_peak is not None else None, 1),
+                _fmt(logical.get("catalog_xmin_age_peak"), 0),
+                _fmt(catalog.get("dead_tup_peak"), 0),
+                _fmt(block.get("wal_bytes_per_completed_job"), 0),
+            ]
+            rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+    if not rows:
+        return None
+    head = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    return (
+        "<table id='neighbour-summary-table'>"
+        f"<thead><tr>{head}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
 def _replica_table(summary: dict, systems: list[str], phases: list[Phase], system_meta: dict[str, dict[str, str]]) -> str:
     headers = [
         "System",
@@ -402,6 +467,17 @@ def _build_html(
         [{"label": label, "primary": primary, "secondary": secondary} for label, primary, secondary in TIMELINE_PRESETS]
     )
     outliers = _timeline_outliers(timeline_data, systems, phases)
+    neighbour_table = _neighbour_table(summary, systems, phases, system_meta)
+    neighbour_section = (
+        "<section class='panel' id='neighbour-summary'>"
+        "<h2>Postgres Neighbours</h2>"
+        "<div class='card-sub'>Unrelated pgbench traffic and logical replication "
+        "on the same server, per phase. Catalog and WAL figures are "
+        "cluster-wide.</div>"
+        f"{neighbour_table}</section>"
+        if neighbour_table
+        else ""
+    )
     summary_cards = []
     for system in systems:
         phase_map = summary["systems"].get(system, {}).get("phases", {})
@@ -848,6 +924,7 @@ init();
         {_phase_table(summary, systems, phases, system_meta)}
       </section>
 
+      {neighbour_section}
       <section class="panel" id="replica-summary">
         <h2>Per-replica Summary</h2>
         <div class="card-sub">Replica-scoped adapter metrics for presented phases, excluding warmup. This is the primary view for multi-replica load distribution.</div>
