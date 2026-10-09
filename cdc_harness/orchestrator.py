@@ -289,7 +289,7 @@ def ensure_postgres(compose: bool) -> None:
     log("starting postgres (docker compose + cdc overlay)…")
     subprocess.run(
         ["docker", "compose", "-f", "docker-compose.yml",
-         "-f", "docker-compose.cdc.yml", "up", "-d", "--wait", "postgres"],
+         "-f", "docker-compose.cdc.yml", "up", "-d", "--wait", "--force-recreate", "--renew-anon-volumes", "postgres"],
         cwd=REPO_ROOT, check=True,
     )
 

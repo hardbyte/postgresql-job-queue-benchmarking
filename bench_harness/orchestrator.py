@@ -130,7 +130,7 @@ def _compose_prefix(engine: str) -> list[str]:
 def start_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
     prefix = _compose_prefix(engine)
     _run_cmd(
-        [*prefix, "up", "-d", "--wait"],
+        [*prefix, "up", "-d", "--wait", "--force-recreate", "--renew-anon-volumes"],
         cwd=SCRIPT_DIR,
         env=_compose_env(pg_image),
     )
