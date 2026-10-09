@@ -388,7 +388,8 @@ def _launch_one_replica(
             target_rate = int(_pacer_setting("PRODUCER_RATE", "0"))
         except ValueError:
             target_rate = 0
-        if target_rate > 0 and proc.stdin is not None:
+        rate_control_file = instance_overrides.get("PRODUCER_RATE_CONTROL_FILE_HOST")
+        if (target_rate > 0 or rate_control_file) and proc.stdin is not None:
             try:
                 batch_max = int(_pacer_setting("PRODUCER_BATCH_MAX", "128"))
             except ValueError:
@@ -403,6 +404,7 @@ def _launch_one_replica(
                     target_rate=target_rate,
                     batch_max=batch_max,
                     batch_ms=batch_ms,
+                    rate_control_file=rate_control_file,
                 ),
                 stop_event=stop_event,
                 log_prefix=f"-{system}-{instance_id}",
