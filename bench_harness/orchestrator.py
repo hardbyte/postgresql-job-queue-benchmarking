@@ -36,6 +36,7 @@ from .adapters import (
     AdapterEntry,
     AdapterManifest,
     pg_url,
+    remove_adapter_containers,
 )
 from .metrics import MetricsDaemon, PollTargets, parse_adapter_record
 from .phases import (
@@ -921,6 +922,7 @@ def drive(
     run_dir = _new_run_dir(scenario, engine)
     run_id = run_dir.name
     print(f"[harness] run_id = {run_id}", file=sys.stderr)
+    remove_adapter_containers()
     raw_csv = run_dir / "raw.csv"
     writer = RawCsvWriter(raw_csv)
     out_queue: "queue.Queue[Sample]" = queue.Queue()
@@ -1039,6 +1041,7 @@ def drive(
         drain_stop.set()
         drain_thread.join(timeout=10)
         writer.close()
+        remove_adapter_containers()
         stop_postgres(pg_image, engine)
 
     # Final post-processing outputs. Recompute against the full

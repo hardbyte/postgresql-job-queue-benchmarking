@@ -57,6 +57,16 @@ class ReplicaState(str, enum.Enum):
     CRASHED = "crashed"
 
 
+def _docker_container_name(proc: "subprocess.Popen | None") -> str | None:
+    args = getattr(proc, "args", None)
+    if not isinstance(args, (list, tuple)) or list(args[:2]) != ["docker", "run"]:
+        return None
+    for flag, value in zip(args, args[1:]):
+        if flag == "--name":
+            return str(value)
+    return None
+
+
 @dataclass
 class ReplicaSlot:
     """One instance slot. Tracks handle + intended state.
@@ -330,6 +340,15 @@ class ReplicaPool:
                 # Already gone between our poll() check and the signal —
                 # not a fault, just racy teardown.
                 pass
+        container = _docker_container_name(proc)
+        if container is not None and signal_type == _signal.SIGKILL:
+            # The docker CLI cannot proxy SIGKILL, so the container would keep
+            # running (and consuming jobs) after its client dies.
+            subprocess.run(
+                ["docker", "kill", "--signal=SIGKILL", container],
+                capture_output=True,
+                timeout=30,
+            )
 
     def _reap_slot(
         self,
