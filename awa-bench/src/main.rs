@@ -17,6 +17,7 @@
 //! before measuring.
 
 mod long_horizon;
+mod scenario_controls;
 
 use async_trait::async_trait;
 use awa_macros::JobArgs;

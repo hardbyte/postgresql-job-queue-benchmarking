@@ -82,6 +82,177 @@ function readProducerRate(defaultValue) {
   }
 }
 
+// ── Scenario controls (CONTRIBUTING_ADAPTERS.md "Scenario controls") ──
+// Default-off: JOB_FAILURE_CONTROL_FILE tags jobs as transient/poison
+// failures; SCHEDULE_CONTROL_FILE asks instance 0 to enqueue a scheduled
+// herd. Untagged jobs keep their existing payload and code path.
+
+function readJson(path) {
+  try {
+    const value = JSON.parse(require("node:fs").readFileSync(path, "utf8"));
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function maxAttemptsFromEnv() {
+  const value = Number.parseInt(process.env.JOB_MAX_ATTEMPTS || "", 10);
+  return Number.isFinite(value) ? Math.max(1, value) : null;
+}
+
+function failureTag(plan, seq) {
+  if (!plan || Object.keys(plan).length === 0) {
+    return {};
+  }
+  const poisonCut = Math.round(Number(plan.poison_pct || 0) * 100);
+  const transientCut = poisonCut + Math.round(Number(plan.transient_pct || 0) * 100);
+  const bucket = ((seq % 10000) * 7919) % 10000;
+  if (bucket < poisonCut) {
+    return { fail: "poison" };
+  }
+  if (bucket < transientCut) {
+    return { fail: "transient", fail_attempts: Number(plan.transient_failures || 1) };
+  }
+  return {};
+}
+
+// null = succeed, "retry" = fail and let pg-boss retry, "exhausted" = fail
+// on the job's last attempt.
+function failureOutcome(data, attempt, maxAttempts) {
+  const failing =
+    data.fail === "poison" ||
+    (data.fail === "transient" && attempt <= Number(data.fail_attempts || 1));
+  if (!failing) {
+    return null;
+  }
+  return maxAttempts !== null && attempt >= maxAttempts ? "exhausted" : "retry";
+}
+
+function isTagged(data) {
+  return Boolean(data.fail) || data.run_at_ms !== undefined;
+}
+
+function* herdBatches(command, maxBatch = 500) {
+  const count = Number(command.count);
+  const runAtMs = Number(command.run_at_ms);
+  const spreadMs = Number(command.spread_ms || 0);
+  const batch = spreadMs <= 0 ? maxBatch : Math.max(1, Math.min(maxBatch, Math.floor((count * 100) / spreadMs)));
+  for (let done = 0; done < count; ) {
+    const size = Math.min(batch, count - done);
+    const offset = spreadMs > 0 ? Math.floor((spreadMs * done) / count) : 0;
+    yield [size, runAtMs + offset];
+    done += size;
+  }
+}
+
+class ScenarioControls {
+  constructor() {
+    this.failurePath = process.env.JOB_FAILURE_CONTROL_FILE || null;
+    this.schedulePath = process.env.SCHEDULE_CONTROL_FILE || null;
+    this.maxAttempts = maxAttemptsFromEnv();
+    this.plan = {};
+    this.planReadAt = -Infinity;
+    this.lastScheduleId = null;
+    this.failedAttempts = 0;
+    this.retriedCompletions = 0;
+    this.poisonExhausted = 0;
+    this.scheduledCompletions = 0;
+    this.scheduleStarted = 0;
+    this.scheduleEnqueued = 0;
+    this.scheduleEarly = 0;
+    this.schedulePreloadS = null;
+    this.lateness = [];
+    this.lastRates = {};
+  }
+
+  tag(seq) {
+    if (!this.failurePath) {
+      return {};
+    }
+    const now = nowMonoMs();
+    if (now - this.planReadAt >= 1000) {
+      this.plan = readJson(this.failurePath);
+      this.planReadAt = now;
+    }
+    return failureTag(this.plan, seq);
+  }
+
+  pollSchedule() {
+    if (!this.schedulePath) {
+      return null;
+    }
+    const command = readJson(this.schedulePath);
+    if (!command.id || command.id === this.lastScheduleId) {
+      return null;
+    }
+    this.lastScheduleId = command.id;
+    return command;
+  }
+
+  onStart(data) {
+    if (data.run_at_ms === undefined) {
+      return;
+    }
+    const latenessMs = Date.now() - Number(data.run_at_ms);
+    if (latenessMs < 0) {
+      this.scheduleEarly += 1;
+    }
+    this.lateness.push(Math.max(0, latenessMs));
+    this.scheduleStarted += 1;
+  }
+
+  recordFailure(data, outcome) {
+    this.failedAttempts += 1;
+    if (outcome === "exhausted" && data.fail === "poison") {
+      this.poisonExhausted += 1;
+    }
+  }
+
+  onComplete(data) {
+    if (data.fail === "transient") {
+      this.retriedCompletions += 1;
+    }
+    if (data.run_at_ms !== undefined) {
+      this.scheduledCompletions += 1;
+    }
+  }
+
+  rate(name, value, dt) {
+    const rate = (value - (this.lastRates[name] || 0)) / dt;
+    this.lastRates[name] = value;
+    return rate;
+  }
+
+  metrics(dt, windowS) {
+    const out = [];
+    if (this.failurePath) {
+      out.push(["injected_failure_rate", this.rate("failed", this.failedAttempts, dt), windowS]);
+      out.push(["retried_completion_rate", this.rate("retried", this.retriedCompletions, dt), windowS]);
+      out.push(["poison_exhausted_rate", this.rate("exhausted", this.poisonExhausted, dt), windowS]);
+    }
+    if (this.schedulePath && (this.scheduleStarted || this.scheduleEnqueued)) {
+      out.push(["scheduled_completion_rate", this.rate("scheduled", this.scheduledCompletions, dt), windowS]);
+      if (this.lateness.length) {
+        this.lateness.sort((a, b) => a - b);
+        const values = this.lateness;
+        const q = (p) => values[Math.min(values.length - 1, Math.max(0, Math.round(p * (values.length - 1))))];
+        out.push(["schedule_lateness_p50_ms", q(0.5), 0]);
+        out.push(["schedule_lateness_p95_ms", q(0.95), 0]);
+        out.push(["schedule_lateness_p99_ms", q(0.99), 0]);
+        out.push(["schedule_lateness_max_ms", values[values.length - 1], 0]);
+      }
+      out.push(["schedule_started_total", this.scheduleStarted, 0]);
+      out.push(["schedule_enqueued_total", this.scheduleEnqueued, 0]);
+      out.push(["schedule_early_total", this.scheduleEarly, 0]);
+      if (this.schedulePreloadS !== null) {
+        out.push(["schedule_preload_s", this.schedulePreloadS, 0]);
+      }
+    }
+    return out;
+  }
+}
+
 class TimedWindow {
   constructor(maxlen = 32768) {
     this.maxlen = maxlen;
@@ -185,6 +356,9 @@ async function scenarioLongHorizon() {
     started_at: nowIso(),
   });
 
+  const controls = new ScenarioControls();
+  // JOB_MAX_ATTEMPTS counts total attempts; pg-boss retryLimit counts retries.
+  const retryOptions = controls.maxAttempts !== null ? { retryLimit: controls.maxAttempts - 1 } : {};
   const payloadPadding = "x".repeat(Math.max(0, payloadBytes - 96));
   const producerLatencies = new TimedWindow();
   const subscriberLatencies = new TimedWindow();
@@ -211,18 +385,62 @@ async function scenarioLongHorizon() {
   process.on("SIGINT", beginShutdown);
   process.on("SIGTERM", beginShutdown);
 
+  const workOptions = {
+    pollingIntervalSeconds: 0.5,
+    localConcurrency: workerCount,
+    batchSize: subscriberBatchSize,
+  };
+  // Failure injection settles each job of a batch individually via
+  // pg-boss's perJobResults; without it the batch handler is unchanged.
   const workId = await boss.work(
     QUEUE_NAME,
-    {
-      pollingIntervalSeconds: 0.5,
-      localConcurrency: workerCount,
-      batchSize: subscriberBatchSize,
-    },
-    async (jobs) => {
+    controls.failurePath ? { ...workOptions, perJobResults: true } : workOptions,
+    controls.failurePath ? async (jobs) => {
       const startedAtMs = Date.now();
+      const results = [];
+      const succeeded = [];
       for (const job of jobs) {
         const data = job.data || {};
-        if (typeof data.enqueued_at_ms === "number") {
+        if (isTagged(data)) {
+          controls.onStart(data);
+          const outcome = failureOutcome(data, job.retryCount + 1, controls.maxAttempts);
+          if (outcome !== null) {
+            controls.recordFailure(data, outcome);
+            results.push({ id: job.id, status: "failed", output: { message: `injected ${data.fail} failure` } });
+            continue;
+          }
+        } else if (typeof data.enqueued_at_ms === "number") {
+          subscriberLatencies.push(nowMonoMs(), startedAtMs - data.enqueued_at_ms);
+        }
+        succeeded.push(job);
+      }
+      if (workMs > 0) {
+        await sleep(workMs * succeeded.length);
+      }
+      const completedAtMs = Date.now();
+      for (const job of succeeded) {
+        const data = job.data || {};
+        results.push({ id: job.id, status: "completed" });
+        if (isTagged(data)) {
+          controls.onComplete(data);
+          if (data.run_at_ms !== undefined) {
+            continue;
+          }
+        } else if (typeof data.enqueued_at_ms === "number") {
+          endToEndLatencies.push(nowMonoMs(), completedAtMs - data.enqueued_at_ms);
+        }
+        completed += 1;
+      }
+      return results;
+    } : async (jobs) => {
+      const startedAtMs = Date.now();
+      let herdJobs = 0;
+      for (const job of jobs) {
+        const data = job.data || {};
+        if (data.run_at_ms !== undefined) {
+          controls.onStart(data);
+          herdJobs += 1;
+        } else if (typeof data.enqueued_at_ms === "number") {
           subscriberLatencies.push(nowMonoMs(), startedAtMs - data.enqueued_at_ms);
         }
       }
@@ -232,11 +450,13 @@ async function scenarioLongHorizon() {
       const completedAtMs = Date.now();
       for (const job of jobs) {
         const data = job.data || {};
-        if (typeof data.enqueued_at_ms === "number") {
+        if (data.run_at_ms !== undefined) {
+          controls.onComplete(data);
+        } else if (typeof data.enqueued_at_ms === "number") {
           endToEndLatencies.push(nowMonoMs(), completedAtMs - data.enqueued_at_ms);
         }
       }
-      completed += jobs.length;
+      completed += jobs.length - herdJobs;
     }
   );
 
@@ -284,7 +504,9 @@ async function scenarioLongHorizon() {
               seq,
               enqueued_at_ms: Date.now(),
               payload_padding: payloadPadding,
+              ...controls.tag(seq),
             },
+            ...retryOptions,
           });
         }
 
@@ -313,6 +535,54 @@ async function scenarioLongHorizon() {
         }
         throw err;
       }
+    }
+  })();
+
+  const herdTask = (async () => {
+    if (!controls.schedulePath || instanceId() !== 0) {
+      return;
+    }
+    while (!shuttingDown) {
+      const command = controls.pollSchedule();
+      if (!command) {
+        await sleep(1000);
+        continue;
+      }
+      const started = nowMonoMs();
+      controls.schedulePreloadS = null;
+      let seqOffset = 0;
+      for (const [size, runAtMs] of herdBatches(command)) {
+        const enqueuedAtMs = Date.now();
+        const jobs = [];
+        for (let i = 0; i < size; i += 1) {
+          jobs.push({
+            data: {
+              seq: seqOffset + i,
+              enqueued_at_ms: enqueuedAtMs,
+              payload_padding: payloadPadding,
+              run_at_ms: runAtMs,
+            },
+            startAfter: new Date(runAtMs),
+            ...retryOptions,
+          });
+        }
+        while (!shuttingDown) {
+          try {
+            await boss.insert(QUEUE_NAME, jobs);
+            break;
+          } catch (err) {
+            console.error("[pgboss] herd insert failed", err.message || err);
+            await sleep(200);
+          }
+        }
+        if (shuttingDown) {
+          return;
+        }
+        seqOffset += size;
+        controls.scheduleEnqueued += size;
+      }
+      controls.schedulePreloadS = (nowMonoMs() - started) / 1000;
+      console.error(`[pgboss] herd ${command.id}: ${seqOffset} jobs enqueued in ${controls.schedulePreloadS.toFixed(1)}s`);
     }
   })();
 
@@ -375,6 +645,7 @@ async function scenarioLongHorizon() {
         ["completion_rate", completionRate, sampleEveryS],
         ["queue_depth", queueDepth, 0],
         ["producer_target_rate", currentProducerTargetRate, 0],
+        ...controls.metrics(Math.max(sampleEveryS, 1), sampleEveryS),
       ];
 
       for (const [metric, value, windowS] of metrics) {
@@ -406,7 +677,7 @@ async function scenarioLongHorizon() {
 
   await shutdownPromise;
   await boss.offWork(QUEUE_NAME, { id: workId, wait: true }).catch(() => {});
-  await Promise.allSettled([producerTask, depthTask, samplerTask]);
+  await Promise.allSettled([producerTask, depthTask, samplerTask, herdTask]);
   await boss.stop({ graceful: true }).catch(() => {});
 }
 

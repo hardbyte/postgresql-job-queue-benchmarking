@@ -1,7 +1,7 @@
 FROM golang:1.27-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /app
-COPY go.mod main.go ./
+COPY go.mod *.go ./
 RUN go mod tidy && go mod download
 RUN CGO_ENABLED=0 go build -o /river-bench .
 
