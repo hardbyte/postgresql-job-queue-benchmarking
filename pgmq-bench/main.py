@@ -324,7 +324,14 @@ async def scenario_long_horizon() -> None:
                     continue
             else:
                 credit = max(0.0, (loop.time() - next_t) * target_rate + 1.0)
-                batch_count = max(1, min(producer_batch_max, int(credit)))
+                if credit < 1.0:
+                    # Not due yet: at low rates, forcing a job per tick would
+                    # offer more than the target rate.
+                    await asyncio.sleep(
+                        min(producer_batch_ms / 1000.0, max(0.0, next_t - loop.time()))
+                    )
+                    continue
+                batch_count = min(producer_batch_max, int(credit))
 
             batch = []
             for _ in range(batch_count):

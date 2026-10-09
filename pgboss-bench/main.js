@@ -349,7 +349,13 @@ async function scenarioLongHorizon() {
           }
           const now = nowMonoMs();
           const credit = Math.max(0, ((now - nextAt) * targetRate) / 1000 + 1);
-          batchCount = Math.max(1, Math.min(producerBatchMax, Math.floor(credit)));
+          if (credit < 1) {
+            // Not due yet: at low rates, forcing a job per tick would offer
+            // more than the target rate.
+            await sleep(Math.min(producerBatchMs, Math.max(0, nextAt - now)));
+            continue;
+          }
+          batchCount = Math.min(producerBatchMax, Math.floor(credit));
         }
 
         const jobs = [];
