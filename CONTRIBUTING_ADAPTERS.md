@@ -95,6 +95,16 @@ The harness sets these before launch. Your adapter reads them:
 | `JOB_PAYLOAD_BYTES` | rough payload size (default 256) |
 | `JOB_WORK_MS` | synthetic job work time (default 1 ms) |
 | `SAMPLE_EVERY_S` | emission cadence in seconds (default 5) |
+| `PRODUCER_RATE_CONTROL_FILE` | file holding the current per-replica target rate; re-read every producer tick and overrides `PRODUCER_RATE`. A value of `0` must stop the producer (no catch-up burst when it rises again). Harness-paced adapters discard `ENQUEUE` tokens while it reads `0`. |
+
+Optional knobs. Unset means the legacy behaviour, unchanged:
+
+| Var | Meaning |
+|---|---|
+| `CONSUMER_GATE_FILE` | Don't start consuming until this file reads `open` (poll it every ~200 ms). The producer, depth observer and sampler run as normal. Set only for runs with a `preload` phase; one-shot. Start workers late, or start them paused and resume, whichever the library supports. |
+| `JOB_PAYLOAD_KIND` | `random`: pad payloads with incompressible base64 noise (generated once at startup) so total size ≈ `JOB_PAYLOAD_BYTES`. |
+| `BENCH_QUEUE_COUNT` | Spread jobs across N logical queues (queue 0 may keep the legacy name) and consume all of them, splitting `WORKER_COUNT` evenly (min 1 per queue). Use the library's native multi-queue model. Keep the depth observer to one statement per tick where possible. |
+| `BENCH_DEPTH_ROTATE` | `1` (set with `--queue-count` > 1): an observer that can only probe one queue per query refreshes one queue per tick and reports the sum of the last known values. |
 
 ### JSONL out
 
