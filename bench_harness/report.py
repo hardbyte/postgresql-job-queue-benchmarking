@@ -364,7 +364,8 @@ def _neighbour_table(
                 _fmt(retained_peak / mb if retained_peak is not None else None, 1),
                 _fmt(logical.get("catalog_xmin_age_peak"), 0),
                 _fmt(catalog.get("dead_tup_peak"), 0),
-                _fmt(block.get("wal_bytes_per_completed_job"), 0),
+                # Cluster WAL includes the neighbour's own writes.
+                _fmt(None if neighbour else block.get("wal_bytes_per_completed_job"), 0),
             ]
             rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
     if not rows:
