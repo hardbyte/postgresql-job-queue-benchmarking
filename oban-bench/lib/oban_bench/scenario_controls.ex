@@ -21,7 +21,7 @@ defmodule ObanBench.ScenarioControls do
     end
 
     :ets.insert(@state, {:preload_ms, -1})
-    :ets.insert(@state, {:plan, %{}, -1_000_000})
+    :ets.insert(@state, {:plan, %{}, nil})
     :ets.insert(@state, {:last_herd_id, nil})
     :ok
   end
@@ -59,7 +59,7 @@ defmodule ObanBench.ScenarioControls do
     now = System.monotonic_time(:millisecond)
 
     case :ets.lookup(@state, :plan) do
-      [{:plan, plan, read_at}] when now - read_at < 1000 ->
+      [{:plan, plan, read_at}] when is_integer(read_at) and now - read_at < 1000 ->
         plan
 
       _ ->

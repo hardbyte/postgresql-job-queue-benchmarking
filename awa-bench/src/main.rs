@@ -593,11 +593,18 @@ async fn scenario_worker_only() {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
+    let mut env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    if std::env::var_os("JOB_FAILURE_CONTROL_FILE").is_some() {
+        // Injected failures would otherwise log a WARN line per attempt.
+        env_filter = env_filter.add_directive(
+            "awa_worker::executor=error"
+                .parse()
+                .expect("valid tracing directive"),
+        );
+    }
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
+        .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
         .init();
     let _meter_provider = maybe_install_otlp_metrics();
