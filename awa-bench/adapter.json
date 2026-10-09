@@ -16,5 +16,10 @@
     "awa.dlq_entries"
   ],
   "event_indexes": [],
-  "extensions": []
+  "extensions": [],
+  "state_queries": {
+    "scheduled": "SELECT count(*) FROM awa.deferred_jobs WHERE state = 'scheduled'",
+    "retryable": "SELECT count(*) FROM awa.deferred_jobs WHERE state = 'retryable'",
+    "dead": "SELECT (SELECT count(*) FROM awa.done_entries WHERE state = 'failed') + (SELECT count(*) FROM awa.dlq_entries)"
+  }
 }

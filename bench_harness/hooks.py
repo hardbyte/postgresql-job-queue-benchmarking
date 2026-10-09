@@ -10,6 +10,7 @@ forked into threads that block on an event the exit hook signals.
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -524,3 +525,97 @@ def exit_repeated_kill(runtime: PhaseRuntime) -> None:
         pool.start_worker(instance)
     except Exception:
         pass
+
+
+# ─── control-file phases (retry-storm, schedule-preload) ────────────────
+#
+# Both phase types talk to adapters through JSON control files that the
+# orchestrator creates (and forwards as JOB_FAILURE_CONTROL_FILE /
+# SCHEDULE_CONTROL_FILE) only when the phase list uses them. Writes go
+# through a rename so an adapter polling the file never reads a partial
+# document. An empty object means "nothing to do".
+
+
+def write_control_json(path: str | Path, payload: dict[str, Any]) -> None:
+    target = Path(path)
+    tmp = target.with_name(f".{target.name}.tmp")
+    tmp.write_text(json.dumps(payload, sort_keys=True))
+    os.replace(tmp, target)
+
+
+def _control_file(runtime: PhaseRuntime, key: str) -> str:
+    path = runtime.state.get(key)
+    if not path:
+        raise RuntimeError(
+            f"{runtime.phase.type.value} requires state[{key!r}]. The "
+            "orchestrator creates the control file when the phase list "
+            "contains this phase type."
+        )
+    return str(path)
+
+
+def _float_param(runtime: PhaseRuntime, name: str, default: float) -> float:
+    raw = runtime.phase.param(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"phase {runtime.phase.label!r}: param {name!r} must be a number, "
+            f"got {raw!r}"
+        ) from exc
+
+
+def retry_storm_plan(runtime: PhaseRuntime) -> dict[str, Any]:
+    transient_pct = _float_param(runtime, "transient_pct", 30.0)
+    poison_pct = _float_param(runtime, "poison_pct", 1.0)
+    if transient_pct < 0 or poison_pct < 0 or transient_pct + poison_pct > 100:
+        raise ValueError(
+            f"phase {runtime.phase.label!r}: transient_pct + poison_pct must "
+            "be within [0, 100]"
+        )
+    return {
+        "transient_pct": transient_pct,
+        "poison_pct": poison_pct,
+        "transient_failures": runtime.phase.int_param("transient_failures", 1),
+    }
+
+
+def enter_retry_storm(runtime: PhaseRuntime) -> None:
+    path = _control_file(runtime, "job_failure_control_file")
+    write_control_json(path, retry_storm_plan(runtime))
+
+
+def exit_retry_storm(runtime: PhaseRuntime) -> None:
+    path = runtime.state.get("job_failure_control_file")
+    if path:
+        write_control_json(str(path), {})
+
+
+def schedule_preload_command(
+    runtime: PhaseRuntime, *, now_s: float | None = None
+) -> dict[str, Any]:
+    from .phases import parse_duration
+
+    now_s = time.time() if now_s is None else now_s
+    count = runtime.phase.int_param("count", 10_000)
+    if count <= 0:
+        raise ValueError(f"phase {runtime.phase.label!r}: count must be positive")
+    delay_raw = runtime.phase.param("delay")
+    delay_s = (
+        runtime.phase.duration_s if delay_raw is None else parse_duration(delay_raw)
+    )
+    spread_s = parse_duration(runtime.phase.param("spread", "0") or "0")
+    now_ms = int(now_s * 1000)
+    return {
+        "id": f"{runtime.phase.label}-{now_ms}",
+        "count": count,
+        "run_at_ms": now_ms + delay_s * 1000,
+        "spread_ms": spread_s * 1000,
+    }
+
+
+def enter_schedule_preload(runtime: PhaseRuntime) -> None:
+    path = _control_file(runtime, "schedule_control_file")
+    write_control_json(path, schedule_preload_command(runtime))

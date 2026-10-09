@@ -13,5 +13,9 @@
     "pgque.config"
   ],
   "event_indexes": [],
-  "extensions": []
+  "extensions": [],
+  "state_queries": {
+    "retryable": "SELECT count(*) FROM pgque.retry_queue",
+    "dead": "SELECT count(*) FROM pgque.dead_letter"
+  }
 }

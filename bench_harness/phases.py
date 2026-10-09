@@ -34,6 +34,9 @@ class PhaseType(str, Enum):
     PG_BACKEND_KILL = "pg-backend-kill"
     POOL_EXHAUSTION = "pool-exhaustion"
     REPEATED_KILL = "repeated-kill"
+    # Workload-shape phases driven through adapter control files.
+    RETRY_STORM = "retry-storm"
+    SCHEDULE_PRELOAD = "schedule-preload"
     # CDC-suite phase types (docs/cdc-harness-design.md §9). Consumer-level
     # chaos is applied through the receiver's control API, not the replica
     # pool — the hooks live in cdc_harness, not bench_harness.hooks.
@@ -63,6 +66,8 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.PG_BACKEND_KILL:  ("#D86A3A", 0.30),
     PhaseType.POOL_EXHAUSTION:  ("#C8884A", 0.30),
     PhaseType.REPEATED_KILL:    ("#B04040", 0.35),
+    PhaseType.RETRY_STORM:      ("#C86A8A", 0.30),
+    PhaseType.SCHEDULE_PRELOAD: ("#6CAFAF", 0.25),
     PhaseType.CONSUMER_DEAD:    ("#C04A4A", 0.35),
     PhaseType.CONSUMER_SLOW:    ("#D8A03A", 0.30),
     PhaseType.SINK_OUTAGE:      ("#A03030", 0.40),
@@ -88,6 +93,8 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.PG_BACKEND_KILL:  True,
     PhaseType.POOL_EXHAUSTION:  True,
     PhaseType.REPEATED_KILL:    True,
+    PhaseType.RETRY_STORM:      True,
+    PhaseType.SCHEDULE_PRELOAD: True,
     PhaseType.CONSUMER_DEAD:    True,
     PhaseType.CONSUMER_SLOW:    True,
     PhaseType.SINK_OUTAGE:      True,
@@ -363,6 +370,36 @@ SCENARIOS: dict[str, list[str]] = {
         "exhaustion=pool-exhaustion(idle_conns=300):60s",
         "recovery=clean:60s",
     ],
+    # Scheduled-job thundering herd. The preload phase enqueues `count`
+    # jobs all due at the end of the phase (delay defaults to the phase
+    # duration) while the steady immediate stream keeps flowing; `due`
+    # observes the herd coming due and draining. Adapters report
+    # schedule_lateness_* for the herd; claim_* stays immediate-only.
+    "scheduled_burst": [
+        "warmup=warmup:5m",
+        "baseline=clean:5m",
+        "preload=schedule-preload(count=100000):5m",
+        "due=clean:10m",
+        "after=clean:5m",
+    ],
+    # Steady promotion accuracy: the herd is spread uniformly over a
+    # window instead of sharing one instant.
+    "scheduled_spread": [
+        "warmup=warmup:5m",
+        "preload=schedule-preload(count=60000,delay=2m,spread=10m):2m",
+        "spread=clean:10m",
+        "after=clean:5m",
+    ],
+    # Failure churn: a share of jobs fail transiently and retry with each
+    # system's own backoff, a small share are poison (always fail until
+    # max attempts), then injection stops and the retry backlog drains.
+    # Runs with JOB_MAX_ATTEMPTS=5 unless the environment overrides it.
+    "retry_storm": [
+        "warmup=warmup:5m",
+        "baseline=clean:10m",
+        "storm=retry-storm(transient_pct=30,poison_pct=1):20m",
+        "recovery=recovery:20m",
+    ],
 }
 
 
@@ -484,6 +521,11 @@ def default_registry() -> HookRegistry:
     registry.register(PhaseType.REPEATED_KILL,
                       enter=hooks.enter_repeated_kill,
                       exit=hooks.exit_repeated_kill)
+    registry.register(PhaseType.RETRY_STORM,
+                      enter=hooks.enter_retry_storm,
+                      exit=hooks.exit_retry_storm)
+    registry.register(PhaseType.SCHEDULE_PRELOAD,
+                      enter=hooks.enter_schedule_preload)
     # warmup, clean, recovery — no extra runtime action; the adapter's
     # steady workload carries the load.
     return registry

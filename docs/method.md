@@ -27,6 +27,9 @@ to `bench.py run`, or compose your own with
 | `chaos_repeated_kills` | Periodic SIGKILL+restart of replica 0 across a sustained chaos phase. |
 | `chaos_pg_backend_kill` | Steady stream of `pg_terminate_backend` against the SUT's connections. |
 | `chaos_pool_exhaustion` | Hold 300 idle connections to pressure the SUT's pool sizing. |
+| `scheduled_burst` | Baseline → preload a herd of 100k jobs all due at one instant (the end of the preload phase) while the immediate stream keeps flowing → the herd comes due and drains → tail. Measures scheduling lateness, herd drain time, the herd's effect on immediate-job latency, and the promotion work (deferred-table size/bloat, WAL). |
+| `scheduled_spread` | Like `scheduled_burst` but the 60k herd is spread uniformly over a 10-minute window: steady promotion accuracy rather than a single spike. |
+| `retry_storm` | Baseline → 20 min where 30% of new jobs fail once (transient) and 1% always fail (poison) → recovery. Retries use each system's own backoff; runs with `JOB_MAX_ATTEMPTS=5` unless overridden. Measures good-job throughput and latency under failure churn, retry/dead counts, table growth and bloat, and how long the retry backlog takes to drain. |
 | `mixed_queue` | Multi-queue run; pair with `BENCH_QUEUE_COUNT=N` to spawn N parallel queues. Producer round-robins inserts; consumer side registers N queue subscriptions. Tests per-queue isolation and engine-side per-queue overhead. |
 
 ## Awa tuning knobs
@@ -56,7 +59,9 @@ awa-macros = { path = "/path/to/awa/awa-macros" }
 The patch rewrites `awa-bench/Cargo.lock`; restore it before committing.
 
 Set `BENCH_PG_PORT` (default `15555`) to run a second harness against its own
-Postgres container, e.g. from another worktree.
+Postgres container, e.g. from another worktree. Set `BENCH_IMAGE_TAG` to build
+and run adapter images as `<adapter>-bench:<tag>` instead of the shared
+`latest`, so concurrent worktrees don't swap images under each other.
 
 ## Adapter version notes
 
@@ -88,6 +93,54 @@ aren't visible from the version number alone:
 | `pg-backend-kill(rate=N)` | Opens an admin connection that runs `pg_terminate_backend(pid)` against the SUT's database `N` times per second. |
 | `pool-exhaustion(idle_conns=N)` | Holds `N` idle connections against the SUT's database for the duration; releases them on phase end. |
 | `repeated-kill(instance=I,period=Ns)` | Periodic SIGKILL + auto-restart of replica `I` every `period`. Composes `kill-worker` / `start-worker`. |
+| `retry-storm(transient_pct=30,poison_pct=1,transient_failures=1)` | Turns failure injection on for jobs enqueued during the phase: `transient_pct`% fail their first `transient_failures` attempts, `poison_pct`% fail every attempt. Off again at phase exit. |
+| `schedule-preload(count=N,delay=D,spread=S)` | Instance 0 enqueues `N` jobs scheduled for phase start + `D` (default: the phase duration), spread uniformly over `S` (default 0). The steady immediate stream keeps running. |
+
+## Scheduled jobs and failure churn
+
+`schedule-preload` and `retry-storm` drive the adapters through JSON control
+files (contract in `CONTRIBUTING_ADAPTERS.md`, "Scenario controls"). The
+harness only creates those files, and only polls each adapter's
+`state_queries` (job counts in `scheduled` / `retryable` / `dead` states,
+`subject_kind=job_state` in `raw.csv`), when the phase list uses these phase
+types; other scenarios are unaffected.
+
+Herd jobs carry their intended `run_at`; the worker records lateness =
+start time − `run_at`. Herd and failure-tagged jobs are excluded from the
+`claim_*` / `subscriber_*` / `end_to_end_*` windows and from
+`completion_rate`, so those keep measuring the immediate, healthy stream.
+
+`summary.json` adds, per phase:
+
+- `schedule`: cumulative herd lateness `lateness_{p50,p95,p99,max}_ms`,
+  `started` / `enqueued` / `early_starts`, `preload_s` (time to enqueue the
+  herd), `herd_complete`, and `drain_s` (lateness of the last herd job to
+  start, i.e. due instant → herd fully picked up; burst only).
+- `failure_injection`: `failed_attempts`, `retried_completions`,
+  `poison_exhausted` (adapter-observed final failing attempts), `completions`
+  and `median_good_completion_rate`.
+- `storm_recovery` (on the phase after a storm): `retry_backlog_drain_s`
+  (storm end → DB `retryable` count back to its baseline) and
+  `latency_recovery_s` (storm end → `claim_p99_ms` within 25% of baseline).
+- `peak_table_size_mb` (summed over event tables) next to the existing
+  dead-tuple and WAL figures; `job_state_count@<state>` under `metrics`.
+
+How each system implements the two workloads:
+
+| System | Scheduled herd | Retry backoff (defaults) | Exhausted jobs |
+|---|---|---|---|
+| awa | `InsertOpts.run_at` | 2^attempt s (+≤25% jitter) | `failed` (DLQ when `BENCH_DLQ_ENABLED=1`) |
+| river | `InsertOpts.ScheduledAt` (scheduler promotes, ~5 s cadence) | attempt^4 s + jitter | `discarded` |
+| oban | `scheduled_at` (stager, 1 s) | 2^attempt + 15 s + jitter | `discarded` |
+| pg-boss | `startAfter` | `retryDelay` 0 (immediate) | `failed` |
+| procrastinate | `schedule_at` | `RetryStrategy` with no wait (immediate) | `failed` |
+| pgmq | `send_batch(..., delay timestamptz)` | visibility timeout (`VISIBILITY_TIMEOUT_S`, 30 s) | adapter moves to a `_dlq` queue at the attempt cap |
+| pgque | **unsupported** (no delayed send; reported as `scheduled_jobs: unsupported` in the descriptor) | `nack` default `retry_after` 60 s; adapter runs `maint_retry_events()` every 1 s | `dead_letter` |
+| absurd | no delayed spawn; a durable `sleep_until` step (`scheduled_jobs: durable-sleep`), so each herd job runs once at preload to suspend | none (immediate) | `failed` |
+
+Backoff and delayed-visibility policies differ by orders of magnitude, so
+compare retry-backlog size and drain time with those defaults in mind; that
+difference is part of what the scenario measures.
 
 ## Postgres diagnostics
 

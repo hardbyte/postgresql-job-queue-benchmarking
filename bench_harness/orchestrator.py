@@ -37,6 +37,7 @@ from .adapters import (
     AdapterManifest,
     pg_url,
 )
+from .hooks import write_control_json
 from .metrics import MetricsDaemon, PollTargets, parse_adapter_record
 from .phases import (
     Phase,
@@ -63,6 +64,7 @@ from .writers import (
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 RESULTS_ROOT = SCRIPT_DIR / "results"
 COMPOSE_FILE = SCRIPT_DIR / "docker-compose.yml"
+RETRY_STORM_DEFAULT_MAX_ATTEMPTS = 5
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -718,6 +720,23 @@ def run_one_system(
     overrides["PRODUCER_RATE_CONTROL_FILE"] = str(control_file)
     overrides["PRODUCER_RATE_CONTROL_FILE_HOST"] = str(control_file)
     overrides["PRODUCER_RATE_CONTROL_FILE_CONTAINER"] = "/control/producer_rate.txt"
+    phase_types = {phase.type for phase in phases}
+    job_failure_control_file: Path | None = None
+    schedule_control_file: Path | None = None
+    if PhaseType.RETRY_STORM in phase_types:
+        job_failure_control_file = control_dir / "job_failure.json"
+        write_control_json(job_failure_control_file, {})
+        overrides["JOB_FAILURE_CONTROL_FILE"] = str(job_failure_control_file)
+        overrides["JOB_MAX_ATTEMPTS"] = os.environ.get(
+            "JOB_MAX_ATTEMPTS", str(RETRY_STORM_DEFAULT_MAX_ATTEMPTS)
+        )
+    if PhaseType.SCHEDULE_PRELOAD in phase_types:
+        schedule_control_file = control_dir / "schedule.json"
+        write_control_json(schedule_control_file, {})
+        overrides["SCHEDULE_CONTROL_FILE"] = str(schedule_control_file)
+    poll_state_queries = (
+        job_failure_control_file is not None or schedule_control_file is not None
+    )
 
     bench_start = time.time()
     # Stamp the tracker to the first phase before tailers start ingesting.
@@ -755,6 +774,7 @@ def run_one_system(
         targets=PollTargets(
             event_tables=runtime_event_tables,
             event_indexes=runtime_event_indexes,
+            state_queries=manifest.state_queries if poll_state_queries else {},
         ),
         output_queue=out_queue,
         bench_start=bench_start,
@@ -799,6 +819,12 @@ def run_one_system(
         "admin_database_url": pg_url("postgres"),
         "system_database_url": pg_url(manifest.db_name),
         "system_database_name": manifest.db_name,
+        "job_failure_control_file": (
+            str(job_failure_control_file) if job_failure_control_file else None
+        ),
+        "schedule_control_file": (
+            str(schedule_control_file) if schedule_control_file else None
+        ),
     }
     try:
         for phase in phases:
