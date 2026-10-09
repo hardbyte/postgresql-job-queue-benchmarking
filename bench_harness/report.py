@@ -334,7 +334,7 @@ def _neighbour_table(
     headers = [
         "System", "Phase", "Type", "Queue throughput/s",
         "Neighbour TPS", "Neighbour p50 ms", "Neighbour p99 ms",
-        "p99 vs baseline", "Slot lag peak MB", "Retained WAL peak MB",
+        "p99 vs baseline", "Neighbour service p99 ms", "Slot lag peak MB", "Retained WAL peak MB",
         "catalog_xmin age peak", "Catalog dead tup peak", "WAL/job bytes",
     ]
     rows: list[str] = []
@@ -359,6 +359,7 @@ def _neighbour_table(
                 _fmt(neighbour.get("latency_p50_ms"), 2),
                 _fmt(neighbour.get("latency_p99_ms"), 2),
                 _fmt(neighbour.get("latency_p99_ms_vs_baseline"), 2),
+                _fmt(neighbour.get("service_p99_ms"), 2),
                 _fmt(lag_peak / mb if lag_peak is not None else None, 2),
                 _fmt(retained_peak / mb if retained_peak is not None else None, 1),
                 _fmt(logical.get("catalog_xmin_age_peak"), 0),

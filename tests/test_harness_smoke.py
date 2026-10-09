@@ -1479,6 +1479,8 @@ def test_pgbench_log_parsing_and_stats():
     assert stats["neighbour_phase_latency_p50_ms"] == 50.0
     assert stats["neighbour_phase_latency_p99_ms"] == 99.0
     assert stats["neighbour_phase_latency_max_ms"] == 100.0
+    # Each line carries 50 µs of schedule lag.
+    assert stats["neighbour_phase_service_p99_ms"] == 98.95
 
     # Transactions span 100.0–109.9: with 5 s windows, [100,105) is whole
     # and [105,110) ends after the last transaction, so it is dropped.

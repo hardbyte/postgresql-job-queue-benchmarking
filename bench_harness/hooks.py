@@ -614,6 +614,10 @@ NEIGHBOUR_DB = "neighbour"
 class PgbenchTxn:
     end_epoch_s: float
     latency_ms: float | None  # None: failed / skipped transaction
+    # Latency minus schedule lag: time from actual start to completion.
+    # High latency with low service time means the neighbour fell behind
+    # its rate and queued; high service time means each transaction slowed.
+    service_ms: float | None = None
 
 
 def parse_pgbench_log_line(line: str) -> PgbenchTxn | None:
@@ -631,7 +635,15 @@ def parse_pgbench_log_line(line: str) -> PgbenchTxn | None:
         latency_ms: float | None = int(parts[2]) / 1000.0
     except ValueError:
         latency_ms = None
-    return PgbenchTxn(end_epoch_s=end_epoch_s, latency_ms=latency_ms)
+    service_ms = latency_ms
+    if latency_ms is not None and len(parts) >= 7:
+        try:
+            service_ms = latency_ms - int(parts[6]) / 1000.0
+        except ValueError:
+            pass
+    return PgbenchTxn(
+        end_epoch_s=end_epoch_s, latency_ms=latency_ms, service_ms=service_ms
+    )
 
 
 def _percentile(sorted_values: list[float], q: float) -> float | None:
@@ -655,6 +667,11 @@ def neighbour_phase_stats(txns: list[PgbenchTxn], duration_s: float) -> dict[str
         stats["neighbour_phase_latency_max_ms"] = latencies[-1]
         for q in (50, 95, 99):
             stats[f"neighbour_phase_latency_p{q}_ms"] = _percentile(latencies, q)  # type: ignore[assignment]
+    service = sorted(t.service_ms for t in txns if t.service_ms is not None)
+    for q in (50, 99):
+        value = _percentile(service, q)
+        if value is not None:
+            stats[f"neighbour_phase_service_p{q}_ms"] = value
     return stats
 
 
