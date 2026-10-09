@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import uuid
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -356,6 +357,25 @@ def launch_awa_canonical(manifest: AdapterManifest, overrides: dict[str, str]) -
     return launch_awa(manifest, merged)
 
 
+ADAPTER_CONTAINER_LABEL = "bench.pg_port"
+
+
+def remove_adapter_containers() -> None:
+    """Remove adapter containers launched against this harness's Postgres.
+
+    SIGKILL to a `docker run` client leaves its container running, still
+    connected to the bench database; scoping by port keeps parallel harnesses
+    on other ports untouched."""
+    listed = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", f"label={ADAPTER_CONTAINER_LABEL}={PG_PORT}"],
+        capture_output=True,
+        text=True,
+    )
+    container_ids = listed.stdout.split()
+    if container_ids:
+        subprocess.run(["docker", "rm", "-f", *container_ids], capture_output=True)
+
+
 def _docker_launch(
     image: str,
     manifest: AdapterManifest,
@@ -380,7 +400,11 @@ def _docker_launch(
     # to the container's stdin (without it, `docker run` closes stdin
     # immediately and the in-container adapter sees EOF on its first
     # readline()).
-    argv = ["docker", "run", "--rm", "-i", "--network", "host"]
+    argv = [
+        "docker", "run", "--rm", "-i", "--network", "host",
+        "--label", f"{ADAPTER_CONTAINER_LABEL}={PG_PORT}",
+        "--name", f"bench-{PG_PORT}-{image}-{uuid.uuid4().hex[:8]}",
+    ]
     cidfile = overrides.get("DOCKER_CIDFILE_HOST")
     if cidfile:
         argv.extend(["--cidfile", cidfile])

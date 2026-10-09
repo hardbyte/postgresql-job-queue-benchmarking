@@ -67,15 +67,16 @@ def _awa_repo_revision() -> dict[str, Any]:
 
 
 _AWA_LOCK_RE = re.compile(
-    r'^name = "awa-model"\nversion = "([^"]+)"\nsource = "([^"]+)"$', re.MULTILINE
+    r'^name = "awa-model"\nversion = "([^"]+)"(?:\nsource = "([^"]+)")?$', re.MULTILINE
 )
+_AWA_PATCH_RE = re.compile(r'^awa-model\s*=\s*\{\s*path\s*=\s*"([^"]+)"', re.MULTILINE)
 
 
 def _awa_bench_revision() -> dict[str, Any]:
     """awa as resolved by awa-bench's lockfile — shared by awa, awa-canonical, awa-docker."""
     m = _AWA_LOCK_RE.search(_read(SCRIPT_DIR / "awa-bench" / "Cargo.lock"))
     source = m.group(2) if m else None
-    return {
+    revision: dict[str, Any] = {
         "source": "awa-bench/Cargo.lock",
         "library": "awa",
         "pinned_version": m.group(1) if m else None,
@@ -83,6 +84,17 @@ def _awa_bench_revision() -> dict[str, Any]:
         "git_sha": source.rpartition("#")[2] if source and "#" in source else None,
         "benchmark_harness": _bench_repo_revision(),
     }
+    patch = _AWA_PATCH_RE.search(_read(SCRIPT_DIR / "awa-bench" / ".cargo" / "config.toml"))
+    if m and source is None and patch:
+        checkout = Path(patch.group(1)).parent
+        revision.update(
+            {
+                "lock_source": f"path patch: {checkout}",
+                "git_sha": _git(["rev-parse", "HEAD"], cwd=checkout),
+                "dirty": bool((_git(["status", "--porcelain"], cwd=checkout) or "").strip()),
+            }
+        )
+    return revision
 
 
 def _bench_repo_revision() -> dict[str, Any]:
