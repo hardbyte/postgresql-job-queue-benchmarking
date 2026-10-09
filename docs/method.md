@@ -40,6 +40,23 @@ Awa-only experiments:
 | `AWA_COMPLETION_SHARDS` | queue-storage: `1`; canonical: `8` | Completion batcher flush workers inside one adapter process. |
 | `AWA_QUEUE_CLAIMERS` | `1` | Queue-storage dispatcher/claimer loops per logical queue. Claimers share that queue's worker permits. |
 | `AWA_CLAIM_BATCH_SIZE` | `512` | Maximum jobs each claimer attempts to claim in one database round trip. |
+| `AWA_QS_PRODUCER_PATH` | `copy` | Queue-storage producer entry point: `copy` (`enqueue_params_copy`) or `batch` (`enqueue_params_batch`). |
+
+To benchmark an unpublished awa checkout, point the adapter at it with a
+local Cargo patch (gitignored), then build as usual:
+
+```toml
+# awa-bench/.cargo/config.toml
+[patch."https://github.com/hardbyte/awa"]
+awa-model = { path = "/path/to/awa/awa-model" }
+awa-worker = { path = "/path/to/awa/awa-worker" }
+awa-macros = { path = "/path/to/awa/awa-macros" }
+```
+
+The patch rewrites `awa-bench/Cargo.lock`; restore it before committing.
+
+Set `BENCH_PG_PORT` (default `15555`) to run a second harness against its own
+Postgres container, e.g. from another worktree.
 
 ## Adapter version notes
 

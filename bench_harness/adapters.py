@@ -23,7 +23,7 @@ from typing import Callable
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = SCRIPT_DIR
 
-PG_PORT = 15555
+PG_PORT = int(os.environ.get("BENCH_PG_PORT", "15555"))
 PG_USER = "bench"
 PG_PASS = "bench"
 
@@ -296,6 +296,7 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         "PGQUE_VERSION",
         "PGQUE_SCHEMA_VERSION",
         "AWA_COMPLETION_FLUSH_MS",
+        "AWA_QS_PRODUCER_PATH",
         "AWA_COMPLETION_SHARDS",
         "AWA_QUEUE_CLAIMERS",
         "AWA_CLAIM_BATCH_SIZE",

@@ -45,7 +45,7 @@ from bench_harness.writers import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RECEIVER_CRATE = REPO_ROOT / "cdc-receiver"
-DEFAULT_PG_URL = "postgres://bench:bench@localhost:15555"
+DEFAULT_PG_URL = f"postgres://bench:bench@localhost:{os.environ.get('BENCH_PG_PORT', '15555')}"
 
 
 def receiver_binary(build: bool = True) -> Path:
