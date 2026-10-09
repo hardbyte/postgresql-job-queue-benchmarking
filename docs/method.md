@@ -72,7 +72,7 @@ The patch rewrites `awa-bench/Cargo.lock`; restore it before committing.
 
 | System | N > 1 behaviour |
 |---|---|
-| awa | One `Client::queue()` per queue. Each queue's dispatcher opens its own `LISTEN` connection and polls on its own interval. |
+| awa | One `Client::queue()` per queue. Each queue's dispatcher holds its own `LISTEN` connection from the client's pool and polls on its own interval, so the pool (`MAX_CONNECTIONS`, adapter default `4 × WORKER_COUNT + 48`) must exceed the queue count. |
 | river | One `QueueConfig` per queue in a single client; jobs spread per job. |
 | oban | `Oban.start_queue/1` per queue; jobs spread per job. |
 | procrastinate | One worker listening on all N queues; batches spread round-robin. |
@@ -80,6 +80,10 @@ The patch rewrites `awa-bench/Cargo.lock`; restore it before committing.
 | pgmq | One queue table pair per queue. pgmq has no cross-queue read, so each consumer polls its share of the queues in turn. |
 | absurd | One queue (tables) and one `AsyncAbsurd` worker, with its own connection, per queue. |
 | pgque | One consumer, ticker pass and `LISTEN` connection per queue (adapter design). |
+
+Per-queue polling cost scales with the poll intervals the adapters pick
+for single-queue latency: 50 ms for awa, river, pgmq and absurd, 500 ms
+for pg-boss. Read idle `pg_db_xacts_per_s` at large N with that in mind.
 
 For N > 1 the adapters' depth observers use a single statement across all
 queues, or (awa, pgque) refresh one queue per tick, so observer load stays
@@ -183,12 +187,18 @@ phases get a `drain` block (`backlog_at_start`, `drain_time_s`,
 means duplicate execution; a few jobs either way is sample-timing noise),
 `database_size_mb_{baseline,peak,final}` and `size_settle_s` (time from the
 first drain until the database is within max(10%, 8 MB) of its first
-sample).
+sample). The job totals miss jobs enqueued before an adapter's first sample
+tick and completions after its last, so `completion_excess` is only a clean
+duplicate-execution signal for runs that start with a `rate=0` warmup and
+end with a drain, as `long_jobs` and `backlog_drain` do.
 
 `pg_stat_statements` is off by default because preloading it changes the
 server for every scenario. Set `BENCH_PG_STAT_STATEMENTS=1` to preload it
 (`track = all`, so `pg_notify()` inside triggers and functions counts) and
-install it in each system database. The NOTIFY count matches statements
+install it in each system database. With `track = all`, statements run
+inside functions count too, so `pg_stmt_calls_per_s` measures statement
+work rather than client round trips; use `pg_db_xacts_per_s` for the
+latter. The NOTIFY count matches statements
 mentioning `notify` / `pg_notify`.
 
 Wait-event output lands in `raw.csv` (`subject_kind=wait_event`),
