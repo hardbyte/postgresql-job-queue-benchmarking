@@ -315,6 +315,10 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
     ):
         if key in os.environ:
             env[key] = os.environ[key]
+    # Awa's own runtime and experiment knobs are all `AWA_`-prefixed.
+    for key, value in os.environ.items():
+        if key.startswith("AWA_"):
+            env[key] = value
     # Default PRODUCER_PACING=harness — the orchestrator emits
     # `ENQUEUE <n>` tokens on the adapter's stdin in fixed-rate mode.
     # Adapters that haven't been ported to read stdin tokens fall back
