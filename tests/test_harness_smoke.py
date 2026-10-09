@@ -1409,3 +1409,222 @@ def test_argparse_wait_event_flags():
     )
     assert ns.wait_events is False
     assert ns.wait_event_sample_every == 0.5
+
+
+# ─── Neighbour-impact scenarios ─────────────────────────────────────
+
+
+def test_neighbour_and_logical_phase_specs_parse():
+    neighbour = parse_phase_spec("base=neighbour-oltp(load=0,clients=8,rate=300):10m")
+    assert neighbour.type is PhaseType.NEIGHBOUR_OLTP
+    assert neighbour.float_param("load", 1.0) == 0.0
+    assert neighbour.int_param("clients", 1) == 8
+    stall = parse_phase_spec("stall=logical-stall(publication=none):5m")
+    assert stall.type is PhaseType.LOGICAL_STALL
+    assert stall.param("publication") == "none"
+    with pytest.raises(ValueError):
+        parse_phase_spec("x=neighbour-oltp(load=lots):10s").float_param("load", 1.0)
+
+
+def test_required_wal_level_only_logical_for_logical_phases():
+    from bench_harness.phases import required_wal_level
+
+    assert required_wal_level(resolve_scenario("neighbour_oltp", None)) == "replica"
+    assert required_wal_level(resolve_scenario("logical_replication", None)) == "logical"
+
+
+def test_registry_runs_prepare_and_teardown_once_per_hook():
+    from bench_harness.phases import HookRegistry
+
+    calls: list[str] = []
+    registry = HookRegistry()
+    shared_teardown = lambda state: calls.append("teardown")  # noqa: E731
+    registry.register(PhaseType.LOGICAL_STREAM, teardown=shared_teardown)
+    registry.register(PhaseType.LOGICAL_STALL, teardown=shared_teardown)
+    registry.register(
+        PhaseType.NEIGHBOUR_OLTP, prepare=lambda state: calls.append("prepare")
+    )
+    phases = resolve_scenario(None, [
+        "warmup=warmup:1s",
+        "a=logical-stream:1s",
+        "b=logical-stall:1s",
+        "c=logical-stream:1s",
+    ])
+    registry.prepare(phases, {})
+    registry.teardown(phases, {})
+    assert calls == ["teardown"]
+
+
+def test_pgbench_log_parsing_and_stats():
+    from bench_harness.hooks import (
+        neighbour_phase_stats,
+        neighbour_window_stats,
+        parse_pgbench_log_line,
+    )
+
+    # client txn latency_us script epoch_s epoch_us lag_us
+    lines = [
+        f"0 {i} {1000 * (i + 1)} 0 {100 + i // 10} {(i % 10) * 100000} 50"
+        for i in range(100)
+    ] + ["1 7 failed 0 105 500000 0", "garbage"]
+    txns = [t for t in (parse_pgbench_log_line(line) for line in lines) if t]
+    assert len(txns) == 101
+    assert txns[0].end_epoch_s == 100.0 and txns[0].latency_ms == 1.0
+    assert txns[-1].latency_ms is None
+
+    stats = neighbour_phase_stats(txns, duration_s=10.0)
+    assert stats["neighbour_phase_transactions"] == 100
+    assert stats["neighbour_phase_failed"] == 1
+    assert stats["neighbour_phase_tps"] == 10.0
+    assert stats["neighbour_phase_latency_p50_ms"] == 50.0
+    assert stats["neighbour_phase_latency_p99_ms"] == 99.0
+    assert stats["neighbour_phase_latency_max_ms"] == 100.0
+    # Each line carries 50 µs of schedule lag.
+    assert stats["neighbour_phase_service_p99_ms"] == 98.95
+
+    # Transactions span 100.0–109.9: with 5 s windows, [100,105) is whole
+    # and [105,110) ends after the last transaction, so it is dropped.
+    windows = neighbour_window_stats(txns, window_s=5.0)
+    assert [end for end, _ in windows] == [105.0]
+    assert windows[0][1]["neighbour_tps"] == 10.0
+    assert windows[0][1]["neighbour_latency_p99_ms"] == 50.0
+
+
+def _neighbour_logical_csv(path: Path) -> None:
+    rows = []
+
+    def add(t, label, ptype, kind, subject, metric, value, window="0"):
+        rows.append([
+            "test", "awa", "0", str(t), "2026-05-01T00:00:00Z",
+            label, ptype, kind, subject, metric, str(value), window,
+        ])
+
+    for label, ptype, p99, base_t in (
+        ("baseline", "neighbour-oltp", 10.0, 0),
+        ("busy", "neighbour-oltp", 25.0, 100),
+    ):
+        add(base_t + 50, label, ptype, "neighbour", "", "neighbour_phase_tps", 300)
+        add(base_t + 50, label, ptype, "neighbour", "", "neighbour_phase_latency_p99_ms", p99)
+        add(base_t + 50, label, ptype, "neighbour", "", "neighbour_phase_latency_p50_ms", 5)
+        add(base_t + 10, label, ptype, "neighbour", "", "neighbour_latency_p99_ms", p99 * 2, "5")
+        for t in (base_t + 10, base_t + 20):
+            add(t, label, ptype, "catalog", "pg_catalog.pg_class", "catalog_n_dead_tup", t)
+            add(t, label, ptype, "catalog", "pg_catalog.pg_type", "catalog_n_dead_tup", 1)
+            add(t, label, ptype, "catalog", "pg_catalog.pg_class", "catalog_size_mb", t / 10)
+    # Logical: the consumer reconnect is counted between the last stall
+    # sample (t=210) and the first catch-up sample (t=220).
+    for t, label, ptype, lag, active, disconnects, paused in (
+        (200, "stall", "logical-stall", 1000, 1, 0, 1),
+        (210, "stall", "logical-stall", 5000, 0, 0, 1),
+        (220, "catchup", "logical-stream", 9000, 0, 1, 0),
+        (230, "catchup", "logical-stream", 100, 1, 1, 0),
+    ):
+        add(t, label, ptype, "replication_slot", "s", "slot_confirmed_lag_bytes", lag)
+        add(t, label, ptype, "replication_slot", "s", "slot_retained_wal_bytes", lag * 2)
+        add(t, label, ptype, "replication_slot", "s", "slot_active", active)
+        add(t, label, ptype, "logical_consumer", "s", "logical_consumer_disconnects_total", disconnects)
+        add(t, label, ptype, "logical_consumer", "s", "logical_consumer_paused", paused)
+        add(t, label, ptype, "publication", "p", "publication_tables_without_replica_identity", 2)
+
+    with path.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(RAW_CSV_HEADER)
+        writer.writerows(rows)
+
+
+def test_summary_neighbour_logical_and_catalog_blocks(tmp_path: Path):
+    raw_path = tmp_path / "raw.csv"
+    _neighbour_logical_csv(raw_path)
+    phases = resolve_scenario(None, [
+        "warmup=warmup:10s",
+        "baseline=neighbour-oltp(load=0):100s",
+        "busy=neighbour-oltp(load=4):100s",
+        "stall=logical-stall:20s",
+        "catchup=logical-stream:20s",
+    ])
+    summary = compute_summary(raw_path, run_id="test", scenario=None, phases=phases)
+    blocks = summary["systems"]["awa"]["phases"]
+
+    busy = blocks["busy"]["neighbour"]
+    assert busy["latency_p99_ms"] == 25.0
+    assert busy["latency_p99_ms_vs_baseline"] == 2.5
+    assert busy["tps_vs_baseline"] == 1.0
+    assert busy["window_latency_p99_ms_peak"] == 50.0
+    assert blocks["baseline"]["neighbour"]["latency_p99_ms_vs_baseline"] == 1.0
+
+    catalog = blocks["busy"]["catalog"]
+    assert catalog["dead_tup_peak"] == 121.0  # pg_class 120 + pg_type 1
+    assert catalog["size_mb_delta"] == 1.0
+
+    stall = blocks["stall"]["logical"]
+    assert stall["slot_lag_bytes_peak"] == 5000
+    assert stall["retained_wal_bytes_end"] == 10000
+    assert stall["slot_active_fraction"] == 0.5
+    assert stall["consumer_paused_fraction"] == 1.0
+    assert stall["tables_without_replica_identity"] == 2
+    catchup = blocks["catchup"]["logical"]
+    assert catchup["consumer_disconnects_delta"] == 1.0
+    assert stall["consumer_disconnects_delta"] == 0.0
+    assert "neighbour" not in blocks["stall"]
+
+
+def test_report_timeline_includes_cluster_and_neighbour_series(tmp_path: Path):
+    from bench_harness.report import _timeline_series
+
+    raw_path = tmp_path / "raw.csv"
+    _neighbour_logical_csv(raw_path)
+    with raw_path.open("a", newline="") as fh:
+        writer = csv.writer(fh)
+        for t, value in ((10, 1000), (20, 5000)):
+            writer.writerow([
+                "test", "awa", "0", str(t), "2026-05-01T00:00:00Z", "baseline",
+                "neighbour-oltp", "cluster", "", "pg_wal_bytes", str(value), "0",
+            ])
+    with raw_path.open() as fh:
+        rows = list(csv.DictReader(fh))
+    series = _timeline_series(rows, ["awa"])
+    assert [p["value"] for p in series["pg_wal_bytes"]["awa"]] == [1000.0, 5000.0]
+    assert [p["value"] for p in series["neighbour_latency_p99_ms"]["awa"]] == [20.0, 50.0]
+    assert series["catalog_n_dead_tup"]["awa"][0]["value"] == 11.0
+    assert max(p["value"] for p in series["slot_confirmed_lag_bytes"]["awa"]) == 9000.0
+
+
+def test_pacer_follows_rate_control_file(tmp_path: Path):
+    import threading
+    import time
+
+    from bench_harness.pacer import FixedRatePacer, PacerConfig
+
+    class _Sink:
+        def __init__(self) -> None:
+            self.jobs = 0
+
+        def write(self, line: str) -> None:
+            self.jobs += int(line.split()[1])
+
+        def flush(self) -> None:
+            pass
+
+    control = tmp_path / "rate.txt"
+    control.write_text("0")
+    sink = _Sink()
+    stop = threading.Event()
+    pacer = FixedRatePacer(
+        stdin=sink,  # type: ignore[arg-type]
+        cfg=PacerConfig(
+            target_rate=100, batch_ms=10, rate_control_file=str(control),
+            rate_control_poll_s=0.01,
+        ),
+        stop_event=stop,
+    )
+    pacer.start()
+    try:
+        time.sleep(0.3)
+        assert sink.jobs == 0
+        control.write_text("2000")
+        time.sleep(0.5)
+    finally:
+        stop.set()
+        pacer.join(timeout=1.0)
+    # ~1000 jobs at 2000/s over 0.5 s; well above the 100/s launch rate.
+    assert sink.jobs > 500

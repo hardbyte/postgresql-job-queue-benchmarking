@@ -27,6 +27,8 @@ to `bench.py run`, or compose your own with
 | `chaos_repeated_kills` | Periodic SIGKILL+restart of replica 0 across a sustained chaos phase. |
 | `chaos_pg_backend_kill` | Steady stream of `pg_terminate_backend` against the SUT's connections. |
 | `chaos_pool_exhaustion` | Hold 300 idle connections to pressure the SUT's pool sizing. |
+| `neighbour_oltp` | Does the queue starve unrelated traffic on the same server? A fixed-rate pgbench neighbour (separate `neighbour` database, 8 clients, 300 TPS, TPC-B-like) runs through baseline (queue producer at 0, workers running) → moderate (1×) → saturation (4× `--producer-rate`) → recovery (1×). Headline: neighbour latency p50/p99 per phase and its ratio to baseline. |
+| `logical_replication` | Does the queue coexist with logical replication? Starts Postgres with `wal_level=logical`. clean (no slot) → stream (FOR ALL TABLES publication + `pgoutput` slot + streaming consumer) → high-load with the slot streaming → stall (consumer frozen: the "CDC sink is down" case) → catch-up. Headline: slot lag, retained WAL, `catalog_xmin` age, catalog bloat, WAL per job, consumer disconnects, and published tables without a replica identity (UPDATE/DELETE on them fails while the publication exists). Retained WAL grows for the whole stall, so the 15-minute stall at high rates needs several GB of free disk on the Docker volume. |
 | `mixed_queue` | Multi-queue run; pair with `BENCH_QUEUE_COUNT=N` to spawn N parallel queues. Producer round-robins inserts; consumer side registers N queue subscriptions. Tests per-queue isolation and engine-side per-queue overhead. |
 
 ## Awa tuning knobs
@@ -88,6 +90,9 @@ aren't visible from the version number alone:
 | `pg-backend-kill(rate=N)` | Opens an admin connection that runs `pg_terminate_backend(pid)` against the SUT's database `N` times per second. |
 | `pool-exhaustion(idle_conns=N)` | Holds `N` idle connections against the SUT's database for the duration; releases them on phase end. |
 | `repeated-kill(instance=I,period=Ns)` | Periodic SIGKILL + auto-restart of replica `I` every `period`. Composes `kill-worker` / `start-worker`. |
+| `neighbour-oltp(load=X,clients=N,rate=R,script=S)` | Runs `pgbench -R R -c N` against the `neighbour` database for the phase, from a sidecar container using the stock Postgres image. The database is re-initialised with `pgbench -i -s 10` once per system, during warmup. Set the scale with `NEIGHBOUR_PGBENCH_SCALE`. `load` sets the producer rate to `X × --producer-rate` for the phase (default 1). `script` takes pgbench built-ins joined by `+`, e.g. `select-only@9+simple-update@1` (default `tpcb-like`). Latency is measured from each transaction's scheduled start, so it includes queueing. `service_p*` excludes schedule lag: high latency with normal service time means the neighbour fell behind its rate, and high service time means each transaction slowed. |
+| `logical-stream(publication=all\|none)` | The first logical phase creates publication `bench_cdc_pub` (FOR ALL TABLES, or empty with `publication=none`), creates slot `bench_cdc_slot` (`pgoutput`) and starts a `pg_recvlogical` consumer that discards output, confirms every second and reconnects on loss. All three persist through later phases until the system's run ends. This phase type keeps the consumer streaming. Postgres is started with `wal_level=logical` when any logical phase is scheduled. |
+| `logical-stall` | Same slot. The consumer container is frozen (`docker pause`) for this phase only, so the slot stops advancing. The walsender drops it after `wal_sender_timeout`, and the consumer reconnects when the phase ends. |
 
 ## Postgres diagnostics
 
@@ -107,6 +112,22 @@ Notification queue usage lands in `raw.csv` as the cluster metric
 `subject_kind=pg_activity` with `xact_age_s` as the numeric value and the
 backend pid, application name, state, `xact_start`, wait event, and
 compacted query text encoded in the subject.
+
+The metrics daemon also polls system-catalog health and logical slots every
+tick. `subject_kind=catalog` carries `catalog_n_dead_tup` and
+`catalog_size_mb` for `pg_class`, `pg_attribute`, `pg_depend` and `pg_type`.
+That is where TRUNCATE rotation and partition churn show up.
+`subject_kind=replication_slot` carries `slot_confirmed_lag_bytes`,
+`slot_retained_wal_bytes`, `slot_catalog_xmin_age`, `slot_active` and the
+`slot_decoded_bytes_total` / `slot_spill_bytes_total` counters.
+`subject_kind=publication` carries
+`publication_tables_without_replica_identity`. The logical consumer emits
+`logical_consumer_*` counters, and pgbench emits `neighbour_*` 5 s-window
+series plus exact per-phase `neighbour_phase_*` stats. `summary.json`
+condenses these per phase into the `neighbour`, `logical` and `catalog`
+blocks, plus `wal_bytes_per_completed_job` (cluster WAL rate ÷ mean
+completion rate; it includes any neighbour workload's WAL). `index.html`
+shows them in a "Postgres Neighbours" table.
 
 Wait-event output lands in `raw.csv` (`subject_kind=wait_event`),
 `summary.json` (top-10 events per phase plus `total_active_samples`), and

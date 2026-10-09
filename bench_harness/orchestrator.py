@@ -44,6 +44,7 @@ from .phases import (
     PhaseType,
     PhaseRuntime,
     default_registry,
+    required_wal_level,
     resolve_scenario,
 )
 from .plots import render_all
@@ -108,8 +109,11 @@ def _run_cmd(
     )
 
 
-def _compose_env(pg_image: str) -> dict[str, str]:
-    return {"POSTGRES_IMAGE": pg_image}
+def _compose_env(pg_image: str, wal_level: str | None = None) -> dict[str, str]:
+    env = {"POSTGRES_IMAGE": pg_image}
+    if wal_level is not None:
+        env["BENCH_PG_WAL_LEVEL"] = wal_level
+    return env
 
 
 def _compose_prefix(engine: str) -> list[str]:
@@ -127,12 +131,16 @@ def _compose_prefix(engine: str) -> list[str]:
     return ["docker", "compose", "-f", "docker-compose.yml", "-f", override]
 
 
-def start_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
+def start_postgres(
+    pg_image: str,
+    engine: str = DEFAULT_ENGINE,
+    wal_level: str = "replica",
+) -> None:
     prefix = _compose_prefix(engine)
     _run_cmd(
         [*prefix, "up", "-d", "--wait", "--force-recreate", "--renew-anon-volumes"],
         cwd=SCRIPT_DIR,
-        env=_compose_env(pg_image),
+        env=_compose_env(pg_image, wal_level),
     )
     # Readiness probe. Omni initdb + engine bring-up is slower than the
     # alpine image, so allow a generous window.
@@ -389,7 +397,8 @@ def _launch_one_replica(
             target_rate = int(_pacer_setting("PRODUCER_RATE", "0"))
         except ValueError:
             target_rate = 0
-        if target_rate > 0 and proc.stdin is not None:
+        rate_control_file = instance_overrides.get("PRODUCER_RATE_CONTROL_FILE_HOST")
+        if (target_rate > 0 or rate_control_file) and proc.stdin is not None:
             try:
                 batch_max = int(_pacer_setting("PRODUCER_BATCH_MAX", "128"))
             except ValueError:
@@ -404,6 +413,7 @@ def _launch_one_replica(
                     target_rate=target_rate,
                     batch_max=batch_max,
                     batch_ms=batch_ms,
+                    rate_control_file=rate_control_file,
                 ),
                 stop_event=stop_event,
                 log_prefix=f"-{system}-{instance_id}",
@@ -683,6 +693,7 @@ def run_one_system(
     replicas: int = 1,
     wait_events_enabled: bool = True,
     wait_event_sample_every_s: float = 1.0,
+    wal_level: str = "replica",
 ) -> dict:
     entry = ADAPTERS[system]
     manifest = AdapterManifest.load(entry.bench_dir)
@@ -700,7 +711,7 @@ def run_one_system(
     # Sequential per-system fresh-PG isolation is the default.
     if not fast:
         stop_postgres(pg_image, engine)
-        start_postgres(pg_image, engine)
+        start_postgres(pg_image, engine, wal_level)
 
     preflight_database(manifest, recreate=fast)
 
@@ -778,6 +789,44 @@ def run_one_system(
         )
         wait_sampler.start()
 
+    from .sample import now_iso
+
+    def _emit_sample(
+        subject_kind: str,
+        subject: str,
+        metric: str,
+        value: float,
+        *,
+        window_s: float = 0.0,
+        at_epoch: float | None = None,
+    ) -> None:
+        """Queue a harness-side sample under the current phase. `at_epoch`
+        backdates it (e.g. per-window stats parsed from a pgbench log)."""
+        label, phase_type = tracker.get()
+        when = time.time() if at_epoch is None else at_epoch
+        out_queue.put(
+            Sample(
+                run_id=run_id,
+                system=system,
+                instance_id=0,
+                elapsed_s=round(when - bench_start, 3),
+                sampled_at=(
+                    now_iso()
+                    if at_epoch is None
+                    else datetime.fromtimestamp(at_epoch, timezone.utc)
+                    .isoformat(timespec="milliseconds")
+                    .replace("+00:00", "Z")
+                ),
+                phase_label=label,
+                phase_type=phase_type,
+                subject_kind=subject_kind,
+                subject=subject,
+                metric=metric,
+                value=float(value),
+                window_s=float(window_s),
+            )
+        )
+
     registry = default_registry()
     phase_state: dict[str, object] = {
         "producer_rate_control_file": str(control_file),
@@ -800,8 +849,13 @@ def run_one_system(
         "admin_database_url": pg_url("postgres"),
         "system_database_url": pg_url(manifest.db_name),
         "system_database_name": manifest.db_name,
+        # Harness-side sample emission for hooks that measure something
+        # themselves (neighbour pgbench, logical consumer).
+        "emit_sample": _emit_sample,
+        "sample_every_s": sample_every_s,
     }
     try:
+        registry.prepare(phases, phase_state)
         for phase in phases:
             tracker.set(phase.label, phase.type.value)
             print(
@@ -834,6 +888,10 @@ def run_one_system(
                         out_queue=out_queue,
                     )
     finally:
+        try:
+            registry.teardown(phases, phase_state)
+        except Exception as exc:
+            print(f"[{system}] phase teardown failed: {exc}", file=sys.stderr)
         daemon.stop()
         daemon.join(timeout=5.0)
         if wait_sampler is not None:
@@ -919,6 +977,7 @@ def drive(
     if unknown:
         raise SystemExit(f"Unknown systems: {unknown}. Known: {sorted(ADAPTERS)}")
 
+    wal_level = required_wal_level(phases)
     run_dir = _new_run_dir(scenario, engine)
     run_id = run_dir.name
     print(f"[harness] run_id = {run_id}", file=sys.stderr)
@@ -943,7 +1002,7 @@ def drive(
     try:
         # Start PG once upfront (needed for the initial build phase to connect;
         # also the --fast path keeps this same instance across systems).
-        start_postgres(pg_image, engine)
+        start_postgres(pg_image, engine, wal_level)
 
         if not skip_build:
             for system in systems:
@@ -1013,6 +1072,7 @@ def drive(
                 replicas=replicas,
                 wait_events_enabled=wait_events_enabled,
                 wait_event_sample_every_s=wait_event_sample_every_s,
+                wal_level=wal_level,
             )
             # Merge the runtime descriptor the adapter emitted with the
             # harness-proven revision block (git SHA / submodule SHA /

@@ -17,6 +17,8 @@ services:
       - "postgres"
       - "-c"
       - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "wal_level=${BENCH_PG_WAL_LEVEL:-replica}"
     deploy:
       resources:
         limits:

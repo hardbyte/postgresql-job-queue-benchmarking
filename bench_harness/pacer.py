@@ -34,6 +34,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import IO
 
 
@@ -42,6 +43,19 @@ class PacerConfig:
     target_rate: int  # jobs/s (offered)
     batch_max: int = 128  # max rows per ENQUEUE token
     batch_ms: int = 25  # tick cadence in ms
+    # Producer-rate control file written by phase hooks (high-load etc.).
+    # When set, its value overrides `target_rate` while it parses.
+    rate_control_file: str | None = None
+    rate_control_poll_s: float = 0.25
+
+
+def read_rate_control_file(path: str | None, default: float) -> float:
+    if not path:
+        return default
+    try:
+        return max(0.0, float(Path(path).read_text().strip()))
+    except (OSError, ValueError):
+        return default
 
 
 class FixedRatePacer:
@@ -74,6 +88,8 @@ class FixedRatePacer:
         period_s = self._cfg.batch_ms / 1000.0
         last_tick = time.monotonic()
         credit = 0.0
+        target_rate = float(self._cfg.target_rate)
+        next_rate_poll = 0.0
         while not self._stop.is_set():
             # Sleep until next tick boundary; if we ran long, don't compound
             # the overrun by sleeping beyond it.
@@ -87,7 +103,15 @@ class FixedRatePacer:
             now = time.monotonic()
             dt_s = now - last_tick
             last_tick = now
-            credit += self._cfg.target_rate * dt_s
+            if self._cfg.rate_control_file and now >= next_rate_poll:
+                target_rate = read_rate_control_file(
+                    self._cfg.rate_control_file, target_rate
+                )
+                next_rate_poll = now + self._cfg.rate_control_poll_s
+            if target_rate <= 0:
+                credit = 0.0
+                continue
+            credit += target_rate * dt_s
             whole = int(credit)
             if whole < 1:
                 continue

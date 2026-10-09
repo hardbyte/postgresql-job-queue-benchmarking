@@ -582,12 +582,29 @@ def compute_summary(
                 phase_label=phase_label,
                 metric="pg_db_xacts_total",
             )
+            phase_block["wal_bytes_per_completed_job"] = _wal_bytes_per_job(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                wal_bytes_per_s=phase_block["pg_wal_bytes_per_s"],
+            )
+            neighbour = _neighbour_block(rows, system=system, phase_label=phase_label)
+            if neighbour is not None:
+                phase_block["neighbour"] = neighbour
+            catalog = _catalog_block(rows, system=system, phase_label=phase_label)
+            if catalog is not None:
+                phase_block["catalog"] = catalog
+            logical = _logical_block(rows, system=system, phase_label=phase_label)
+            if logical is not None:
+                phase_block["logical"] = logical
             phase_block["replicas"] = replicas
             wait = _wait_event_summary(
                 rows, system=system, phase_label=phase_label
             )
             if wait is not None:
                 phase_block["wait_events"] = wait
+
+    _add_neighbour_baseline_ratios(out_systems, phases)
 
     return {
         "run_id": run_id,
@@ -989,6 +1006,247 @@ def _cluster_counter_rate(
     values = [value for _, value in points]
     # Same max-min convention as _cluster_counter_delta (monotonic counter).
     return (max(values) - min(values)) / span_s
+
+
+def _wal_bytes_per_job(
+    rows: list[dict],
+    *,
+    system: str,
+    phase_label: str,
+    wal_bytes_per_s: float | None,
+) -> float | None:
+    """Cluster WAL rate over the phase divided by the mean completion rate.
+    Both are rates over the same phase, so this is WAL per completed job
+    without integrating sample windows. WAL is cluster-wide: it includes
+    anything else running on the server (e.g. a neighbour workload)."""
+    if wal_bytes_per_s is None:
+        return None
+    series = aggregate_replica_metric_series(
+        rows,
+        system=system,
+        phase_label=phase_label,
+        metric="completion_rate",
+        subject_kind="adapter",
+    )
+    if not series:
+        return None
+    mean_rate = sum(series) / len(series)
+    if mean_rate <= 0:
+        return None
+    return wal_bytes_per_s / mean_rate
+
+
+def _kind_series(
+    rows: list[dict],
+    *,
+    system: str,
+    phase_label: str,
+    subject_kind: str,
+    metric: str,
+    reduce: str = "sum",
+) -> list[tuple[float, float]]:
+    """(elapsed_s, value) for one metric, reduced across subjects per tick."""
+    per_elapsed: dict[float, list[float]] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row.get("subject_kind") != subject_kind
+        ):
+            continue
+        try:
+            per_elapsed.setdefault(float(row["elapsed_s"]), []).append(
+                float(row["value"])
+            )
+        except (TypeError, ValueError):
+            continue
+    reducer = sum if reduce == "sum" else max
+    return [(t, float(reducer(vals))) for t, vals in sorted(per_elapsed.items())]
+
+
+def _phase_counter_increase(
+    rows: list[dict],
+    *,
+    system: str,
+    phase_label: str,
+    subject_kind: str,
+    metric: str,
+) -> float | None:
+    """Increase of a monotonic counter over a phase, measured from the
+    previous phase's last sample when there is one, so an increment that
+    lands between two phases' samples is attributed to the later phase."""
+    points: list[tuple[float, str, float]] = []
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["metric"] != metric
+            or row.get("subject_kind") != subject_kind
+        ):
+            continue
+        try:
+            points.append(
+                (float(row["elapsed_s"]), row["phase_label"], float(row["value"]))
+            )
+        except (TypeError, ValueError):
+            continue
+    points.sort()
+    in_phase = [i for i, (_, label, _) in enumerate(points) if label == phase_label]
+    if not in_phase:
+        return None
+    start = in_phase[0] - 1 if in_phase[0] > 0 else in_phase[0]
+    window = [v for _, _, v in points[start : in_phase[-1] + 1]]
+    if len(window) < 2:
+        return None
+    return max(window) - min(window)
+
+
+NEIGHBOUR_PHASE_PREFIX = "neighbour_phase_"
+
+
+def _neighbour_block(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    """Phase-level pgbench neighbour stats (exact percentiles over every
+    transaction in the phase) plus the worst 5 s-window p99."""
+    block: dict[str, float] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row.get("subject_kind") != "neighbour"
+            or not row["metric"].startswith(NEIGHBOUR_PHASE_PREFIX)
+        ):
+            continue
+        try:
+            block[row["metric"][len(NEIGHBOUR_PHASE_PREFIX):]] = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+    if not block:
+        return None
+    window_p99 = _kind_series(
+        rows,
+        system=system,
+        phase_label=phase_label,
+        subject_kind="neighbour",
+        metric="neighbour_latency_p99_ms",
+        reduce="max",
+    )
+    block["window_latency_p99_ms_peak"] = _peak([v for _, v in window_p99])
+    return block
+
+
+def _add_neighbour_baseline_ratios(out_systems: dict, phases: list[Phase]) -> None:
+    """Relate each neighbour phase to the first queue-idle (`load=0`) one."""
+    baseline = next(
+        (
+            p.label
+            for p in phases
+            if p.type is PhaseType.NEIGHBOUR_OLTP and p.float_param("load", 1.0) == 0
+        ),
+        None,
+    )
+    if baseline is None:
+        return
+    for system_block in out_systems.values():
+        base = system_block["phases"].get(baseline, {}).get("neighbour")
+        if not base:
+            continue
+        for phase_block in system_block["phases"].values():
+            block = phase_block.get("neighbour")
+            if not block:
+                continue
+            for key in ("latency_p50_ms", "latency_p99_ms", "tps"):
+                num, den = block.get(key), base.get(key)
+                block[f"{key}_vs_baseline"] = (
+                    num / den if num is not None and den else None
+                )
+
+
+def _catalog_block(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    dead = _kind_series(
+        rows, system=system, phase_label=phase_label,
+        subject_kind="catalog", metric="catalog_n_dead_tup",
+    )
+    size = _kind_series(
+        rows, system=system, phase_label=phase_label,
+        subject_kind="catalog", metric="catalog_size_mb",
+    )
+    if not dead and not size:
+        return None
+    return {
+        "dead_tup_peak": _peak([v for _, v in dead]),
+        "dead_tup_end": dead[-1][1] if dead else None,
+        "size_mb_end": size[-1][1] if size else None,
+        "size_mb_delta": (size[-1][1] - size[0][1]) if len(size) >= 2 else None,
+    }
+
+
+def _logical_block(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    def slot(metric: str) -> list[tuple[float, float]]:
+        return _kind_series(
+            rows, system=system, phase_label=phase_label,
+            subject_kind="replication_slot", metric=metric, reduce="max",
+        )
+
+    def consumer(metric: str) -> list[tuple[float, float]]:
+        return _kind_series(
+            rows, system=system, phase_label=phase_label,
+            subject_kind="logical_consumer", metric=metric, reduce="max",
+        )
+
+    def increase(subject_kind: str, metric: str) -> float | None:
+        return _phase_counter_increase(
+            rows, system=system, phase_label=phase_label,
+            subject_kind=subject_kind, metric=metric,
+        )
+
+    lag = [v for _, v in slot("slot_confirmed_lag_bytes")]
+    retained = slot("slot_retained_wal_bytes")
+    active = [v for _, v in slot("slot_active")]
+    if not lag and not retained and not consumer("logical_consumer_bytes_total"):
+        return None
+    paused = [v for _, v in consumer("logical_consumer_paused")]
+    no_replica_identity = _kind_series(
+        rows, system=system, phase_label=phase_label, subject_kind="publication",
+        metric="publication_tables_without_replica_identity", reduce="max",
+    )
+    return {
+        "slot_lag_bytes_median": _median(lag),
+        "slot_lag_bytes_peak": _peak(lag),
+        "retained_wal_bytes_peak": _peak([v for _, v in retained]),
+        "retained_wal_bytes_end": retained[-1][1] if retained else None,
+        "catalog_xmin_age_peak": _peak(
+            [v for _, v in slot("slot_catalog_xmin_age")]
+        ),
+        "slot_active_fraction": sum(active) / len(active) if active else None,
+        "slot_decoded_bytes_delta": increase(
+            "replication_slot", "slot_decoded_bytes_total"
+        ),
+        "slot_spill_bytes_delta": increase(
+            "replication_slot", "slot_spill_bytes_total"
+        ),
+        "consumer_bytes_delta": increase(
+            "logical_consumer", "logical_consumer_bytes_total"
+        ),
+        "consumer_disconnects_delta": increase(
+            "logical_consumer", "logical_consumer_disconnects_total"
+        ),
+        "consumer_errors_delta": increase(
+            "logical_consumer", "logical_consumer_errors_total"
+        ),
+        "consumer_exits_delta": increase(
+            "logical_consumer", "logical_consumer_exits_total"
+        ),
+        "consumer_paused_fraction": sum(paused) / len(paused) if paused else None,
+        "tables_without_replica_identity": _peak(
+            [v for _, v in no_replica_identity]
+        ),
+    }
 
 
 def write_summary(summary: dict, path: Path) -> None:

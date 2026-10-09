@@ -23,6 +23,8 @@ services:
       - "-c"
       - "config_file=/etc/postgresql/postgresql.conf"
       - "-c"
+      - "wal_level=${BENCH_PG_WAL_LEVEL:-replica}"
+      - "-c"
       - "shared_preload_libraries=g_stats,google_columnar_engine,google_job_scheduler,google_ml_integration,google_storage"
     deploy:
       resources:
