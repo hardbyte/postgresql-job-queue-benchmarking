@@ -31,6 +31,8 @@ their existing local logic.
 """
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -73,9 +75,44 @@ class FixedRatePacer:
         self._cfg = cfg
         self._stop = stop_event
         self._log_prefix = log_prefix
+        self._dropped_tokens = 0
         self._thread = threading.Thread(
             target=self._run, name=f"pacer{log_prefix}", daemon=True
         )
+        # Write straight to the pipe without blocking when the adapter
+        # stops reading its stdin (hung on shutdown, wedged mid-run).
+        # A blocking write would park this thread inside the pipe with
+        # the text wrapper's lock held, and the harness's own
+        # `stdin.close()` at teardown would then wait on that lock
+        # forever.
+        self._fd: int | None = None
+        try:
+            self._fd = stdin.fileno()
+            os.set_blocking(self._fd, False)
+        except (AttributeError, OSError, ValueError):
+            self._fd = None
+
+    @property
+    def dropped_tokens(self) -> int:
+        return self._dropped_tokens
+
+    def _emit(self, token: str) -> bool:
+        """Write one token; False if the pipe is full and the token was dropped."""
+        if self._fd is None:
+            self._stdin.write(token)
+            return True
+        try:
+            os.write(self._fd, token.encode())
+            return True
+        except BlockingIOError:
+            if self._dropped_tokens == 0:
+                print(
+                    f"[pacer{self._log_prefix}] adapter is not reading stdin; "
+                    "dropping ENQUEUE tokens while the pipe stays full",
+                    file=sys.stderr,
+                )
+            self._dropped_tokens += 1
+            return False
 
     def start(self) -> None:
         self._thread.start()
@@ -126,11 +163,14 @@ class FixedRatePacer:
             try:
                 while whole >= 1:
                     n = min(whole, self._cfg.batch_max)
-                    self._stdin.write(f"ENQUEUE {n}\n")
                     credit -= n
                     whole -= n
-                self._stdin.flush()
-            except (BrokenPipeError, ValueError):
+                    if not self._emit(f"ENQUEUE {n}\n"):
+                        credit = 0.0
+                        break
+                if self._fd is None:
+                    self._stdin.flush()
+            except (BrokenPipeError, ValueError, OSError):
                 # Adapter exited or stdin closed — stop quietly.
                 return
             except Exception:

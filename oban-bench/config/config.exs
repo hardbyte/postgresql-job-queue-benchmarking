@@ -2,9 +2,15 @@ import Config
 
 config :oban_bench, ecto_repos: [ObanBench.Repo]
 
+worker_count =
+  case System.get_env("WORKER_COUNT") do
+    nil -> 50
+    val -> String.to_integer(val)
+  end
+
 pool_size =
   case System.get_env("MAX_CONNECTIONS") do
-    nil -> 20
+    nil -> max(20, worker_count + 8)
     val -> String.to_integer(val)
   end
 

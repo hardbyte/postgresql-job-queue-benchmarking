@@ -388,14 +388,22 @@ def remove_adapter_containers() -> None:
     SIGKILL to a `docker run` client leaves its container running, still
     connected to the bench database; scoping by port keeps parallel harnesses
     on other ports untouched."""
-    listed = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", f"label={ADAPTER_CONTAINER_LABEL}={PG_PORT}"],
-        capture_output=True,
-        text=True,
-    )
-    container_ids = listed.stdout.split()
-    if container_ids:
-        subprocess.run(["docker", "rm", "-f", *container_ids], capture_output=True)
+    try:
+        listed = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", f"label={ADAPTER_CONTAINER_LABEL}={PG_PORT}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return
+    for container_id in listed.stdout.split():
+        # One container at a time with a bound: a container whose runtime shim
+        # never reported its exit makes `docker rm` block indefinitely.
+        try:
+            subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            print(f"[harness] docker rm -f {container_id} timed out; leaving it", file=sys.stderr)
 
 
 def _docker_launch(

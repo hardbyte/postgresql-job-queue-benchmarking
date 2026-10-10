@@ -625,6 +625,8 @@ import threading as _threading
 from unittest.mock import MagicMock
 
 from bench_harness.replica_pool import ReplicaPool, ReplicaState
+import signal as _signal
+import subprocess
 
 
 def _fake_launch_fn(
@@ -807,6 +809,27 @@ def test_pool_out_of_range_instance_id_raises():
         pool.slot(5)
     with pytest.raises(IndexError):
         pool.slot(-1)
+
+
+def test_pool_reap_escalation_kills_the_container_not_just_the_client():
+    """A replica that ignores SIGTERM must be SIGKILLed through
+    ``_signal_slot`` so the docker container dies with its client. A bare
+    ``proc.kill()`` only kills the ``docker run`` client and leaves the
+    container consuming jobs into the next system's cell."""
+    launch, _, procs = _fake_launch_fn()
+    pool = ReplicaPool(system="awa", capacity=1, launch_fn=launch)
+    pool.start_all()
+    proc = procs[0]
+    signals: list[int] = []
+    proc.send_signal = MagicMock(side_effect=signals.append)
+    proc.wait = MagicMock(
+        side_effect=[subprocess.TimeoutExpired(cmd="docker run", timeout=0.0), 0]
+    )
+
+    pool.stop_all(timeout_s=0.0)
+
+    assert signals == [_signal.SIGTERM, _signal.SIGKILL]
+    assert pool.slot(0).state is ReplicaState.STOPPED
 
 
 def test_pool_stop_all_is_idempotent():
@@ -1487,6 +1510,33 @@ def test_pacer_follows_rate_file(tmp_path: Path):
     pacer.join(timeout=1.0)
     assert emitted_while_on > 0
     assert sink.getvalue().count("ENQUEUE") == emitted_while_on
+
+
+def test_pacer_drops_tokens_instead_of_blocking_on_a_full_pipe():
+    """An adapter that stops reading stdin must not park the pacer inside
+    a blocking pipe write: teardown closes that stdin and would deadlock
+    on the text wrapper's lock."""
+    import os
+    import threading
+    import time
+
+    read_fd, write_fd = os.pipe()
+    sink = os.fdopen(write_fd, "w", buffering=1)
+    stop = threading.Event()
+    pacer = FixedRatePacer(
+        stdin=sink,
+        cfg=PacerConfig(target_rate=10_000_000, batch_max=128, batch_ms=1),
+        stop_event=stop,
+    )
+    pacer.start()
+    deadline = time.monotonic() + 5.0
+    while pacer.dropped_tokens == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    stop.set()
+    pacer.join(timeout=1.0)
+    assert pacer.dropped_tokens > 0
+    sink.close()  # must return immediately even though nobody drained the pipe
+    os.close(read_fd)
 
 
 def test_workload_shape_flags_map_to_adapter_env():
