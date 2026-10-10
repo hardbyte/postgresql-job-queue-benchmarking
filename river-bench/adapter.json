@@ -11,5 +11,10 @@
     "public.river_job_state_and_finalized_at_index",
     "public.river_job_prioritized_fetching_index"
   ],
-  "extensions": []
+  "extensions": [],
+  "state_queries": {
+    "scheduled": "SELECT count(*) FROM river_job WHERE state = 'scheduled'",
+    "retryable": "SELECT count(*) FROM river_job WHERE state = 'retryable'",
+    "dead": "SELECT count(*) FROM river_job WHERE state = 'discarded'"
+  }
 }

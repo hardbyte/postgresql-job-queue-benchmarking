@@ -19,6 +19,8 @@ services:
       - "config_file=/etc/postgresql/postgresql.conf"
       - "-c"
       - "shared_preload_libraries=${PG_SHARED_PRELOAD_LIBRARIES:-}"
+      - "-c"
+      - "wal_level=${BENCH_PG_WAL_LEVEL:-replica}"
     deploy:
       resources:
         limits:

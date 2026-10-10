@@ -10,14 +10,23 @@ forked into threads that block on an event the exit hook signals.
 
 from __future__ import annotations
 
+import math
+import json
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 
 import psycopg
 
+from .adapters import DEFAULT_PG_IMAGE, PG_PASS, PG_PORT, PG_USER
+from .metrics import NO_REPLICA_IDENTITY_PREDICATE, PUBLISHED_TABLES_FROM
 from .phases import PhaseRuntime
 
 
@@ -549,3 +558,647 @@ def exit_repeated_kill(runtime: PhaseRuntime) -> None:
         pool.start_worker(instance)
     except Exception:
         pass
+
+
+# ─── shared helpers for harness-side Postgres clients ────────────────────
+#
+# pgbench and pg_recvlogical run as sidecar containers from the pinned stock
+# Postgres image (whatever --engine is under test) on the host network, so
+# no host install is needed and the client's CPU isn't charged to the
+# Postgres container's cgroup. Container names carry the harness port so
+# parallel harnesses (BENCH_PG_PORT) don't collide.
+
+CLIENT_IMAGE = DEFAULT_PG_IMAGE
+
+
+def _client_container_name(role: str) -> str:
+    return f"bench-{role}-{PG_PORT}"
+
+
+def _client_conn_args() -> list[str]:
+    return ["-h", "127.0.0.1", "-p", str(PG_PORT), "-U", PG_USER]
+
+
+def _docker_client_argv(
+    name: str, command: list[str], *, docker_args: Iterable[str] = ()
+) -> list[str]:
+    return [
+        "docker", "run", "--rm", "--name", name, "--network", "host",
+        "-e", f"PGPASSWORD={PG_PASS}", *docker_args, CLIENT_IMAGE, *command,
+    ]
+
+
+def _docker_rm_force(name: str) -> None:
+    subprocess.run(
+        ["docker", "rm", "-f", name], capture_output=True, check=False
+    )
+
+
+def _set_producer_rate(state: dict[str, object], rate: float) -> None:
+    control_file = state.get("producer_rate_control_file")
+    if control_file:
+        write_control_file(control_file, rate)
+
+
+def _apply_load_param(runtime: PhaseRuntime) -> None:
+    """`load=X` sets the producer rate to X × --producer-rate for the phase."""
+    load = runtime.phase.float_param("load", 1.0)
+    if load < 0:
+        raise ValueError(f"phase {runtime.phase.label!r}: load must be >= 0")
+    base = float(runtime.state.get("base_producer_rate", 800.0))
+    _set_producer_rate(runtime.state, base * load)
+
+
+def _restore_base_rate(runtime: PhaseRuntime) -> None:
+    _set_producer_rate(
+        runtime.state, float(runtime.state.get("base_producer_rate", 800.0))
+    )
+
+
+def _emit(state: dict[str, object]) -> Callable[..., None]:
+    emit = state.get("emit_sample")
+    if emit is None:
+        raise RuntimeError(
+            "state['emit_sample'] is missing; the orchestrator sets it in "
+            "run_one_system."
+        )
+    return emit  # type: ignore[return-value]
+
+
+# ─── neighbour-oltp ──────────────────────────────────────────────────────
+#
+# A rate-limited pgbench workload against a separate `neighbour` database on
+# the same server, one pgbench run per phase. With --rate the per-transaction
+# latency pgbench logs is measured from the scheduled start, so it includes
+# any queueing the neighbour suffers (no coordinated omission). Latency, not
+# throughput, is the signal: TPS only drops if the server can't keep up.
+
+NEIGHBOUR_DB = "neighbour"
+
+
+@dataclass(frozen=True)
+class PgbenchTxn:
+    end_epoch_s: float
+    latency_ms: float | None  # None: failed / skipped transaction
+    # Latency minus schedule lag: time from actual start to completion.
+    # High latency with low service time means the neighbour fell behind
+    # its rate and queued; high service time means each transaction slowed.
+    service_ms: float | None = None
+
+
+def parse_pgbench_log_line(line: str) -> PgbenchTxn | None:
+    """Parse one pgbench per-transaction log line:
+    `client_id txn_no time script_no epoch_s epoch_us [schedule_lag]`.
+    `time` is the latency in µs, or `failed` / `skipped` / error class."""
+    parts = line.split()
+    if len(parts) < 6:
+        return None
+    try:
+        end_epoch_s = int(parts[4]) + int(parts[5]) / 1e6
+    except ValueError:
+        return None
+    try:
+        latency_ms: float | None = int(parts[2]) / 1000.0
+    except ValueError:
+        latency_ms = None
+    service_ms = latency_ms
+    if latency_ms is not None and len(parts) >= 7:
+        try:
+            service_ms = latency_ms - int(parts[6]) / 1000.0
+        except ValueError:
+            pass
+    return PgbenchTxn(
+        end_epoch_s=end_epoch_s, latency_ms=latency_ms, service_ms=service_ms
+    )
+
+
+def _percentile(sorted_values: list[float], q: float) -> float | None:
+    """Nearest-rank percentile of an ascending list."""
+    if not sorted_values:
+        return None
+    rank = max(1, math.ceil(q / 100.0 * len(sorted_values)))
+    return sorted_values[min(rank, len(sorted_values)) - 1]
+
+
+def neighbour_phase_stats(txns: list[PgbenchTxn], duration_s: float) -> dict[str, float]:
+    latencies = sorted(t.latency_ms for t in txns if t.latency_ms is not None)
+    failed = sum(1 for t in txns if t.latency_ms is None)
+    stats: dict[str, float] = {
+        "neighbour_phase_transactions": float(len(latencies)),
+        "neighbour_phase_failed": float(failed),
+        "neighbour_phase_tps": len(latencies) / duration_s if duration_s > 0 else 0.0,
+    }
+    if latencies:
+        stats["neighbour_phase_latency_mean_ms"] = sum(latencies) / len(latencies)
+        stats["neighbour_phase_latency_max_ms"] = latencies[-1]
+        for q in (50, 95, 99):
+            stats[f"neighbour_phase_latency_p{q}_ms"] = _percentile(latencies, q)  # type: ignore[assignment]
+    service = sorted(t.service_ms for t in txns if t.service_ms is not None)
+    for q in (50, 99):
+        value = _percentile(service, q)
+        if value is not None:
+            stats[f"neighbour_phase_service_p{q}_ms"] = value
+    return stats
+
+
+def neighbour_window_stats(
+    txns: list[PgbenchTxn], window_s: float
+) -> list[tuple[float, dict[str, float]]]:
+    """Per-window (end_epoch, {tps, p50, p99}) on wall-clock-aligned
+    windows. The first and last windows are dropped when partial, so the
+    series' TPS isn't depressed by pgbench start-up / shutdown."""
+    if not txns or window_s <= 0:
+        return []
+    first = min(t.end_epoch_s for t in txns)
+    last = max(t.end_epoch_s for t in txns)
+    buckets: dict[int, list[PgbenchTxn]] = {}
+    for txn in txns:
+        buckets.setdefault(int(txn.end_epoch_s // window_s), []).append(txn)
+    out: list[tuple[float, dict[str, float]]] = []
+    for index in sorted(buckets):
+        start, end = index * window_s, (index + 1) * window_s
+        if start < first or end > last:
+            continue
+        latencies = sorted(
+            t.latency_ms for t in buckets[index] if t.latency_ms is not None
+        )
+        metrics = {"neighbour_tps": len(latencies) / window_s}
+        if latencies:
+            metrics["neighbour_latency_p50_ms"] = _percentile(latencies, 50)  # type: ignore[assignment]
+            metrics["neighbour_latency_p99_ms"] = _percentile(latencies, 99)  # type: ignore[assignment]
+        out.append((end, metrics))
+    return out
+
+
+def prepare_neighbour_oltp(state: dict[str, object]) -> None:
+    """(Re)create the neighbour database and run `pgbench -i` once per
+    system, so its WAL lands in warmup rather than a measured phase."""
+    admin_url = str(state.get("admin_database_url") or "")
+    scale = int(os.environ.get("NEIGHBOUR_PGBENCH_SCALE", "10"))
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(f'DROP DATABASE IF EXISTS "{NEIGHBOUR_DB}" WITH (FORCE)')
+        conn.execute(f'CREATE DATABASE "{NEIGHBOUR_DB}"')
+    name = _client_container_name("pgbench")
+    _docker_rm_force(name)
+    print(
+        f"[harness] initialising {NEIGHBOUR_DB} with pgbench -i -s {scale}",
+        file=sys.stderr,
+    )
+    proc = subprocess.run(
+        _docker_client_argv(
+            name,
+            ["pgbench", "-i", "-q", "-s", str(scale), *_client_conn_args(), NEIGHBOUR_DB],
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"pgbench -i failed (rc={proc.returncode}): {proc.stderr[-2000:]}"
+        )
+
+
+def _pgbench_script_args(script: str) -> list[str]:
+    """`tpcb-like` or `select-only@9+simple-update@1` → repeated -b flags.
+    `+` separates scripts because `,` separates phase params."""
+    args: list[str] = []
+    for part in script.split("+"):
+        part = part.strip()
+        if part:
+            args += ["-b", part]
+    return args
+
+
+def enter_neighbour_oltp(runtime: PhaseRuntime) -> None:
+    phase = runtime.phase
+    clients = phase.int_param("clients", 8)
+    rate = phase.int_param("rate", 300)
+    script = phase.param("script", "tpcb-like") or "tpcb-like"
+    threads = max(1, min(clients, 2))
+    _apply_load_param(runtime)
+    log_dir = Path(tempfile.mkdtemp(prefix="bench-neighbour-"))
+    name = _client_container_name("pgbench")
+    _docker_rm_force(name)
+    argv = _docker_client_argv(
+        name,
+        [
+            "pgbench", *_client_conn_args(), "-n",
+            "-c", str(clients), "-j", str(threads),
+            "-T", str(phase.duration_s), "-R", str(rate),
+            "-l", "--log-prefix=/out/pgbench",
+            *_pgbench_script_args(script),
+            NEIGHBOUR_DB,
+        ],
+        docker_args=[
+            "--user", f"{os.getuid()}:{os.getgid()}",
+            "-v", f"{log_dir}:/out",
+        ],
+    )
+    output = (log_dir / "pgbench.out").open("w")
+    proc = subprocess.Popen(argv, stdout=output, stderr=subprocess.STDOUT)
+    runtime.state["neighbour-oltp"] = {
+        "proc": proc,
+        "output": output,
+        "log_dir": log_dir,
+        "name": name,
+    }
+
+
+def exit_neighbour_oltp(runtime: PhaseRuntime) -> None:
+    holder = runtime.state.pop("neighbour-oltp", None)
+    _restore_base_rate(runtime)
+    if not holder:
+        return
+    proc: subprocess.Popen = holder["proc"]
+    log_dir: Path = holder["log_dir"]
+    try:
+        # pgbench was started with -T = phase duration, so it normally exits
+        # within a second or two of the phase loop's sleep.
+        try:
+            proc.wait(timeout=30.0)
+        except subprocess.TimeoutExpired:
+            _docker_rm_force(holder["name"])
+            proc.wait(timeout=10.0)
+        holder["output"].close()
+        output = (log_dir / "pgbench.out").read_text(errors="replace")
+        if proc.returncode != 0:
+            print(
+                f"[harness] neighbour pgbench exited rc={proc.returncode}:\n"
+                f"{output[-2000:]}",
+                file=sys.stderr,
+            )
+        txns: list[PgbenchTxn] = []
+        for log_file in sorted(log_dir.glob("pgbench.*")):
+            if log_file.name == "pgbench.out":
+                continue
+            with log_file.open() as fh:
+                for line in fh:
+                    txn = parse_pgbench_log_line(line)
+                    if txn is not None:
+                        txns.append(txn)
+        emit = _emit(runtime.state)
+        window_s = float(runtime.state.get("sample_every_s", 5))
+        for end_epoch, metrics in neighbour_window_stats(txns, window_s):
+            for metric, value in metrics.items():
+                emit("neighbour", "", metric, value, window_s=window_s, at_epoch=end_epoch)
+        stats = neighbour_phase_stats(txns, float(runtime.phase.duration_s))
+        stats["neighbour_phase_exit_code"] = float(proc.returncode or 0)
+        for metric, value in stats.items():
+            emit("neighbour", "", metric, value, window_s=float(runtime.phase.duration_s))
+        print(
+            f"[harness] neighbour {runtime.phase.label}: "
+            + ", ".join(f"{k.removeprefix('neighbour_phase_')}={v:.2f}" for k, v in stats.items()),
+            file=sys.stderr,
+        )
+    finally:
+        shutil.rmtree(log_dir, ignore_errors=True)
+
+
+# ─── logical-stream / logical-stall ──────────────────────────────────────
+#
+# A FOR ALL TABLES publication plus a pgoutput slot on the system's
+# database, consumed by pg_recvlogical (output discarded, bytes counted).
+# Created by the first logical phase and kept until the system's run ends:
+# slot lag, retained WAL and catalog_xmin need continuity across phases.
+# logical-stall freezes the consumer container (`docker pause`) for its own
+# phase: the walsender stays connected until wal_sender_timeout, the slot
+# stops advancing, and the consumer reconnects on resume. Slot and catalog
+# state are sampled by the metrics daemon; consumer-side counters are
+# emitted here.
+
+LOGICAL_SLOT = "bench_cdc_slot"
+LOGICAL_PUBLICATION = "bench_cdc_pub"
+
+
+class LogicalConsumer:
+    def __init__(
+        self,
+        *,
+        database_name: str,
+        emit: Callable[..., None],
+        sample_every_s: float,
+    ) -> None:
+        self.database_name = database_name
+        self.emit = emit
+        self.sample_every_s = sample_every_s
+        self.name = _client_container_name("recvlogical")
+        self.proc: subprocess.Popen | None = None
+        self.paused = False
+        self.bytes_total = 0
+        self.disconnects_total = 0
+        self.errors_total = 0
+        self.exits_total = 0
+        self.last_error = ""
+        self._stopping = threading.Event()
+        self._monitor = threading.Thread(
+            target=self._monitor_loop, name="logical-consumer-monitor", daemon=True
+        )
+
+    def _argv(self) -> list[str]:
+        return _docker_client_argv(
+            self.name,
+            [
+                "pg_recvlogical", *_client_conn_args(),
+                "-d", self.database_name, "--slot", LOGICAL_SLOT, "--start",
+                "-o", "proto_version=1",
+                "-o", f"publication_names={LOGICAL_PUBLICATION}",
+                # Confirm flush every second so slot lag reflects decoding,
+                # not pg_recvlogical's default 10 s feedback cadence.
+                "-F", "1", "-s", "1", "-f", "-",
+            ],
+        )
+
+    def _spawn(self) -> None:
+        _docker_rm_force(self.name)
+        self.proc = subprocess.Popen(
+            self._argv(), stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        threading.Thread(
+            target=self._count_stdout, args=(self.proc,), daemon=True,
+            name="logical-consumer-stdout",
+        ).start()
+        threading.Thread(
+            target=self._scan_stderr, args=(self.proc,), daemon=True,
+            name="logical-consumer-stderr",
+        ).start()
+
+    def _count_stdout(self, proc: subprocess.Popen) -> None:
+        assert proc.stdout is not None
+        while chunk := proc.stdout.read1(1 << 16):  # type: ignore[attr-defined]
+            self.bytes_total += len(chunk)
+
+    def _scan_stderr(self, proc: subprocess.Popen) -> None:
+        assert proc.stderr is not None
+        for raw in proc.stderr:
+            line = raw.decode(errors="replace").strip()
+            if not line:
+                continue
+            if "disconnected" in line:
+                self.disconnects_total += 1
+            elif "error" in line or "FATAL" in line:
+                self.errors_total += 1
+                self.last_error = line
+            print(f"[recvlogical] {line}", file=sys.stderr)
+
+    def start(self) -> None:
+        self._spawn()
+        self._monitor.start()
+
+    def pause(self) -> None:
+        subprocess.run(["docker", "pause", self.name], check=True, capture_output=True)
+        self.paused = True
+
+    def resume(self) -> None:
+        if self.paused:
+            subprocess.run(["docker", "unpause", self.name], check=True, capture_output=True)
+            self.paused = False
+
+    def _monitor_loop(self) -> None:
+        while not self._stopping.wait(self.sample_every_s):
+            proc = self.proc
+            if proc is not None and proc.poll() is not None and not self._stopping.is_set():
+                # pg_recvlogical retries lost connections itself; an exit is
+                # a hard failure (slot gone, auth, …). Count it and restart,
+                # as a supervised CDC sink would.
+                self.exits_total += 1
+                print(
+                    f"[harness] logical consumer exited rc={proc.returncode}; "
+                    f"restarting ({self.last_error})",
+                    file=sys.stderr,
+                )
+                self._spawn()
+            for metric, value in (
+                ("logical_consumer_bytes_total", self.bytes_total),
+                ("logical_consumer_disconnects_total", self.disconnects_total),
+                ("logical_consumer_errors_total", self.errors_total),
+                ("logical_consumer_exits_total", self.exits_total),
+                ("logical_consumer_paused", 1 if self.paused else 0),
+            ):
+                self.emit("logical_consumer", LOGICAL_SLOT, metric, float(value))
+
+    def stop(self) -> None:
+        self._stopping.set()
+        _docker_rm_force(self.name)
+        if self.proc is not None:
+            try:
+                self.proc.wait(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        if self._monitor.is_alive():
+            self._monitor.join(timeout=self.sample_every_s + 2.0)
+
+
+def _drop_logical_objects(conn: psycopg.Connection) -> None:
+    deadline = time.time() + 15.0
+    while True:
+        row = conn.execute(
+            "SELECT active_pid FROM pg_replication_slots WHERE slot_name = %s",
+            (LOGICAL_SLOT,),
+        ).fetchone()
+        if row is None:
+            break
+        if row[0] is not None:
+            conn.execute("SELECT pg_terminate_backend(%s)", (row[0],))
+        try:
+            conn.execute("SELECT pg_drop_replication_slot(%s)", (LOGICAL_SLOT,))
+            break
+        except psycopg.errors.ObjectInUse:
+            if time.time() > deadline:
+                raise
+            time.sleep(0.5)
+    conn.execute(f'DROP PUBLICATION IF EXISTS "{LOGICAL_PUBLICATION}"')
+
+
+def _ensure_logical_replication(runtime: PhaseRuntime) -> LogicalConsumer:
+    existing = runtime.state.get("logical-consumer")
+    if existing is not None:
+        return existing  # type: ignore[return-value]
+    db_url = str(runtime.state.get("system_database_url") or runtime.database_url)
+    db_name = str(runtime.state.get("system_database_name") or "")
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        wal_level = conn.execute("SHOW wal_level").fetchone()[0]
+        if wal_level != "logical":
+            raise RuntimeError(
+                f"{runtime.phase.type.value} needs wal_level=logical, server has "
+                f"{wal_level!r}. The harness passes BENCH_PG_WAL_LEVEL=logical "
+                "to compose when such a phase is scheduled; check the compose "
+                "command for the selected engine."
+            )
+        _drop_logical_objects(conn)
+        # publication=none: an empty publication. The slot still decodes all
+        # WAL and pins catalog_xmin, but no table is published, isolating
+        # slot effects from replica-identity failures in the queue.
+        scope = runtime.phase.param("publication", "all")
+        if scope not in ("all", "none"):
+            raise ValueError(
+                f"phase {runtime.phase.label!r}: publication must be all|none, "
+                f"got {scope!r}"
+            )
+        conn.execute(
+            f'CREATE PUBLICATION "{LOGICAL_PUBLICATION}"'
+            + (" FOR ALL TABLES" if scope == "all" else "")
+        )
+        unreplicable = [
+            row[0]
+            for row in conn.execute(
+                f"SELECT pt.schemaname || '.' || pt.tablename {PUBLISHED_TABLES_FROM}"
+                f" WHERE p.pubname = %s AND {NO_REPLICA_IDENTITY_PREDICATE} ORDER BY 1",
+                (LOGICAL_PUBLICATION,),
+            ).fetchall()
+        ]
+        if unreplicable:
+            print(
+                f"[harness] WARNING: {len(unreplicable)} published table(s) have "
+                "no replica identity; UPDATE/DELETE on them will fail while "
+                f"{LOGICAL_PUBLICATION} exists: {', '.join(unreplicable)}",
+                file=sys.stderr,
+            )
+        # Blocks until in-flight transactions finish (consistent snapshot).
+        conn.execute(
+            "SELECT pg_create_logical_replication_slot(%s, 'pgoutput')",
+            (LOGICAL_SLOT,),
+        )
+    consumer = LogicalConsumer(
+        database_name=db_name,
+        emit=_emit(runtime.state),
+        sample_every_s=float(runtime.state.get("sample_every_s", 5)),
+    )
+    consumer.start()
+    runtime.state["logical-consumer"] = consumer
+    _wait_for_slot_active(db_url, timeout_s=60.0)
+    return consumer
+
+
+def _wait_for_slot_active(db_url: str, *, timeout_s: float) -> None:
+    deadline = time.time() + timeout_s
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        while time.time() < deadline:
+            row = conn.execute(
+                "SELECT active FROM pg_replication_slots WHERE slot_name = %s",
+                (LOGICAL_SLOT,),
+            ).fetchone()
+            if row and row[0]:
+                return
+            time.sleep(0.5)
+    raise RuntimeError(
+        f"logical consumer did not attach to slot {LOGICAL_SLOT} "
+        f"within {timeout_s:.0f}s"
+    )
+
+
+def enter_logical_stream(runtime: PhaseRuntime) -> None:
+    _ensure_logical_replication(runtime).resume()
+
+
+def enter_logical_stall(runtime: PhaseRuntime) -> None:
+    _ensure_logical_replication(runtime).pause()
+
+
+def exit_logical_stall(runtime: PhaseRuntime) -> None:
+    consumer = runtime.state.get("logical-consumer")
+    if consumer is not None:
+        consumer.resume()  # type: ignore[attr-defined]
+
+
+def teardown_logical_replication(state: dict[str, object]) -> None:
+    consumer = state.pop("logical-consumer", None)
+    if consumer is None:
+        return
+    consumer.resume()  # type: ignore[attr-defined]
+    consumer.stop()  # type: ignore[attr-defined]
+    db_url = str(state.get("system_database_url") or "")
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        _drop_logical_objects(conn)
+# ─── control-file phases (retry-storm, schedule-preload) ────────────────
+#
+# Both phase types talk to adapters through JSON control files that the
+# orchestrator creates (and forwards as JOB_FAILURE_CONTROL_FILE /
+# SCHEDULE_CONTROL_FILE) only when the phase list uses them. Writes go
+# through a rename so an adapter polling the file never reads a partial
+# document. An empty object means "nothing to do".
+
+
+def write_control_json(path: str | Path, payload: dict[str, Any]) -> None:
+    target = Path(path)
+    tmp = target.with_name(f".{target.name}.tmp")
+    tmp.write_text(json.dumps(payload, sort_keys=True))
+    os.replace(tmp, target)
+
+
+def _control_file(runtime: PhaseRuntime, key: str) -> str:
+    path = runtime.state.get(key)
+    if not path:
+        raise RuntimeError(
+            f"{runtime.phase.type.value} requires state[{key!r}]. The "
+            "orchestrator creates the control file when the phase list "
+            "contains this phase type."
+        )
+    return str(path)
+
+
+def _float_param(runtime: PhaseRuntime, name: str, default: float) -> float:
+    raw = runtime.phase.param(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"phase {runtime.phase.label!r}: param {name!r} must be a number, "
+            f"got {raw!r}"
+        ) from exc
+
+
+def retry_storm_plan(runtime: PhaseRuntime) -> dict[str, Any]:
+    transient_pct = _float_param(runtime, "transient_pct", 30.0)
+    poison_pct = _float_param(runtime, "poison_pct", 1.0)
+    if transient_pct < 0 or poison_pct < 0 or transient_pct + poison_pct > 100:
+        raise ValueError(
+            f"phase {runtime.phase.label!r}: transient_pct + poison_pct must "
+            "be within [0, 100]"
+        )
+    return {
+        "transient_pct": transient_pct,
+        "poison_pct": poison_pct,
+        "transient_failures": runtime.phase.int_param("transient_failures", 1),
+    }
+
+
+def enter_retry_storm(runtime: PhaseRuntime) -> None:
+    path = _control_file(runtime, "job_failure_control_file")
+    write_control_json(path, retry_storm_plan(runtime))
+
+
+def exit_retry_storm(runtime: PhaseRuntime) -> None:
+    path = runtime.state.get("job_failure_control_file")
+    if path:
+        write_control_json(str(path), {})
+
+
+def schedule_preload_command(
+    runtime: PhaseRuntime, *, now_s: float | None = None
+) -> dict[str, Any]:
+    from .phases import parse_duration
+
+    now_s = time.time() if now_s is None else now_s
+    count = runtime.phase.int_param("count", 10_000)
+    if count <= 0:
+        raise ValueError(f"phase {runtime.phase.label!r}: count must be positive")
+    delay_raw = runtime.phase.param("delay")
+    delay_s = (
+        runtime.phase.duration_s if delay_raw is None else parse_duration(delay_raw)
+    )
+    spread_s = parse_duration(runtime.phase.param("spread", "0") or "0")
+    now_ms = int(now_s * 1000)
+    return {
+        "id": f"{runtime.phase.label}-{now_ms}",
+        "count": count,
+        "run_at_ms": now_ms + delay_s * 1000,
+        "spread_ms": spread_s * 1000,
+    }
+
+
+def enter_schedule_preload(runtime: PhaseRuntime) -> None:
+    path = _control_file(runtime, "schedule_control_file")
+    write_control_json(path, schedule_preload_command(runtime))

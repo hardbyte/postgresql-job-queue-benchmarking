@@ -16,7 +16,7 @@ import re
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import psycopg
@@ -30,6 +30,9 @@ class PollTargets:
 
     event_tables: list[str]  # schema.table
     event_indexes: list[str]  # schema.indexname
+    # {state: count SQL} from adapter.json -> state_queries; empty unless the
+    # run's phases need DB-side job-state counts.
+    state_queries: dict[str, str] = field(default_factory=dict)
 
 
 def _next_aligned_tick(now: float, period_s: int) -> float:
@@ -173,6 +176,60 @@ SELECT
   tup_inserted::double precision
 FROM pg_stat_database
 WHERE datname = current_database()
+"""
+
+# Logical slot health. Lag is measured against confirmed_flush_lsn (what
+# the consumer has acknowledged); retained WAL against restart_lsn (what the
+# server must keep on disk). catalog_xmin age is how far the slot holds back
+# vacuum of system catalogs. No rows when no logical slot exists.
+_REPLICATION_SLOTS_SQL = """
+SELECT
+  s.slot_name,
+  s.active,
+  COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), s.confirmed_flush_lsn), 0)::double precision,
+  COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), s.restart_lsn), 0)::double precision,
+  COALESCE(age(s.catalog_xmin), 0)::double precision,
+  COALESCE(st.spill_bytes, 0)::double precision,
+  COALESCE(st.total_bytes, 0)::double precision
+FROM pg_replication_slots s
+LEFT JOIN pg_stat_replication_slots st USING (slot_name)
+WHERE s.slot_type = 'logical'
+"""
+
+# Published tables that can't replicate UPDATE/DELETE: no replica identity
+# (none, or default without a primary key). Postgres rejects UPDATE/DELETE
+# on such tables when a publication publishes those actions, so a non-zero
+# count means the queue itself errors once a CDC publication covers it.
+PUBLISHED_TABLES_FROM = """
+FROM pg_publication p
+JOIN pg_publication_tables pt ON pt.pubname = p.pubname
+JOIN pg_namespace n ON n.nspname = pt.schemaname
+JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = pt.tablename
+"""
+NO_REPLICA_IDENTITY_PREDICATE = """(
+  c.relreplident = 'n'
+  OR (c.relreplident = 'd' AND NOT EXISTS (
+        SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary))
+)"""
+
+_PUBLICATION_REPLICA_IDENTITY_SQL = f"""
+SELECT p.pubname,
+       count(*) FILTER (WHERE {NO_REPLICA_IDENTITY_PREDICATE})::double precision
+{PUBLISHED_TABLES_FROM}
+WHERE p.pubupdate OR p.pubdelete
+GROUP BY p.pubname
+"""
+
+# Catalog bloat from DDL churn (TRUNCATE rotation, partition create/drop,
+# temp tables). These are the catalogs that churn rows per relation; a slot
+# holding catalog_xmin stops vacuum from reclaiming them.
+CATALOG_TABLES = ("pg_class", "pg_attribute", "pg_depend", "pg_type")
+
+_CATALOG_STATS_SQL = """
+SELECT relname, n_dead_tup::double precision,
+       pg_total_relation_size(relid)::double precision / (1024 * 1024)
+FROM pg_stat_sys_tables
+WHERE schemaname = 'pg_catalog' AND relname = ANY(%s)
 """
 
 _ACTIVE_XACT_SQL = """
@@ -681,6 +738,61 @@ class MetricsDaemon(threading.Thread):
                     value=float(self._relfilenode_churn_total),
                 )
 
+            slot_rows = self._tick_query(
+                conn, cur, _REPLICATION_SLOTS_SQL, fetchall=True
+            ) or []
+            for (
+                slot_name,
+                active,
+                confirmed_lag,
+                retained,
+                catalog_xmin_age,
+                spill_bytes,
+                decoded_bytes,
+            ) in slot_rows:
+                for metric, value in (
+                    ("slot_active", 1.0 if active else 0.0),
+                    ("slot_confirmed_lag_bytes", confirmed_lag),
+                    ("slot_retained_wal_bytes", retained),
+                    ("slot_catalog_xmin_age", catalog_xmin_age),
+                    ("slot_spill_bytes_total", spill_bytes),
+                    ("slot_decoded_bytes_total", decoded_bytes),
+                ):
+                    self._emit(
+                        subject_kind="replication_slot",
+                        subject=slot_name,
+                        metric=metric,
+                        value=float(value),
+                    )
+
+            publication_rows = self._tick_query(
+                conn, cur, _PUBLICATION_REPLICA_IDENTITY_SQL, fetchall=True
+            ) or []
+            for pubname, missing in publication_rows:
+                self._emit(
+                    subject_kind="publication",
+                    subject=pubname,
+                    metric="publication_tables_without_replica_identity",
+                    value=float(missing),
+                )
+
+            catalog_rows = self._tick_query(
+                conn, cur, _CATALOG_STATS_SQL, (list(CATALOG_TABLES),), fetchall=True
+            ) or []
+            for relname, dead_tup, size_mb in catalog_rows:
+                self._emit(
+                    subject_kind="catalog",
+                    subject=f"pg_catalog.{relname}",
+                    metric="catalog_n_dead_tup",
+                    value=float(dead_tup),
+                )
+                self._emit(
+                    subject_kind="catalog",
+                    subject=f"pg_catalog.{relname}",
+                    metric="catalog_size_mb",
+                    value=float(size_mb),
+                )
+
             # Per-database transaction / tuple churn (background chattiness).
             row = self._tick_query(conn, cur, _PG_STAT_DATABASE_SQL)
             if row is not None:
@@ -765,6 +877,17 @@ class MetricsDaemon(threading.Thread):
                         metric="pg_cpu_seconds_total" if not subject else "adapter_cpu_seconds_total",
                         value=float(seconds),
                     )
+
+            for state, state_sql in self.targets.state_queries.items():
+                row = self._tick_query(conn, cur, state_sql)
+                if row is None or row[0] is None:
+                    continue
+                self._emit(
+                    subject_kind="job_state",
+                    subject=state,
+                    metric="job_state_count",
+                    value=float(row[0]),
+                )
 
             rows = self._tick_query(conn, cur, _ACTIVE_XACT_SQL, fetchall=True) or []
             self._emit(

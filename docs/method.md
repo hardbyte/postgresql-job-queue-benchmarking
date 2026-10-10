@@ -27,6 +27,11 @@ to `bench.py run`, or compose your own with
 | `chaos_repeated_kills` | Periodic SIGKILL+restart of replica 0 across a sustained chaos phase. |
 | `chaos_pg_backend_kill` | Steady stream of `pg_terminate_backend` against the SUT's connections. |
 | `chaos_pool_exhaustion` | Hold 300 idle connections to pressure the SUT's pool sizing. |
+| `neighbour_oltp` | Does the queue starve unrelated traffic on the same server? A fixed-rate pgbench neighbour (separate `neighbour` database, 8 clients, 300 TPS, TPC-B-like) runs through baseline (queue producer at 0, workers running) → moderate (1×) → saturation (4× `--producer-rate`) → recovery (1×). Headline: neighbour latency p50/p99 per phase and its ratio to baseline. |
+| `logical_replication` | Does the queue coexist with logical replication? Starts Postgres with `wal_level=logical`. clean (no slot) → stream (FOR ALL TABLES publication + `pgoutput` slot + streaming consumer) → high-load with the slot streaming → stall (consumer frozen: the "CDC sink is down" case) → catch-up. Headline: slot lag, retained WAL, `catalog_xmin` age, catalog bloat, WAL per job, consumer disconnects, and published tables without a replica identity (UPDATE/DELETE on them fails while the publication exists). Retained WAL grows for the whole stall, so the 15-minute stall at high rates needs several GB of free disk on the Docker volume. |
+| `scheduled_burst` | Baseline → preload a herd of 100k jobs all due at one instant (the end of the preload phase) while the immediate stream keeps flowing → the herd comes due and drains → tail. Measures scheduling lateness, herd drain time, the herd's effect on immediate-job latency, and the promotion work (deferred-table size/bloat, WAL). |
+| `scheduled_spread` | Like `scheduled_burst` but the 60k herd is spread uniformly over a 10-minute window: steady promotion accuracy rather than a single spike. |
+| `retry_storm` | Baseline → 20 min where 30% of new jobs fail once (transient) and 1% always fail (poison) → recovery. Retries use each system's own backoff; runs with `JOB_MAX_ATTEMPTS=5` unless overridden. Measures good-job throughput and latency under failure churn, retry/dead counts, table growth and bloat, and how long the retry backlog takes to drain. |
 | `mixed_queue` | Multi-queue run; pair with `BENCH_QUEUE_COUNT=N` to spawn N parallel queues. Producer round-robins inserts; consumer side registers N queue subscriptions. Tests per-queue isolation and engine-side per-queue overhead. |
 | `queue_fanout` | Clean load then an idle tail (`rate=0`). Run twice at the same `--producer-rate`, once with `--queue-count 1` and once with e.g. `--queue-count 500`, and compare backends, LISTEN connections, xacts/s, CPU and NOTIFY load. Exposes per-queue connections and per-queue polling. |
 | `large_payload` | Clean load then a drain tail. Run once per size with `--job-payload-bytes 16384` / `65536` / `262144` and `--job-payload-kind random` at a moderate rate (e.g. `--producer-rate 100`). Reports WAL bytes per job, TOAST size and TOAST bloat, and table size once the queue is empty again. |
@@ -99,7 +104,9 @@ batch runs serially), `SUBSCRIBER_BATCH_SIZE` (pg-boss) and
 `LEASE_DEADLINE_MS` (default 5 min).
 
 Set `BENCH_PG_PORT` (default `15555`) to run a second harness against its own
-Postgres container, e.g. from another worktree.
+Postgres container, e.g. from another worktree. Set `BENCH_IMAGE_TAG` to build
+and run adapter images as `<adapter>-bench:<tag>` instead of the shared
+`latest`, so concurrent worktrees don't swap images under each other.
 
 ## Adapter version notes
 
@@ -133,6 +140,11 @@ aren't visible from the version number alone:
 | `repeated-kill(instance=I,period=Ns)` | Periodic SIGKILL + auto-restart of replica `I` every `period`. Composes `kill-worker` / `start-worker`. |
 | `preload(jobs=N)` | Offers N jobs in total, spread evenly over the phase and across replicas, while consumers are held behind the consumer gate. The harness only creates the gate when a run contains a `preload`. |
 | `drain` | Producer stopped, consumer gate opened (one-shot: every `preload` must come before the first `drain`). |
+| `neighbour-oltp(load=X,clients=N,rate=R,script=S)` | Runs `pgbench -R R -c N` against the `neighbour` database for the phase, from a sidecar container using the stock Postgres image. The database is re-initialised with `pgbench -i -s 10` once per system, during warmup. Set the scale with `NEIGHBOUR_PGBENCH_SCALE`. `load` sets the producer rate to `X × --producer-rate` for the phase (default 1). `script` takes pgbench built-ins joined by `+`, e.g. `select-only@9+simple-update@1` (default `tpcb-like`). Latency is measured from each transaction's scheduled start, so it includes queueing. `service_p*` excludes schedule lag: high latency with normal service time means the neighbour fell behind its rate, and high service time means each transaction slowed. |
+| `logical-stream(publication=all\|none)` | The first logical phase creates publication `bench_cdc_pub` (FOR ALL TABLES, or empty with `publication=none`), creates slot `bench_cdc_slot` (`pgoutput`) and starts a `pg_recvlogical` consumer that discards output, confirms every second and reconnects on loss. All three persist through later phases until the system's run ends. This phase type keeps the consumer streaming. Postgres is started with `wal_level=logical` when any logical phase is scheduled. |
+| `logical-stall` | Same slot. The consumer container is frozen (`docker pause`) for this phase only, so the slot stops advancing. The walsender drops it after `wal_sender_timeout`, and the consumer reconnects when the phase ends. |
+| `retry-storm(transient_pct=30,poison_pct=1,transient_failures=1)` | Turns failure injection on for jobs enqueued during the phase: `transient_pct`% fail their first `transient_failures` attempts, `poison_pct`% fail every attempt. Off again at phase exit. |
+| `schedule-preload(count=N,delay=D,spread=S)` | Instance 0 enqueues `N` jobs scheduled for phase start + `D` (default: the phase duration), spread uniformly over `S` (default 0). The steady immediate stream keeps running. |
 
 Any phase also accepts `rate=N`, a per-replica jobs/s override that applies
 for that phase only, e.g. `warmup=warmup(rate=0):1m` or
@@ -145,6 +157,52 @@ adapter's stdin when the rate drops to 0 are discarded.
 Adapter samples are attributed to the phase that is current when they
 arrive, so per-phase job counts can include up to one sample period from
 the neighbouring phase. Drain timing uses an exact phase-start marker.
+
+## Scheduled jobs and failure churn
+
+`schedule-preload` and `retry-storm` drive the adapters through JSON control
+files (contract in `CONTRIBUTING_ADAPTERS.md`, "Scenario controls"). The
+harness only creates those files, and only polls each adapter's
+`state_queries` (job counts in `scheduled` / `retryable` / `dead` states,
+`subject_kind=job_state` in `raw.csv`), when the phase list uses these phase
+types; other scenarios are unaffected.
+
+Herd jobs carry their intended `run_at`; the worker records lateness =
+start time − `run_at`. Herd and failure-tagged jobs are excluded from the
+`claim_*` / `subscriber_*` / `end_to_end_*` windows and from
+`completion_rate`, so those keep measuring the immediate, healthy stream.
+
+`summary.json` adds, per phase:
+
+- `schedule`: cumulative herd lateness `lateness_{p50,p95,p99,max}_ms`,
+  `started` / `enqueued` / `early_starts`, `preload_s` (time to enqueue the
+  herd), `herd_complete`, and `drain_s` (lateness of the last herd job to
+  start, i.e. due instant → herd fully picked up; burst only).
+- `failure_injection`: `failed_attempts`, `retried_completions`,
+  `poison_exhausted` (adapter-observed final failing attempts), `completions`
+  and `median_good_completion_rate`.
+- `storm_recovery` (on the phase after a storm): `retry_backlog_drain_s`
+  (storm end → DB `retryable` count back to its baseline) and
+  `latency_recovery_s` (storm end → `claim_p99_ms` within 25% of baseline).
+- `peak_table_size_mb` (summed over event tables) next to the existing
+  dead-tuple and WAL figures; `job_state_count@<state>` under `metrics`.
+
+How each system implements the two workloads:
+
+| System | Scheduled herd | Retry backoff (defaults) | Exhausted jobs |
+|---|---|---|---|
+| awa | `InsertOpts.run_at` | 2^attempt s (+≤25% jitter) | `failed` (DLQ when `BENCH_DLQ_ENABLED=1`) |
+| river | `InsertOpts.ScheduledAt` (scheduler promotes, ~5 s cadence) | attempt^4 s + jitter | `discarded` |
+| oban | `scheduled_at` (stager, 1 s) | 2^attempt + 15 s + jitter | `discarded` |
+| pg-boss | `startAfter` | `retryDelay` 0 (immediate) | `failed` |
+| procrastinate | `schedule_at` | `RetryStrategy` with no wait (immediate) | `failed` |
+| pgmq | `send_batch(..., delay timestamptz)` | visibility timeout (`VISIBILITY_TIMEOUT_S`, 30 s) | adapter moves to a `_dlq` queue at the attempt cap |
+| pgque | **unsupported** (no delayed send; reported as `scheduled_jobs: unsupported` in the descriptor) | `nack` default `retry_after` 60 s; adapter runs `maint_retry_events()` every 1 s | `dead_letter` |
+| absurd | no delayed spawn; a durable `sleep_until` step (`scheduled_jobs: durable-sleep`), so each herd job runs once at preload to suspend | none (immediate) | `failed` |
+
+Backoff and delayed-visibility policies differ by orders of magnitude, so
+compare retry-backlog size and drain time with those defaults in mind; that
+difference is part of what the scenario measures.
 
 ## Postgres diagnostics
 
@@ -164,6 +222,22 @@ Notification queue usage lands in `raw.csv` as the cluster metric
 `subject_kind=pg_activity` with `xact_age_s` as the numeric value and the
 backend pid, application name, state, `xact_start`, wait event, and
 compacted query text encoded in the subject.
+
+The metrics daemon also polls system-catalog health and logical slots every
+tick. `subject_kind=catalog` carries `catalog_n_dead_tup` and
+`catalog_size_mb` for `pg_class`, `pg_attribute`, `pg_depend` and `pg_type`.
+That is where TRUNCATE rotation and partition churn show up.
+`subject_kind=replication_slot` carries `slot_confirmed_lag_bytes`,
+`slot_retained_wal_bytes`, `slot_catalog_xmin_age`, `slot_active` and the
+`slot_decoded_bytes_total` / `slot_spill_bytes_total` counters.
+`subject_kind=publication` carries
+`publication_tables_without_replica_identity`. The logical consumer emits
+`logical_consumer_*` counters, and pgbench emits `neighbour_*` 5 s-window
+series plus exact per-phase `neighbour_phase_*` stats. `summary.json`
+condenses these per phase into the `neighbour`, `logical` and `catalog`
+blocks, plus `wal_bytes_per_completed_job` (cluster WAL rate ÷ mean
+completion rate; it includes any neighbour workload's WAL). `index.html`
+shows them in a "Postgres Neighbours" table.
 
 Resource and scaling diagnostics, sampled every tick:
 

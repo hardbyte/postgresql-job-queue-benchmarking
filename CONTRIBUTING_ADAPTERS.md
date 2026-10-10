@@ -170,6 +170,62 @@ pacing — emitting dispatch tokens to adapters over stdin so the
 math lives in one place — but until that lands, every adapter is
 responsible for getting this loop right.
 
+### Scenario controls (optional, default-off)
+
+Two workload controls used by `scheduled_burst` / `scheduled_spread` and
+`retry_storm`. The harness sets these variables only when the phase list
+contains the matching phase type; an adapter that never sees them must
+behave exactly as before. Both point at JSON files the adapter re-reads at
+most once per second (the harness replaces them atomically); `{}` means
+"nothing to do". Docker adapters see them under the `/control` mount.
+
+| Var | Meaning |
+|---|---|
+| `JOB_FAILURE_CONTROL_FILE` | Failure plan `{"transient_pct": 30, "poison_pct": 1, "transient_failures": 1}`. |
+| `SCHEDULE_CONTROL_FILE` | Herd command `{"id": "...", "count": N, "run_at_ms": T, "spread_ms": S}`. Act once per new `id`. |
+| `JOB_MAX_ATTEMPTS` | Total attempts per job (first run included), mapped to the system's own setting (`max_attempts`, `retryLimit = N-1`, `queue_max_retries = N-1`, ...). Unset = system default. |
+
+Failure injection. While a plan is active the producer tags job `seq` by
+`bucket = (seq mod 10000) * 7919 mod 10000`: `bucket < poison_pct*100` →
+`{"fail": "poison"}`, else `bucket < (poison_pct+transient_pct)*100` →
+`{"fail": "transient", "fail_attempts": transient_failures}`; untagged jobs
+keep their exact payload. The worker fails a tagged attempt (`poison`:
+always; `transient`: while attempt ≤ `fail_attempts`) using the system's
+normal failure path, so its own retry, backoff and dead-letter handling
+apply. Emit, every tick:
+
+| Metric | Meaning |
+|---|---|
+| `injected_failure_rate` | injected failing attempts per second |
+| `retried_completion_rate` | transient jobs completed (after retrying) per second |
+| `poison_exhausted_rate` | poison failures on the job's final attempt per second |
+
+Scheduled herd. Instance 0 enqueues `count` jobs through the system's
+documented delayed-execution API, in batches from `herd_batches()` (≤500
+jobs, one run_at per batch; a spread herd uses batches covering ≤100 ms of
+the window), each payload carrying `"run_at_ms"`. Workers record
+`lateness = start − run_at_ms` (clamped at 0, early starts counted).
+Emit, once herd work has started:
+
+| Metric | Meaning |
+|---|---|
+| `schedule_lateness_{p50,p95,p99,max}_ms` | cumulative over herd jobs started by this replica |
+| `schedule_started_total`, `schedule_enqueued_total`, `schedule_early_total` | cumulative counts |
+| `schedule_preload_s` | seconds the last herd took to enqueue |
+| `scheduled_completion_rate` | herd jobs completed per second |
+
+Tagged and herd jobs stay out of the `claim_*` / `subscriber_*` /
+`end_to_end_*` windows; herd jobs also stay out of `completion_rate`. If the
+system has no delayed execution, ignore the herd command and add
+`"scheduled_jobs": "unsupported"` to the descriptor (`"native"` is implied;
+`"durable-sleep"` or similar names an emulation). The Python adapters share
+`adapter_common/bench_controls.py`, which is also the reference
+implementation for the other languages.
+
+Optionally declare `state_queries` in `adapter.json`: `{"scheduled": "SELECT
+count(*) ...", "retryable": "...", "dead": "..."}`. The harness polls them
+during these scenarios for DB-side job-state counts.
+
 ### Shutdown
 
 On SIGTERM, flush any pending samples and exit 0 within 5 seconds. The

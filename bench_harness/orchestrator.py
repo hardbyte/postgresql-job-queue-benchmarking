@@ -39,6 +39,7 @@ from .adapters import (
     pg_url,
     remove_adapter_containers,
 )
+from .hooks import write_control_json
 from .metrics import MetricsDaemon, PollTargets, parse_adapter_record
 from .hooks import CONSUMER_GATE_CLOSED, write_control_file
 from .phases import (
@@ -46,6 +47,7 @@ from .phases import (
     PhaseType,
     PhaseRuntime,
     default_registry,
+    required_wal_level,
     resolve_scenario,
 )
 from .plots import render_all
@@ -66,6 +68,7 @@ from .writers import (
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 RESULTS_ROOT = SCRIPT_DIR / "results"
 COMPOSE_FILE = SCRIPT_DIR / "docker-compose.yml"
+RETRY_STORM_DEFAULT_MAX_ATTEMPTS = 5
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -114,10 +117,12 @@ def _pg_stat_statements_enabled() -> bool:
     return os.environ.get("BENCH_PG_STAT_STATEMENTS", "") in {"1", "true", "yes", "on"}
 
 
-def _compose_env(pg_image: str) -> dict[str, str]:
+def _compose_env(pg_image: str, wal_level: str | None = None) -> dict[str, str]:
     env = {"POSTGRES_IMAGE": pg_image}
     if _pg_stat_statements_enabled():
         env["PG_SHARED_PRELOAD_LIBRARIES"] = "pg_stat_statements"
+    if wal_level is not None:
+        env["BENCH_PG_WAL_LEVEL"] = wal_level
     return env
 
 
@@ -148,12 +153,16 @@ def _compose_prefix(engine: str) -> list[str]:
     return ["docker", "compose", "-f", "docker-compose.yml", "-f", override]
 
 
-def start_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
+def start_postgres(
+    pg_image: str,
+    engine: str = DEFAULT_ENGINE,
+    wal_level: str = "replica",
+) -> None:
     prefix = _compose_prefix(engine)
     _run_cmd(
         [*prefix, "up", "-d", "--wait", "--force-recreate", "--renew-anon-volumes"],
         cwd=SCRIPT_DIR,
-        env=_compose_env(pg_image),
+        env=_compose_env(pg_image, wal_level),
     )
     # Readiness probe. Omni initdb + engine bring-up is slower than the
     # alpine image, so allow a generous window.
@@ -788,6 +797,7 @@ def run_one_system(
     wait_events_enabled: bool = True,
     wait_event_sample_every_s: float = 1.0,
     adapter_env: dict[str, str] | None = None,
+    wal_level: str = "replica",
 ) -> dict:
     entry = ADAPTERS[system]
     manifest = AdapterManifest.load(entry.bench_dir)
@@ -805,7 +815,7 @@ def run_one_system(
     # Sequential per-system fresh-PG isolation is the default.
     if not fast:
         stop_postgres(pg_image, engine)
-        start_postgres(pg_image, engine)
+        start_postgres(pg_image, engine, wal_level)
 
     preflight_database(manifest, recreate=fast)
 
@@ -831,6 +841,23 @@ def run_one_system(
     overrides["PRODUCER_RATE_CONTROL_FILE"] = str(control_file)
     overrides["PRODUCER_RATE_CONTROL_FILE_HOST"] = str(control_file)
     overrides["PRODUCER_RATE_CONTROL_FILE_CONTAINER"] = "/control/producer_rate.txt"
+    phase_types = {phase.type for phase in phases}
+    job_failure_control_file: Path | None = None
+    schedule_control_file: Path | None = None
+    if PhaseType.RETRY_STORM in phase_types:
+        job_failure_control_file = control_dir / "job_failure.json"
+        write_control_json(job_failure_control_file, {})
+        overrides["JOB_FAILURE_CONTROL_FILE"] = str(job_failure_control_file)
+        overrides["JOB_MAX_ATTEMPTS"] = os.environ.get(
+            "JOB_MAX_ATTEMPTS", str(RETRY_STORM_DEFAULT_MAX_ATTEMPTS)
+        )
+    if PhaseType.SCHEDULE_PRELOAD in phase_types:
+        schedule_control_file = control_dir / "schedule.json"
+        write_control_json(schedule_control_file, {})
+        overrides["SCHEDULE_CONTROL_FILE"] = str(schedule_control_file)
+    poll_state_queries = (
+        job_failure_control_file is not None or schedule_control_file is not None
+    )
 
     bench_start = time.time()
     # Stamp the tracker to the first phase before tailers start ingesting.
@@ -868,6 +895,7 @@ def run_one_system(
         targets=PollTargets(
             event_tables=runtime_event_tables,
             event_indexes=runtime_event_indexes,
+            state_queries=manifest.state_queries if poll_state_queries else {},
         ),
         output_queue=out_queue,
         bench_start=bench_start,
@@ -893,6 +921,44 @@ def run_one_system(
         )
         wait_sampler.start()
 
+    from .sample import now_iso
+
+    def _emit_sample(
+        subject_kind: str,
+        subject: str,
+        metric: str,
+        value: float,
+        *,
+        window_s: float = 0.0,
+        at_epoch: float | None = None,
+    ) -> None:
+        """Queue a harness-side sample under the current phase. `at_epoch`
+        backdates it (e.g. per-window stats parsed from a pgbench log)."""
+        label, phase_type = tracker.get()
+        when = time.time() if at_epoch is None else at_epoch
+        out_queue.put(
+            Sample(
+                run_id=run_id,
+                system=system,
+                instance_id=0,
+                elapsed_s=round(when - bench_start, 3),
+                sampled_at=(
+                    now_iso()
+                    if at_epoch is None
+                    else datetime.fromtimestamp(at_epoch, timezone.utc)
+                    .isoformat(timespec="milliseconds")
+                    .replace("+00:00", "Z")
+                ),
+                phase_label=label,
+                phase_type=phase_type,
+                subject_kind=subject_kind,
+                subject=subject,
+                metric=metric,
+                value=float(value),
+                window_s=float(window_s),
+            )
+        )
+
     registry = default_registry()
     phase_state: dict[str, object] = {
         "producer_rate_control_file": str(control_file),
@@ -916,12 +982,23 @@ def run_one_system(
         "system_database_url": pg_url(manifest.db_name),
         "system_database_name": manifest.db_name,
         "consumer_gate_file": str(consumer_gate_file) if consumer_gate_file else None,
+        # Harness-side sample emission for hooks that measure something
+        # themselves (neighbour pgbench, logical consumer).
+        "emit_sample": _emit_sample,
+        "sample_every_s": sample_every_s,
+        "job_failure_control_file": (
+            str(job_failure_control_file) if job_failure_control_file else None
+        ),
+        "schedule_control_file": (
+            str(schedule_control_file) if schedule_control_file else None
+        ),
     }
     phase_rates = [
         producer_rate if rate is None else rate
         for rate in (p.rate_override(replicas) for p in phases)
     ]
     try:
+        registry.prepare(phases, phase_state)
         for phase_index, phase in enumerate(phases):
             tracker.set(phase.label, phase.type.value)
             _emit_phase_start(
@@ -967,6 +1044,10 @@ def run_one_system(
                         out_queue=out_queue,
                     )
     finally:
+        try:
+            registry.teardown(phases, phase_state)
+        except Exception as exc:
+            print(f"[{system}] phase teardown failed: {exc}", file=sys.stderr)
         daemon.stop()
         daemon.join(timeout=5.0)
         if wait_sampler is not None:
@@ -1053,6 +1134,7 @@ def drive(
     if unknown:
         raise SystemExit(f"Unknown systems: {unknown}. Known: {sorted(ADAPTERS)}")
 
+    wal_level = required_wal_level(phases)
     run_dir = _new_run_dir(scenario, engine)
     run_id = run_dir.name
     print(f"[harness] run_id = {run_id}", file=sys.stderr)
@@ -1077,7 +1159,7 @@ def drive(
     try:
         # Start PG once upfront (needed for the initial build phase to connect;
         # also the --fast path keeps this same instance across systems).
-        start_postgres(pg_image, engine)
+        start_postgres(pg_image, engine, wal_level)
 
         if not skip_build:
             for system in systems:
@@ -1148,6 +1230,7 @@ def drive(
                 wait_events_enabled=wait_events_enabled,
                 wait_event_sample_every_s=wait_event_sample_every_s,
                 adapter_env=adapter_env,
+                wal_level=wal_level,
             )
             # Merge the runtime descriptor the adapter emitted with the
             # harness-proven revision block (git SHA / submodule SHA /

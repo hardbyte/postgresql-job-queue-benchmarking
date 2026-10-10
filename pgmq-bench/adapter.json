@@ -10,5 +10,10 @@
   "extensions": [
     "pgmq"
   ],
-  "shutdown_grace_s": 30
+  "shutdown_grace_s": 30,
+  "state_queries": {
+    "scheduled": "SELECT count(*) FROM pgmq.q_long_horizon_bench WHERE read_ct = 0 AND vt > now()",
+    "retryable": "SELECT count(*) FROM pgmq.q_long_horizon_bench WHERE read_ct > 0",
+    "dead": "SELECT count(*) FROM pgmq.q_long_horizon_bench_dlq"
+  }
 }

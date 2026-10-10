@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from time import monotonic
@@ -17,6 +18,9 @@ from absurd_sdk import AsyncAbsurd
 import psycopg
 from psycopg import AsyncConnection, sql
 from psycopg.rows import dict_row
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter_common"))
+from bench_controls import ScenarioControls, herd_preload_loop  # noqa: E402
 
 
 ABSURD_SQL_PATH = Path(os.environ.get("ABSURD_SQL_PATH", "/opt/absurd.sql"))
@@ -192,11 +196,30 @@ def build_app(
     end_to_end_latencies_ms,
     completed_counter: list[int],
     work_ms: int,
+    controls: ScenarioControls | None = None,
 ) -> AsyncAbsurd:
     app = AsyncAbsurd(database_url(), queue_name=queue_name)
 
     @app.register_task(TASK_NAME)
     async def bench_job(params: dict, _ctx) -> None:
+        if controls is not None and controls.is_tagged(params):
+            run_at_ms = params.get("run_at_ms")
+            if run_at_ms is not None:
+                # Absurd has no delayed spawn; a durable sleep step is its
+                # documented way to defer work. The first run suspends here
+                # and the woken run continues past it.
+                await _ctx.sleep_until("run_at", run_at_ms / 1000.0)
+                controls.on_start(params)
+            claimed = _ctx._task
+            controls.check_failure(
+                params, int(claimed["attempt"]), claimed.get("max_attempts")
+            )
+            if work_ms > 0:
+                await asyncio.sleep(work_ms / 1000.0)
+            controls.on_complete(params)
+            if run_at_ms is None:
+                completed_counter[0] += 1
+            return
         started_at_ms = int(time.time() * 1000)
         enqueued_at_ms = params.get("enqueued_at_ms")
         if enqueued_at_ms is not None:
@@ -262,12 +285,14 @@ async def count_by_state(conn: AsyncConnection, queue_names: list[str]) -> dict[
     return {row["state"]: int(row["count"]) for row in rows}
 
 
-async def enqueue_batch(conn: AsyncConnection, queue_name: str, items: list[dict]) -> None:
+async def enqueue_batch(
+    conn: AsyncConnection, queue_name: str, items: list[dict], options: str = "{}"
+) -> None:
     query = "SELECT task_id FROM absurd.spawn_task(%s, %s, %s::jsonb, %s::jsonb)"
     async with conn.cursor() as cur:
         await cur.executemany(
             query,
-            [(queue_name, TASK_NAME, json.dumps(item), "{}") for item in items],
+            [(queue_name, TASK_NAME, json.dumps(item), options) for item in items],
         )
 
 
@@ -291,18 +316,25 @@ async def scenario_long_horizon() -> None:
         await recreate_queue(queue)
 
     db_name = database_url().rsplit("/", 1)[-1]
-    emit(
-        {
-            "kind": "descriptor",
-            "system": "absurd",
-            "event_tables": [f"absurd.t_{QUEUE_NAME}"],
-            "extensions": [],
-            "version": f"absurd-sdk {ABSURD_SDK_VERSION}",
-            "schema_version": schema_version,
-            "db_name": db_name,
-            "started_at": now_iso(),
-        }
+    controls = ScenarioControls()
+    spawn_options = (
+        json.dumps({"max_attempts": controls.max_attempts})
+        if controls.max_attempts is not None
+        else "{}"
     )
+    descriptor = {
+        "kind": "descriptor",
+        "system": "absurd",
+        "event_tables": [f"absurd.t_{QUEUE_NAME}"],
+        "extensions": [],
+        "version": f"absurd-sdk {ABSURD_SDK_VERSION}",
+        "schema_version": schema_version,
+        "db_name": db_name,
+        "started_at": now_iso(),
+    }
+    if controls.schedule_enabled:
+        descriptor["scheduled_jobs"] = "durable-sleep"
+    emit(descriptor)
 
     loop = asyncio.get_running_loop()
     shutdown = asyncio.Event()
@@ -375,6 +407,7 @@ async def scenario_long_horizon() -> None:
             end_to_end_latencies_ms=end_to_end_latencies_ms,
             completed_counter=completed_counter,
             work_ms=work_ms,
+            controls=controls,
         )
         for queue in queues
     ]
@@ -421,13 +454,17 @@ async def scenario_long_horizon() -> None:
                         "seq": seq,
                         "enqueued_at_ms": enqueued_at_ms,
                         "payload_padding": padding,
+                        **controls.failure_tag(seq),
                     }
                 )
 
             started = monotonic()
             try:
                 await enqueue_batch(
-                    producer_conn.conn, queues[batch_index % len(queues)], batch
+                    producer_conn.conn,
+                    queues[batch_index % len(queues)],
+                    batch,
+                    spawn_options,
                 )
                 batch_index += 1
             except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
@@ -445,6 +482,28 @@ async def scenario_long_horizon() -> None:
                 await asyncio.sleep(
                     max(0.0, min(producer_batch_ms / 1000.0, next_t - loop.time()))
                 )
+
+    herd_conn = ReconnectingConn(await connect()) if controls.schedule_enabled else None
+
+    async def enqueue_herd(first_seq: int, size: int, run_at_ms: int) -> None:
+        assert herd_conn is not None
+        enqueued_at_ms = int(time.time() * 1000)
+        items = [
+            {
+                "seq": first_seq + i,
+                "enqueued_at_ms": enqueued_at_ms,
+                "payload_padding": padding,
+                "run_at_ms": run_at_ms,
+            }
+            for i in range(size)
+        ]
+        try:
+            await enqueue_batch(
+                herd_conn.conn, queues[first_seq % len(queues)], items, spawn_options
+            )
+        except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
+            await herd_conn.reconnect()
+            raise
 
     async def depth_task() -> None:
         nonlocal current_queue_depth, current_running_depth, current_retryable_depth
@@ -527,6 +586,7 @@ async def scenario_long_horizon() -> None:
                 ("scheduled_depth", current_scheduled_depth, 0),
                 ("total_backlog", current_total_backlog, 0),
                 ("producer_target_rate", current_producer_target_rate, 0),
+                *controls.metrics(sample_every_s, sample_every_s),
             ):
                 if metric in OBSERVER_METRICS and not observer_enabled():
                     continue
@@ -569,6 +629,9 @@ async def scenario_long_horizon() -> None:
         asyncio.create_task(producer()),
         asyncio.create_task(depth_task()),
         asyncio.create_task(sampler()),
+        asyncio.create_task(
+            herd_preload_loop(controls, shutdown, enqueue_herd, log_prefix="absurd")
+        ),
         *worker_tasks,
     ]
 
@@ -583,6 +646,8 @@ async def scenario_long_horizon() -> None:
         await app.close()
     await producer_conn.close()
     await depth_conn.close()
+    if herd_conn is not None:
+        await herd_conn.close()
 
 
 async def main() -> None:

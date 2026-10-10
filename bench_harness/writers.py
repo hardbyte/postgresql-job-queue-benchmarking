@@ -32,7 +32,30 @@ RATE_METRICS = {
     "completed_original_priority_1_rate",
     "completed_original_priority_4_rate",
     "aged_completion_rate",
+    "scheduled_completion_rate",
+    "injected_failure_rate",
+    "retried_completion_rate",
+    "poison_exhausted_rate",
 }
+
+# Cumulative per-replica gauges for the scheduled-herd workload; the
+# summary reads the last value each replica reported in a phase.
+SCHEDULE_GAUGE_METRICS = (
+    "schedule_lateness_p50_ms",
+    "schedule_lateness_p95_ms",
+    "schedule_lateness_p99_ms",
+    "schedule_lateness_max_ms",
+    "schedule_started_total",
+    "schedule_enqueued_total",
+    "schedule_early_total",
+    "schedule_preload_s",
+)
+
+FAILURE_RATE_METRICS = (
+    "injected_failure_rate",
+    "retried_completion_rate",
+    "poison_exhausted_rate",
+)
 
 LATENCY_METRICS = {
     "producer_p50_ms",
@@ -485,8 +508,25 @@ def compute_summary(
             )
             target.update(agg)
 
+    _attach_retry_storm_recovery(rows, phases=ordered_phases, out_systems=out_systems)
+
     for system, system_block in out_systems.items():
         for phase_label, phase_block in system_block["phases"].items():
+            schedule = _schedule_summary(rows, system=system, phase_label=phase_label)
+            if schedule is not None:
+                phase_block["schedule"] = schedule
+            failure = _failure_summary(rows, system=system, phase_label=phase_label)
+            if failure is not None:
+                phase_block["failure_injection"] = failure
+            phase_block["peak_table_size_mb"] = _peak(
+                _phase_summed_values(
+                    rows,
+                    system=system,
+                    phase_label=phase_label,
+                    metric="total_relation_size_mb",
+                    subject_kind="table",
+                )
+            )
             dead_tup = _phase_summed_values(
                 rows,
                 system=system,
@@ -590,6 +630,21 @@ def compute_summary(
                     rows, system=system, phase_label=phase_label
                 )
             )
+            phase_block["wal_bytes_per_completed_job"] = _wal_bytes_per_job(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                wal_bytes_per_s=phase_block["pg_wal_bytes_per_s"],
+            )
+            neighbour = _neighbour_block(rows, system=system, phase_label=phase_label)
+            if neighbour is not None:
+                phase_block["neighbour"] = neighbour
+            catalog = _catalog_block(rows, system=system, phase_label=phase_label)
+            if catalog is not None:
+                phase_block["catalog"] = catalog
+            logical = _logical_block(rows, system=system, phase_label=phase_label)
+            if logical is not None:
+                phase_block["logical"] = logical
             phase_block["replicas"] = replicas
             wait = _wait_event_summary(
                 rows, system=system, phase_label=phase_label
@@ -613,6 +668,7 @@ def compute_summary(
         run_block = _run_totals(rows, system=system, phases=phases)
         if run_block:
             system_block["run"] = run_block
+    _add_neighbour_baseline_ratios(out_systems, phases)
 
     return {
         "run_id": run_id,
@@ -969,6 +1025,264 @@ def _run_totals(rows: list[dict], *, system: str, phases: list[Phase]) -> dict:
                 None,
             )
     return out
+
+
+def _last_adapter_values(
+    rows: list[dict], *, system: str, phase_label: str, metric: str
+) -> dict[str, float]:
+    """Last value each replica reported for ``metric`` within the phase."""
+    latest: dict[str, tuple[float, float]] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row.get("subject_kind") != "adapter"
+        ):
+            continue
+        try:
+            elapsed_s = float(row["elapsed_s"])
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+        instance_id = str(row.get("instance_id") or "0")
+        if instance_id not in latest or elapsed_s >= latest[instance_id][0]:
+            latest[instance_id] = (elapsed_s, value)
+    return {instance_id: value for instance_id, (_, value) in latest.items()}
+
+
+def _schedule_summary(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    """Scheduled-herd outcome as of the end of ``phase_label``.
+
+    Lateness percentiles are cumulative per replica, so the maximum across
+    replicas is reported (exact for a single replica). ``drain_s`` is the
+    lateness of the last herd job to start, i.e. the time from the due
+    instant to the herd being fully picked up; it is only reported once
+    every enqueued herd job has started.
+    """
+    last = {
+        metric: _last_adapter_values(
+            rows, system=system, phase_label=phase_label, metric=metric
+        )
+        for metric in SCHEDULE_GAUGE_METRICS
+    }
+    if not any(last.values()):
+        return None
+
+    def _max(metric: str) -> float | None:
+        values = last[metric].values()
+        return float(max(values)) if values else None
+
+    def _sum(metric: str) -> float | None:
+        values = last[metric].values()
+        return float(sum(values)) if values else None
+
+    started = _sum("schedule_started_total")
+    enqueued = _sum("schedule_enqueued_total")
+    lateness_max_ms = _max("schedule_lateness_max_ms")
+    complete = bool(enqueued) and started is not None and started >= enqueued
+    return {
+        "lateness_p50_ms": _max("schedule_lateness_p50_ms"),
+        "lateness_p95_ms": _max("schedule_lateness_p95_ms"),
+        "lateness_p99_ms": _max("schedule_lateness_p99_ms"),
+        "lateness_max_ms": lateness_max_ms,
+        "started": started,
+        "enqueued": enqueued,
+        "early_starts": _sum("schedule_early_total"),
+        "preload_s": _max("schedule_preload_s"),
+        "herd_complete": complete,
+        "drain_s": (
+            lateness_max_ms / 1000.0
+            if complete and lateness_max_ms is not None
+            else None
+        ),
+    }
+
+
+def _integrated_count(
+    rows: list[dict], *, system: str, phase_label: str, metric: str
+) -> float | None:
+    """Sum of rate * window over every adapter sample of ``metric``."""
+    total = 0.0
+    seen = False
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row.get("subject_kind") != "adapter"
+        ):
+            continue
+        try:
+            value = float(row["value"])
+            window_s = float(row.get("window_s") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        seen = True
+        total += value * window_s
+    return total if seen else None
+
+
+def _failure_summary(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    """Per-phase failure-injection counts and good-job throughput."""
+    counts = {
+        metric: _integrated_count(
+            rows, system=system, phase_label=phase_label, metric=metric
+        )
+        for metric in FAILURE_RATE_METRICS
+    }
+    if all(value is None for value in counts.values()):
+        return None
+    completions = aggregate_replica_metric_series(
+        rows,
+        system=system,
+        phase_label=phase_label,
+        metric="completion_rate",
+        subject_kind="adapter",
+    )
+    retried = aggregate_replica_metric_series(
+        rows,
+        system=system,
+        phase_label=phase_label,
+        metric="retried_completion_rate",
+        subject_kind="adapter",
+    )
+    good = [
+        completed - (retried[idx] if idx < len(retried) else 0.0)
+        for idx, completed in enumerate(completions)
+    ]
+    return {
+        "failed_attempts": counts["injected_failure_rate"],
+        "retried_completions": counts["retried_completion_rate"],
+        "poison_exhausted": counts["poison_exhausted_rate"],
+        "completions": _integrated_count(
+            rows, system=system, phase_label=phase_label, metric="completion_rate"
+        ),
+        "median_good_completion_rate": _median(good),
+    }
+
+
+def _timeline(
+    rows: list[dict],
+    *,
+    system: str,
+    phase_labels: list[str],
+    metric: str,
+    subject_kind: str,
+    subject: str | None = None,
+) -> list[tuple[float, float]]:
+    """(elapsed_s, value) points, max-reduced across replicas per tick."""
+    per_elapsed: dict[float, float] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] not in phase_labels
+            or row["metric"] != metric
+            or row.get("subject_kind") != subject_kind
+        ):
+            continue
+        if subject is not None and row.get("subject") != subject:
+            continue
+        try:
+            elapsed_s = float(row["elapsed_s"])
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+        per_elapsed[elapsed_s] = max(value, per_elapsed.get(elapsed_s, value))
+    return sorted(per_elapsed.items())
+
+
+def _attach_retry_storm_recovery(
+    rows: list[dict], *, phases: list[Phase], out_systems: dict[str, dict]
+) -> None:
+    """Recovery after a retry-storm span, attached to the following phase.
+
+    - ``retry_backlog_drain_s``: storm end until the DB-side ``retryable``
+      job-state count first returns to its pre-storm baseline median (every
+      transient retry has run and every poison job has exhausted).
+    - ``latency_recovery_s``: storm end until ``claim_p99_ms`` first returns
+      to within 25% of the baseline median.
+    Storm end is the last sample observed in the storm span.
+    """
+    for i, phase in enumerate(phases):
+        if phase.type is PhaseType.RETRY_STORM:
+            continue
+        storm_labels: list[str] = []
+        for prev in reversed(phases[:i]):
+            if prev.type is not PhaseType.RETRY_STORM:
+                break
+            storm_labels.append(prev.label)
+        if not storm_labels:
+            continue
+        baseline_label: str | None = None
+        for prev in reversed(phases[: i - len(storm_labels)]):
+            if prev.type is PhaseType.CLEAN:
+                baseline_label = prev.label
+                break
+        after_labels = [p.label for p in phases[i:]]
+        for system, system_block in out_systems.items():
+            storm_points = [
+                elapsed
+                for metric, kind in (
+                    ("completion_rate", "adapter"),
+                    ("job_state_count", "job_state"),
+                )
+                for elapsed, _ in _timeline(
+                    rows,
+                    system=system,
+                    phase_labels=storm_labels,
+                    metric=metric,
+                    subject_kind=kind,
+                )
+            ]
+            if not storm_points:
+                continue
+            storm_end = max(storm_points)
+            result: dict[str, float | None] = {}
+            for key, metric, kind, subject, slack in (
+                ("retry_backlog_drain_s", "job_state_count", "job_state", "retryable", 1.0),
+                ("latency_recovery_s", "claim_p99_ms", "adapter", None, 1.25),
+            ):
+                baseline_values = (
+                    [
+                        value
+                        for _, value in _timeline(
+                            rows,
+                            system=system,
+                            phase_labels=[baseline_label],
+                            metric=metric,
+                            subject_kind=kind,
+                            subject=subject,
+                        )
+                    ]
+                    if baseline_label
+                    else []
+                )
+                after = _timeline(
+                    rows,
+                    system=system,
+                    phase_labels=after_labels,
+                    metric=metric,
+                    subject_kind=kind,
+                    subject=subject,
+                )
+                threshold = (_median(baseline_values) or 0.0) * slack
+                result[key] = next(
+                    (
+                        elapsed - storm_end
+                        for elapsed, value in after
+                        if elapsed > storm_end and value <= threshold
+                    ),
+                    None,
+                )
+            target = system_block["phases"].setdefault(
+                phase.label, {"phase_type": phase.type.value, "metrics": {}}
+            )
+            target["storm_recovery"] = result
 
 
 def _chaos_aggregates(
@@ -1360,6 +1674,247 @@ def _cluster_counter_rate(
     values = [value for _, value in points]
     # Same max-min convention as _cluster_counter_delta (monotonic counter).
     return (max(values) - min(values)) / span_s
+
+
+def _wal_bytes_per_job(
+    rows: list[dict],
+    *,
+    system: str,
+    phase_label: str,
+    wal_bytes_per_s: float | None,
+) -> float | None:
+    """Cluster WAL rate over the phase divided by the mean completion rate.
+    Both are rates over the same phase, so this is WAL per completed job
+    without integrating sample windows. WAL is cluster-wide: it includes
+    anything else running on the server (e.g. a neighbour workload)."""
+    if wal_bytes_per_s is None:
+        return None
+    series = aggregate_replica_metric_series(
+        rows,
+        system=system,
+        phase_label=phase_label,
+        metric="completion_rate",
+        subject_kind="adapter",
+    )
+    if not series:
+        return None
+    mean_rate = sum(series) / len(series)
+    if mean_rate <= 0:
+        return None
+    return wal_bytes_per_s / mean_rate
+
+
+def _kind_series(
+    rows: list[dict],
+    *,
+    system: str,
+    phase_label: str,
+    subject_kind: str,
+    metric: str,
+    reduce: str = "sum",
+) -> list[tuple[float, float]]:
+    """(elapsed_s, value) for one metric, reduced across subjects per tick."""
+    per_elapsed: dict[float, list[float]] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row.get("subject_kind") != subject_kind
+        ):
+            continue
+        try:
+            per_elapsed.setdefault(float(row["elapsed_s"]), []).append(
+                float(row["value"])
+            )
+        except (TypeError, ValueError):
+            continue
+    reducer = sum if reduce == "sum" else max
+    return [(t, float(reducer(vals))) for t, vals in sorted(per_elapsed.items())]
+
+
+def _phase_counter_increase(
+    rows: list[dict],
+    *,
+    system: str,
+    phase_label: str,
+    subject_kind: str,
+    metric: str,
+) -> float | None:
+    """Increase of a monotonic counter over a phase, measured from the
+    previous phase's last sample when there is one, so an increment that
+    lands between two phases' samples is attributed to the later phase."""
+    points: list[tuple[float, str, float]] = []
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["metric"] != metric
+            or row.get("subject_kind") != subject_kind
+        ):
+            continue
+        try:
+            points.append(
+                (float(row["elapsed_s"]), row["phase_label"], float(row["value"]))
+            )
+        except (TypeError, ValueError):
+            continue
+    points.sort()
+    in_phase = [i for i, (_, label, _) in enumerate(points) if label == phase_label]
+    if not in_phase:
+        return None
+    start = in_phase[0] - 1 if in_phase[0] > 0 else in_phase[0]
+    window = [v for _, _, v in points[start : in_phase[-1] + 1]]
+    if len(window) < 2:
+        return None
+    return max(window) - min(window)
+
+
+NEIGHBOUR_PHASE_PREFIX = "neighbour_phase_"
+
+
+def _neighbour_block(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    """Phase-level pgbench neighbour stats (exact percentiles over every
+    transaction in the phase) plus the worst 5 s-window p99."""
+    block: dict[str, float] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row.get("subject_kind") != "neighbour"
+            or not row["metric"].startswith(NEIGHBOUR_PHASE_PREFIX)
+        ):
+            continue
+        try:
+            block[row["metric"][len(NEIGHBOUR_PHASE_PREFIX):]] = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+    if not block:
+        return None
+    window_p99 = _kind_series(
+        rows,
+        system=system,
+        phase_label=phase_label,
+        subject_kind="neighbour",
+        metric="neighbour_latency_p99_ms",
+        reduce="max",
+    )
+    block["window_latency_p99_ms_peak"] = _peak([v for _, v in window_p99])
+    return block
+
+
+def _add_neighbour_baseline_ratios(out_systems: dict, phases: list[Phase]) -> None:
+    """Relate each neighbour phase to the first queue-idle (`load=0`) one."""
+    baseline = next(
+        (
+            p.label
+            for p in phases
+            if p.type is PhaseType.NEIGHBOUR_OLTP and p.float_param("load", 1.0) == 0
+        ),
+        None,
+    )
+    if baseline is None:
+        return
+    for system_block in out_systems.values():
+        base = system_block["phases"].get(baseline, {}).get("neighbour")
+        if not base:
+            continue
+        for phase_block in system_block["phases"].values():
+            block = phase_block.get("neighbour")
+            if not block:
+                continue
+            for key in ("latency_p50_ms", "latency_p99_ms", "tps"):
+                num, den = block.get(key), base.get(key)
+                block[f"{key}_vs_baseline"] = (
+                    num / den if num is not None and den else None
+                )
+
+
+def _catalog_block(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    dead = _kind_series(
+        rows, system=system, phase_label=phase_label,
+        subject_kind="catalog", metric="catalog_n_dead_tup",
+    )
+    size = _kind_series(
+        rows, system=system, phase_label=phase_label,
+        subject_kind="catalog", metric="catalog_size_mb",
+    )
+    if not dead and not size:
+        return None
+    return {
+        "dead_tup_peak": _peak([v for _, v in dead]),
+        "dead_tup_end": dead[-1][1] if dead else None,
+        "size_mb_end": size[-1][1] if size else None,
+        "size_mb_delta": (size[-1][1] - size[0][1]) if len(size) >= 2 else None,
+    }
+
+
+def _logical_block(
+    rows: list[dict], *, system: str, phase_label: str
+) -> dict | None:
+    def slot(metric: str) -> list[tuple[float, float]]:
+        return _kind_series(
+            rows, system=system, phase_label=phase_label,
+            subject_kind="replication_slot", metric=metric, reduce="max",
+        )
+
+    def consumer(metric: str) -> list[tuple[float, float]]:
+        return _kind_series(
+            rows, system=system, phase_label=phase_label,
+            subject_kind="logical_consumer", metric=metric, reduce="max",
+        )
+
+    def increase(subject_kind: str, metric: str) -> float | None:
+        return _phase_counter_increase(
+            rows, system=system, phase_label=phase_label,
+            subject_kind=subject_kind, metric=metric,
+        )
+
+    lag = [v for _, v in slot("slot_confirmed_lag_bytes")]
+    retained = slot("slot_retained_wal_bytes")
+    active = [v for _, v in slot("slot_active")]
+    if not lag and not retained and not consumer("logical_consumer_bytes_total"):
+        return None
+    paused = [v for _, v in consumer("logical_consumer_paused")]
+    no_replica_identity = _kind_series(
+        rows, system=system, phase_label=phase_label, subject_kind="publication",
+        metric="publication_tables_without_replica_identity", reduce="max",
+    )
+    return {
+        "slot_lag_bytes_median": _median(lag),
+        "slot_lag_bytes_peak": _peak(lag),
+        "retained_wal_bytes_peak": _peak([v for _, v in retained]),
+        "retained_wal_bytes_end": retained[-1][1] if retained else None,
+        "catalog_xmin_age_peak": _peak(
+            [v for _, v in slot("slot_catalog_xmin_age")]
+        ),
+        "slot_active_fraction": sum(active) / len(active) if active else None,
+        "slot_decoded_bytes_delta": increase(
+            "replication_slot", "slot_decoded_bytes_total"
+        ),
+        "slot_spill_bytes_delta": increase(
+            "replication_slot", "slot_spill_bytes_total"
+        ),
+        "consumer_bytes_delta": increase(
+            "logical_consumer", "logical_consumer_bytes_total"
+        ),
+        "consumer_disconnects_delta": increase(
+            "logical_consumer", "logical_consumer_disconnects_total"
+        ),
+        "consumer_errors_delta": increase(
+            "logical_consumer", "logical_consumer_errors_total"
+        ),
+        "consumer_exits_delta": increase(
+            "logical_consumer", "logical_consumer_exits_total"
+        ),
+        "consumer_paused_fraction": sum(paused) / len(paused) if paused else None,
+        "tables_without_replica_identity": _peak(
+            [v for _, v in no_replica_identity]
+        ),
+    }
 
 
 def write_summary(summary: dict, path: Path) -> None:

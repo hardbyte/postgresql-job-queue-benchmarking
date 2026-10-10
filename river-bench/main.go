@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/signal"
@@ -447,8 +448,11 @@ func scenarioPickupLatency(ctx context.Context, pool *pgxpool.Pool, iterations i
 // LongHorizonArgs is the job payload for the long-horizon scenario. The padding
 // field lets us approximate the declared payload size.
 type LongHorizonArgs struct {
-	Seq     int64  `json:"seq"`
-	Padding string `json:"padding"`
+	Seq          int64  `json:"seq"`
+	Padding      string `json:"padding"`
+	Fail         string `json:"fail,omitempty"`
+	FailAttempts int    `json:"fail_attempts,omitempty"`
+	RunAtMs      int64  `json:"run_at_ms,omitempty"`
 }
 
 func (LongHorizonArgs) Kind() string { return "long_horizon_job" }
@@ -470,10 +474,26 @@ type latencyEvent struct {
 
 type LongHorizonWorker struct {
 	river.WorkerDefaults[LongHorizonArgs]
-	state *longHorizonState
+	state    *longHorizonState
+	controls *scenarioControls
 }
 
 func (w *LongHorizonWorker) Work(ctx context.Context, job *river.Job[LongHorizonArgs]) error {
+	if args := job.Args; args.Fail != "" || args.RunAtMs != 0 {
+		w.controls.onStart(args.RunAtMs)
+		if outcome := failureOutcome(args.Fail, args.FailAttempts, job.Attempt, job.MaxAttempts); outcome != "" {
+			w.controls.recordFailure(args.Fail, outcome)
+			return fmt.Errorf("injected %s failure (attempt %d)", args.Fail, job.Attempt)
+		}
+		if w.state.workMs > 0 {
+			time.Sleep(time.Duration(w.state.workMs) * time.Millisecond)
+		}
+		w.controls.onComplete(args.Fail, args.RunAtMs)
+		if args.RunAtMs == 0 {
+			w.state.completed.Add(1)
+		}
+		return nil
+	}
 	// Pickup latency = now - created_at. River's Job struct exposes CreatedAt.
 	latencyMs := float64(time.Since(job.CreatedAt).Milliseconds())
 	if latencyMs < 0 {
@@ -622,8 +642,10 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	var producerTargetRate atomic.Int64
 	producerTargetRate.Store(int64(producerRate))
 
+	padding := payloadPadding(payloadBytes - 32)
+	controls := newScenarioControls()
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &LongHorizonWorker{state: state})
+	river.AddWorker(workers, &LongHorizonWorker{state: state, controls: controls})
 
 	queues := queueNames()
 	perQueueWorkers := maxInt(1, workerCount/len(queues))
@@ -632,17 +654,44 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 		queueConfigs[name] = river.QueueConfig{MaxWorkers: perQueueWorkers}
 	}
 
-	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
+	riverConfig := &river.Config{
 		Queues:               queueConfigs,
 		Workers:              workers,
 		JobTimeout:           rescueAfter(30),
 		FetchCooldown:        50 * time.Millisecond,
 		FetchPollInterval:    50 * time.Millisecond,
 		RescueStuckJobsAfter: rescueAfter(30),
-	})
+	}
+	if controls.failureEnabled() {
+		riverConfig.Logger = slog.New(injectedFailureFilter{slog.NewTextHandler(os.Stderr, nil)})
+	}
+	client, err := river.NewClient(riverpgxv5.New(pool), riverConfig)
 	if err != nil {
 		log.Fatalf("long_horizon: failed to create client: %v", err)
 	}
+
+	// nil keeps River's defaults; JOB_MAX_ATTEMPTS overrides max attempts.
+	// Spread jobs across queues per job; both fall back to River's
+	// defaults when BENCH_QUEUE_COUNT=1 and JOB_MAX_ATTEMPTS is unset, so
+	// the insert is identical to the legacy single-queue path.
+	insertOptsFor := func(seq int64) *river.InsertOpts {
+		if len(queues) == 1 && controls.maxAttempts <= 0 {
+			return nil
+		}
+		opts := &river.InsertOpts{}
+		if len(queues) > 1 {
+			opts.Queue = queues[seq%int64(len(queues))]
+		}
+		if controls.maxAttempts > 0 {
+			opts.MaxAttempts = controls.maxAttempts
+		}
+		return opts
+	}
+	newArgs := func(seq int64) LongHorizonArgs {
+		fail, failAttempts := controls.tag(seq)
+		return LongHorizonArgs{Seq: seq, Padding: padding, Fail: fail, FailAttempts: failAttempts}
+	}
+
 	shutdown := make(chan struct{})
 	if os.Getenv("CONSUMER_GATE_FILE") == "" {
 		if err := client.Start(ctx); err != nil {
@@ -662,16 +711,6 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	padding := payloadPadding(payloadBytes - 32)
-	// Spread jobs across queues per job; nil opts keeps the single-queue
-	// insert identical to the legacy path.
-	insertOptsFor := func(seq int64) *river.InsertOpts {
-		if len(queues) == 1 {
-			return nil
-		}
-		return &river.InsertOpts{Queue: queues[seq%int64(len(queues))]}
-	}
 
 	// Producer
 	var producerWG sync.WaitGroup
@@ -737,7 +776,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 			}
 
 			if batchCount == 1 {
-				_, err := client.Insert(ctx, LongHorizonArgs{Seq: seq, Padding: padding}, insertOptsFor(seq))
+				_, err := client.Insert(ctx, newArgs(seq), insertOptsFor(seq))
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "[river] producer insert failed: %v\n", err)
 					continue
@@ -750,7 +789,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 				params := make([]river.InsertManyParams, 0, batchCount)
 				for i := 0; i < batchCount; i++ {
 					params = append(params, river.InsertManyParams{
-						Args:       LongHorizonArgs{Seq: seq + int64(i), Padding: padding},
+						Args:       newArgs(seq + int64(i)),
 						InsertOpts: insertOptsFor(seq + int64(i)),
 					})
 				}
@@ -763,6 +802,28 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 				seq += int64(batchCount)
 			}
 		}
+	}()
+
+	// Scheduled-herd preload (SCHEDULE_CONTROL_FILE, instance 0 only).
+	var herdWG sync.WaitGroup
+	herdWG.Add(1)
+	go func() {
+		defer herdWG.Done()
+		controls.runHerdPreload(shutdown, func(firstSeq int64, size int, runAtMs int64) error {
+			opts := &river.InsertOpts{ScheduledAt: time.UnixMilli(runAtMs)}
+			if controls.maxAttempts > 0 {
+				opts.MaxAttempts = controls.maxAttempts
+			}
+			params := make([]river.InsertManyParams, 0, size)
+			for i := 0; i < size; i++ {
+				params = append(params, river.InsertManyParams{
+					Args:       LongHorizonArgs{Seq: firstSeq + int64(i), Padding: padding, RunAtMs: runAtMs},
+					InsertOpts: opts,
+				})
+			}
+			_, err := client.InsertManyFast(ctx, params)
+			return err
+		})
 	}()
 
 	// Queue-depth poller
@@ -842,12 +903,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 				targetRate := float64(producerTargetRate.Load())
 				ts := nowISO()
 
-				type metric struct {
-					name    string
-					value   float64
-					windowS float64
-				}
-				for _, m := range []metric{
+				metrics := []controlMetric{
 					{"claim_p50_ms", p50, 30},
 					{"claim_p95_ms", p95, 30},
 					{"claim_p99_ms", p99, 30},
@@ -855,7 +911,9 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 					{"completion_rate", cmpRate, float64(sampleEveryS)},
 					{"queue_depth", depth, 0},
 					{"producer_target_rate", targetRate, 0},
-				} {
+				}
+				metrics = append(metrics, controls.metrics(dt, float64(sampleEveryS))...)
+				for _, m := range metrics {
 					if _, isObserver := observerMetrics[m.name]; isObserver && !observerEnabled() {
 						continue
 					}
@@ -882,6 +940,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	done := make(chan struct{})
 	go func() {
 		producerWG.Wait()
+		herdWG.Wait()
 		depthWG.Wait()
 		samplerWG.Wait()
 		close(done)

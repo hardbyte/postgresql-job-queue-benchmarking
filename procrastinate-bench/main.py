@@ -7,12 +7,20 @@ import os
 import signal
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from time import monotonic
 from urllib.parse import urlparse
 
 import procrastinate
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter_common"))
+from bench_controls import (  # noqa: E402
+    ScenarioControls,
+    herd_preload_loop,
+    silence_injected_failures,
+)
 
 
 @dataclass
@@ -358,22 +366,55 @@ async def scenario_long_horizon() -> None:
     lh_app = procrastinate.App(
         connector=procrastinate.PsycopgConnector(conninfo=database_url()),
     )
+    controls = ScenarioControls()
+    if controls.failure_enabled:
+        silence_injected_failures("procrastinate.worker")
+    # JOB_MAX_ATTEMPTS counts total attempts; procrastinate's
+    # RetryStrategy.max_attempts counts retries after the first run.
+    task_retry: procrastinate.RetryStrategy | bool = False
+    if controls.max_attempts is not None and controls.max_attempts > 1:
+        task_retry = procrastinate.RetryStrategy(max_attempts=controls.max_attempts - 1)
 
-    @lh_app.task(queue=queue, name="long_horizon_job", pass_context=True)
+    @lh_app.task(
+        queue=queue, name="long_horizon_job", pass_context=True, retry=task_retry
+    )
     async def long_horizon_task(
-        context, seq: int, created_at_iso: str, padding: str = ""
+        context,
+        seq: int,
+        created_at_iso: str,
+        padding: str = "",
+        fail: str | None = None,
+        fail_attempts: int = 1,
+        run_at_ms: int | None = None,
     ) -> None:
         nonlocal completed
-        try:
-            created = _dt.datetime.fromisoformat(created_at_iso)
-            now = _dt.datetime.now(_dt.timezone.utc)
-            latency_ms = max(0.0, (now - created).total_seconds() * 1000.0)
-        except Exception:
-            latency_ms = 0.0
-        latencies_ms.append((time.monotonic(), latency_ms))
+        tags = {
+            key: value
+            for key, value in (
+                ("fail", fail),
+                ("fail_attempts", fail_attempts),
+                ("run_at_ms", run_at_ms),
+            )
+            if value is not None
+        }
+        tagged = fail is not None or run_at_ms is not None
+        if tagged:
+            controls.on_start(tags)
+            controls.check_failure(tags, attempt=context.job.attempts + 1)
+        else:
+            try:
+                created = _dt.datetime.fromisoformat(created_at_iso)
+                now = _dt.datetime.now(_dt.timezone.utc)
+                latency_ms = max(0.0, (now - created).total_seconds() * 1000.0)
+            except Exception:
+                latency_ms = 0.0
+            latencies_ms.append((time.monotonic(), latency_ms))
         if work_ms:
             await asyncio.sleep(work_ms / 1000.0)
-        completed += 1
+        if run_at_ms is None:
+            completed += 1
+        if tagged:
+            controls.on_complete(tags)
 
     async with lh_app.open_async():
         worker = lh_app._worker(
@@ -461,6 +502,7 @@ async def scenario_long_horizon() -> None:
                             seq=seq,
                             created_at_iso=_now_iso(),
                             **extra,
+                            **controls.failure_tag(seq),
                         )
                     else:
                         # Documented bulk path: `Task.batch_defer_async`
@@ -468,7 +510,12 @@ async def scenario_long_horizon() -> None:
                         # multi-row INSERT via JobManager.batch_defer_jobs_async.
                         # Docs: https://procrastinate.readthedocs.io/en/stable/howto/advanced/batch.html
                         kwargs_list = [
-                            {"seq": seq + i, "created_at_iso": _now_iso(), **extra}
+                            {
+                                "seq": seq + i,
+                                "created_at_iso": _now_iso(),
+                                **extra,
+                                **controls.failure_tag(seq + i),
+                            }
                             for i in range(batch_count)
                         ]
                         await deferrer.batch_defer_async(*kwargs_list)
@@ -479,6 +526,24 @@ async def scenario_long_horizon() -> None:
                         f"[procrastinate] producer insert failed: {exc}",
                         file=sys.stderr,
                     )
+
+        async def enqueue_herd(first_seq: int, size: int, run_at_ms: int) -> None:
+            herd_deferrer = long_horizon_task.configure(
+                queue=queue,
+                schedule_at=_dt.datetime.fromtimestamp(
+                    run_at_ms / 1000.0, tz=_dt.timezone.utc
+                ),
+            )
+            await herd_deferrer.batch_defer_async(
+                *(
+                    {
+                        "seq": first_seq + i,
+                        "created_at_iso": _now_iso(),
+                        "run_at_ms": run_at_ms,
+                    }
+                    for i in range(size)
+                )
+            )
 
         async def depth_poller() -> None:
             nonlocal queue_depth
@@ -540,6 +605,7 @@ async def scenario_long_horizon() -> None:
                     ("completion_rate", cmp_rate, float(sample_every_s)),
                     ("queue_depth", float(queue_depth), 0.0),
                     ("producer_target_rate", current_producer_target_rate, 0.0),
+                    *controls.metrics(dt, float(sample_every_s)),
                 ]:
                     if metric in _OBSERVER_METRICS and not _observer_enabled():
                         continue
@@ -560,6 +626,12 @@ async def scenario_long_horizon() -> None:
             asyncio.create_task(producer(), name="producer"),
             asyncio.create_task(depth_poller(), name="depth"),
             asyncio.create_task(sampler(), name="sampler"),
+            asyncio.create_task(
+                herd_preload_loop(
+                    controls, shutdown, enqueue_herd, log_prefix="procrastinate"
+                ),
+                name="herd",
+            ),
         ]
         try:
             await shutdown.wait()

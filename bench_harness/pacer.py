@@ -50,7 +50,9 @@ class PacerConfig:
     rate_file_poll_s: float = 0.25
 
 
-def read_rate_file(path: str, default: float) -> float:
+def read_rate_file(path: str | None, default: float) -> float:
+    if not path:
+        return default
     try:
         return max(0.0, float(Path(path).read_text().strip()))
     except (OSError, ValueError):

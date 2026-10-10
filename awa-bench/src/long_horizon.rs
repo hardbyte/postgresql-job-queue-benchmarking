@@ -25,6 +25,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::time::{interval_at, MissedTickBehavior};
 
+use crate::scenario_controls::{failure_outcome, herd_batches, ScenarioControls};
+
 const PRODUCER_SEQUENCE_STRIDE: i64 = 1_000_000_000_000;
 
 #[derive(Debug, Serialize, Deserialize, JobArgs)]
@@ -38,6 +40,14 @@ pub struct LongHorizonJob {
     pub fail_first_attempt: bool,
     /// Arbitrary filler so jobs approximate the declared payload size.
     pub padding: String,
+    /// Injected failure tag (`transient` / `poison`); see scenario_controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail_attempts: Option<i16>,
+    /// Intended run_at for scheduled-herd jobs, unix milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_at_ms: Option<i64>,
 }
 
 /// Shared, bounded-memory rolling window of sample events for percentiles.
@@ -128,6 +138,7 @@ struct LongHorizonWorker {
     completed_original_priority_1_counter: Arc<AtomicU64>,
     completed_original_priority_4_counter: Arc<AtomicU64>,
     aged_completion_counter: Arc<AtomicU64>,
+    controls: Arc<ScenarioControls>,
 }
 
 #[async_trait]
@@ -139,6 +150,32 @@ impl Worker for LongHorizonWorker {
     async fn perform(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
         let args: LongHorizonJob = serde_json::from_value(ctx.job.args.clone())
             .map_err(|err| JobError::Terminal(format!("failed to deserialize args: {err}")))?;
+        if args.fail.is_some() || args.run_at_ms.is_some() {
+            self.controls.on_start(args.run_at_ms);
+            if let Some(kind) = args.fail.as_deref() {
+                if let Some(outcome) = failure_outcome(
+                    kind,
+                    args.fail_attempts,
+                    ctx.job.attempt,
+                    ctx.job.max_attempts,
+                ) {
+                    self.controls.record_failure(kind, outcome);
+                    return Err(JobError::retryable_msg(format!(
+                        "injected {kind} failure (attempt {})",
+                        ctx.job.attempt
+                    )));
+                }
+            }
+            if self.work_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(self.work_ms)).await;
+            }
+            self.controls
+                .on_complete(args.fail.as_deref(), args.run_at_ms);
+            if args.run_at_ms.is_none() {
+                self.completed_counter.fetch_add(1, Ordering::Relaxed);
+            }
+            return Ok(JobResult::Completed);
+        }
         match self.fail_mode {
             WorkerFailMode::Success => {}
             WorkerFailMode::RetryableFirst => {
@@ -426,6 +463,7 @@ async fn wait_for_queue_storage_substrate(pool: &sqlx::PgPool, config: &QueueSto
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_batch_params(
     queue_names: &[String],
     next_seq: &mut i64,
@@ -434,6 +472,7 @@ fn build_batch_params(
     fail_first_mod: i64,
     max_attempts: i16,
     padding: &str,
+    controls: &ScenarioControls,
 ) -> Vec<InsertParams> {
     let mut params = Vec::with_capacity(batch_size);
     for _ in 0..batch_size {
@@ -443,11 +482,15 @@ fn build_batch_params(
         // default) this collapses to a single queue and the slice is
         // length-1.
         let queue_name = &queue_names[seq.rem_euclid(queue_names.len() as i64) as usize];
+        let tag = controls.tag(seq);
         let args = LongHorizonJob {
             seq,
             produced_at_ms: now_epoch_ms(),
             fail_first_attempt: fail_first_mod > 0 && seq.rem_euclid(fail_first_mod) == 0,
             padding: padding.to_owned(),
+            fail: tag.as_ref().map(|tag| tag.kind.to_owned()),
+            fail_attempts: tag.and_then(|tag| tag.fail_attempts),
+            run_at_ms: None,
         };
         params.push(
             insert::params_with(
@@ -675,6 +718,7 @@ pub async fn run() {
     let retryable_depth = Arc::new(AtomicU64::new(0));
     let scheduled_depth = Arc::new(AtomicU64::new(0));
     let producer_target_rate = Arc::new(AtomicU64::new(producer_rate));
+    let controls = Arc::new(ScenarioControls::from_env());
 
     let worker = LongHorizonWorker {
         work_ms,
@@ -688,6 +732,7 @@ pub async fn run() {
         completed_original_priority_1_counter: Arc::clone(&completed_original_priority_1),
         completed_original_priority_4_counter: Arc::clone(&completed_original_priority_4),
         aged_completion_counter: Arc::clone(&aged_completions),
+        controls: Arc::clone(&controls),
     };
 
     // LEASE_DEADLINE_MS — per-claim deadline-rescue window in ms.
@@ -777,6 +822,7 @@ pub async fn run() {
     let padding = payload_padding(payload_bytes.saturating_sub(32) as usize);
     let producer_priority_pattern = priority_pattern.clone();
     let producer_queue_names = queue_names.clone();
+    let producer_controls = Arc::clone(&controls);
     // Build the QueueStorage handle once outside the producer loop;
     // the handle is conceptually pool-scoped, not batch-scoped, and
     // re-creating it per batch would be pure allocator pressure at
@@ -918,6 +964,7 @@ pub async fn run() {
                 fail_first_mod,
                 max_attempts,
                 &padding,
+                &producer_controls,
             );
             let insert_start = Instant::now();
             let res = match storage_engine {
@@ -964,6 +1011,90 @@ pub async fn run() {
             }
         }
     });
+
+    // ── Scheduled-herd preload (SCHEDULE_CONTROL_FILE, instance 0) ──
+    let herd_handle = {
+        let herd_pool = pool.clone();
+        let herd_shutdown = Arc::clone(&shutdown);
+        let herd_controls = Arc::clone(&controls);
+        let herd_queue = queue_names[0].clone();
+        let herd_padding = "x".repeat(payload_bytes.saturating_sub(32) as usize);
+        let herd_store = queue_storage.as_ref().map(|(_, storage)| {
+            QueueStorage::new(storage.clone()).expect("Invalid QueueStorageConfig")
+        });
+        tokio::spawn(async move {
+            if !herd_controls.schedule_enabled() || instance_id() != 0 {
+                return;
+            }
+            while !herd_shutdown.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let Some(command) = herd_controls.poll_herd() else {
+                    continue;
+                };
+                let started = Instant::now();
+                herd_controls
+                    .schedule_preload_ms
+                    .store(-1, Ordering::Relaxed);
+                let mut seq: i64 = 0;
+                for (size, run_at_ms) in herd_batches(&command) {
+                    let run_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(run_at_ms);
+                    let params: Vec<InsertParams> = (0..size as i64)
+                        .map(|offset| {
+                            insert::params_with(
+                                &LongHorizonJob {
+                                    seq: seq + offset,
+                                    produced_at_ms: now_epoch_ms(),
+                                    fail_first_attempt: false,
+                                    padding: herd_padding.clone(),
+                                    fail: None,
+                                    fail_attempts: None,
+                                    run_at_ms: Some(run_at_ms),
+                                },
+                                awa_model::InsertOpts {
+                                    queue: herd_queue.clone(),
+                                    max_attempts,
+                                    run_at,
+                                    ..Default::default()
+                                },
+                            )
+                            .expect("failed to build herd params")
+                        })
+                        .collect();
+                    loop {
+                        if herd_shutdown.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let res = match &herd_store {
+                            Some(store) => store.enqueue_params_copy(&herd_pool, &params).await,
+                            None => insert_many_copy_from_pool(&herd_pool, &params)
+                                .await
+                                .map(|rows| rows.len()),
+                        };
+                        match res {
+                            Ok(_) => break,
+                            Err(err) => {
+                                eprintln!("[awa] herd enqueue failed: {err:?}");
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                            }
+                        }
+                    }
+                    seq += size as i64;
+                    herd_controls
+                        .schedule_enqueued
+                        .fetch_add(size as u64, Ordering::Relaxed);
+                }
+                let elapsed_ms = started.elapsed().as_millis() as i64;
+                herd_controls
+                    .schedule_preload_ms
+                    .store(elapsed_ms, Ordering::Relaxed);
+                eprintln!(
+                    "[awa] herd {}: {seq} jobs enqueued in {:.1}s",
+                    command.id,
+                    elapsed_ms as f64 / 1000.0
+                );
+            }
+        })
+    };
 
     // ── Queue depth poller ──────────────────────────────────────────
     let depth_pool = pool.clone();
@@ -1141,6 +1272,7 @@ pub async fn run() {
     let sample_subscriber_latencies = Arc::clone(&subscriber_latencies);
     let sample_end_to_end_latencies = Arc::clone(&end_to_end_latencies);
     let sample_target_rate = Arc::clone(&producer_target_rate);
+    let sample_controls = Arc::clone(&controls);
     let sample_handle = tokio::spawn(async move {
         // Align first tick to the next wall-clock `sample_every_s` boundary.
         let now_epoch = SystemTime::now()
@@ -1326,6 +1458,19 @@ pub async fn run() {
                 }
             }
 
+            for (metric, value, window_s) in sample_controls.metrics(dt, sample_every_s as f64) {
+                emit(json!({
+                    "t": ts,
+                    "system": system_name,
+                    "instance_id": instance_id(),
+                    "kind": "adapter",
+                    "subject_kind": "adapter",
+                    "subject": "",
+                    "metric": metric,
+                    "value": value,
+                    "window_s": window_s,
+                }));
+            }
             for (metric, value, window_s) in [
                 ("completion_rate", cmp_rate, sample_every_s as f64),
                 (
@@ -1429,6 +1574,7 @@ pub async fn run() {
     shutdown.store(true, Ordering::Relaxed);
     let _ = tokio::time::timeout(Duration::from_secs(5), async {
         let _ = producer_handle.await;
+        let _ = herd_handle.await;
         let _ = depth_handle.await;
         let _ = sample_handle.await;
     })

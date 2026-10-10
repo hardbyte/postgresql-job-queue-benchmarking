@@ -36,6 +36,8 @@ import psycopg
 from psycopg.rows import dict_row
 
 ADAPTER_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(ADAPTER_DIR.parent / "adapter_common"))
+from bench_controls import ScenarioControls, failure_outcome  # noqa: E402
 PGQUE_SQL = ADAPTER_DIR / "vendor" / "pgque" / "sql" / "pgque.sql"
 
 QUEUE_NAME = "long_horizon_bench"
@@ -238,7 +240,7 @@ def install_pgque_sync() -> None:
             print(f"[pgque] installed pgque from {PGQUE_SQL}", file=sys.stderr)
 
 
-async def setup_queue(conn: psycopg.AsyncConnection) -> None:
+async def setup_queue(conn: psycopg.AsyncConnection, controls: ScenarioControls) -> None:
     queues = _queue_names()
     sub_mode = _pgque_consumer_mode()
     config = [
@@ -249,6 +251,10 @@ async def setup_queue(conn: psycopg.AsyncConnection) -> None:
         ("ticker_max_lag", "100 milliseconds"),
         ("ticker_idle_period", "500 milliseconds"),
     ]
+    if controls.max_attempts is not None:
+        # nack() dead-letters once ev_retry reaches queue_max_retries, so
+        # max_attempts total attempts = max_attempts - 1 retries.
+        config.append(("max_retries", str(controls.max_attempts - 1)))
     if _worker_fail_mode() == "nack-always":
         # max_retries=0 → first nack lands the event in
         # pgque.dead_letter. set_queue_config prepends "queue_" to the
@@ -324,11 +330,12 @@ async def scenario_long_horizon() -> None:
     producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
     db_name = database_url().rsplit("/", 1)[-1]
+    controls = ScenarioControls()
 
     # Setup connection — used for create_queue/subscribe + descriptor query.
     setup_conn = await aconnect()
     try:
-        await setup_queue(setup_conn)
+        await setup_queue(setup_conn, controls)
         rotated_tables = await discover_event_tables(setup_conn)
     finally:
         await setup_conn.close()
@@ -345,18 +352,21 @@ async def scenario_long_horizon() -> None:
         "pgque.config",
     ]
     descriptor_tables = sorted(set(static_tables) | set(rotated_tables))
-    _emit(
-        {
-            "kind": "descriptor",
-            "system": "pgque",
-            "event_tables": descriptor_tables,
-            "extensions": [],
-            "version": os.environ.get("PGQUE_VERSION", "0.2.0"),
-            "schema_version": os.environ.get("PGQUE_SCHEMA_VERSION", "v0.2.0"),
-            "db_name": db_name,
-            "started_at": _now_iso(),
-        }
-    )
+    descriptor = {
+        "kind": "descriptor",
+        "system": "pgque",
+        "event_tables": descriptor_tables,
+        "extensions": [],
+        "version": os.environ.get("PGQUE_VERSION", "0.2.0"),
+        "schema_version": os.environ.get("PGQUE_SCHEMA_VERSION", "v0.2.0"),
+        "db_name": db_name,
+        "started_at": _now_iso(),
+    }
+    if controls.schedule_enabled:
+        # pgque has no deliver-at / delayed send; the only delayed
+        # visibility is nack()'s retry_after for already-consumed events.
+        descriptor["scheduled_jobs"] = "unsupported"
+    _emit(descriptor)
 
     producer_latencies_ms: collections.deque[tuple[float, float]] = collections.deque(
         maxlen=32768
@@ -552,6 +562,7 @@ async def scenario_long_horizon() -> None:
                             "seq": seq,
                             "created_at": _now_iso(),
                             "padding": padding,
+                            **controls.failure_tag(seq),
                         }
                     )
                 )
@@ -647,6 +658,38 @@ async def scenario_long_horizon() -> None:
                 if shutdown.is_set():
                     return
                 await asyncio.sleep(0.5)
+
+    async def retry_events_task() -> None:
+        # pgque.maint() does not move nack'd events back; pgque.start()
+        # schedules maint_retry_events() separately and it must be called
+        # until it returns 0 (it moves at most 10 events per call).
+        if not controls.failure_enabled:
+            return
+        retry_conn = ReconnectingConn(await aconnect())
+        try:
+            while not shutdown.is_set():
+                try:
+                    async with retry_conn.cursor() as cur:
+                        while not shutdown.is_set():
+                            await cur.execute("SELECT pgque.maint_retry_events() AS moved")
+                            row = await cur.fetchone()
+                            if not row or not row["moved"]:
+                                break
+                except Exception as exc:
+                    print(f"[pgque] maint_retry_events failed: {exc}", file=sys.stderr)
+                    await retry_conn.reconnect()
+                await asyncio.sleep(1.0)
+        finally:
+            await retry_conn.close()
+
+    async def process_tagged(msg: dict) -> None:
+        nonlocal completed
+        async with work_sem:
+            controls.on_start(msg)
+            if work_ms:
+                await asyncio.sleep(work_ms / 1000.0)
+            controls.on_complete(msg)
+            completed += 1
 
     async def process_one(msg: dict) -> None:
         nonlocal completed
@@ -751,7 +794,9 @@ async def scenario_long_horizon() -> None:
                 try:
                     async with consumer_conn.cursor() as cur:
                         await cur.execute(
-                            "SELECT ev_id, ev_data FROM pgque.get_batch_events(%s)",
+                            "SELECT ev_id, ev_data, ev_retry FROM pgque.get_batch_events(%s)"
+                            if controls.failure_enabled
+                            else "SELECT ev_id, ev_data FROM pgque.get_batch_events(%s)",
                             (batch_id,),
                         )
                         rows = await cur.fetchall()
@@ -800,6 +845,44 @@ async def scenario_long_horizon() -> None:
                                 f"[pgque] nack failed: {exc}",
                                 file=sys.stderr,
                             )
+                            await consumer_conn.reconnect()
+                    elif controls.failure_enabled:
+                        work = []
+                        failed_ids = []
+                        for r in rows:
+                            try:
+                                m = json.loads(r["ev_data"])
+                            except Exception:
+                                m = {"created_at": _now_iso()}
+                            if not controls.is_tagged(m):
+                                work.append(process_one(m))
+                                continue
+                            outcome = failure_outcome(
+                                m, int(r["ev_retry"] or 0) + 1, controls.max_attempts
+                            )
+                            if outcome is None:
+                                work.append(process_tagged(m))
+                            else:
+                                controls.record_failure(m, outcome)
+                                failed_ids.append(r["ev_id"])
+                        await asyncio.gather(*work)
+                        try:
+                            async with consumer_conn.cursor() as cur:
+                                for ev_id in failed_ids:
+                                    # Default retry_after (60 s); pgque routes
+                                    # to dead_letter once retries are spent.
+                                    await cur.execute(
+                                        "SELECT pgque.nack(%s, ROW("
+                                        "%s::bigint, %s::bigint,"
+                                        " NULL::text, NULL::text,"
+                                        " NULL::int4, NULL::timestamptz,"
+                                        " NULL::text, NULL::text,"
+                                        " NULL::text, NULL::text"
+                                        ")::pgque.message) AS rc",
+                                        (batch_id, ev_id, batch_id),
+                                    )
+                        except Exception as exc:
+                            print(f"[pgque] nack failed: {exc}", file=sys.stderr)
                             await consumer_conn.reconnect()
                     else:
                         msgs = []
@@ -912,6 +995,7 @@ async def scenario_long_horizon() -> None:
                 ("completion_rate", cmp_rate, float(sample_every_s)),
                 ("queue_depth", float(queue_depth), 0.0),
                 ("producer_target_rate", current_producer_target_rate, 0.0),
+                *controls.metrics(dt, float(sample_every_s)),
             ]:
                 if metric in _OBSERVER_METRICS and not _observer_enabled():
                     continue
@@ -935,6 +1019,7 @@ async def scenario_long_horizon() -> None:
         asyncio.create_task(maint_step2_task(), name="maint_step2"),
         asyncio.create_task(depth_poller(), name="depth"),
         asyncio.create_task(sampler(), name="sampler"),
+        asyncio.create_task(retry_events_task(), name="retry_events"),
     ]
     # One consumer task per queue. Each polls next_batch_custom
     # against its own subconsumer and runs independently.

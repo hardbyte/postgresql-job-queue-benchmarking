@@ -10,5 +10,10 @@
     "public.oban_jobs_args_index",
     "public.oban_jobs_state_queue_priority_scheduled_at_id_index"
   ],
-  "extensions": []
+  "extensions": [],
+  "state_queries": {
+    "scheduled": "SELECT count(*) FROM oban_jobs WHERE state = 'scheduled'",
+    "retryable": "SELECT count(*) FROM oban_jobs WHERE state = 'retryable'",
+    "dead": "SELECT count(*) FROM oban_jobs WHERE state = 'discarded'"
+  }
 }
