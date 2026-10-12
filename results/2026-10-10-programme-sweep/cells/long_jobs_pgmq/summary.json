@@ -1,0 +1,2495 @@
+{
+  "run_id": "custom-20261012T125659Z-5529e3",
+  "scenario": null,
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 30
+    },
+    {
+      "label": "preload",
+      "type": "preload",
+      "duration_s": 20
+    },
+    {
+      "label": "hold",
+      "type": "drain",
+      "duration_s": 45
+    },
+    {
+      "label": "release",
+      "type": "drain",
+      "duration_s": 60
+    },
+    {
+      "label": "steady",
+      "type": "clean",
+      "duration_s": 360
+    },
+    {
+      "label": "tail",
+      "type": "drain",
+      "duration_s": 90
+    }
+  ],
+  "systems": {
+    "pgmq": {
+      "phases": {
+        "preload": {
+          "phase_type": "preload",
+          "metrics": {
+            "n_dead_tup@pgmq.q_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "n_live_tup@pgmq.q_long_horizon_bench": {
+              "median": 66.0,
+              "peak": 112.0,
+              "count": 4
+            },
+            "autovacuum_count@pgmq.q_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "total_relation_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.09375,
+              "peak": 0.1015625,
+              "count": 4
+            },
+            "table_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.03125,
+              "peak": 0.0390625,
+              "count": 4
+            },
+            "toast_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 4
+            },
+            "indexes_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.03125,
+              "peak": 0.03125,
+              "count": 4
+            },
+            "n_dead_tup@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "n_live_tup@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "autovacuum_count@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "total_relation_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0234375,
+              "peak": 0.0234375,
+              "count": 4
+            },
+            "table_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "toast_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 4
+            },
+            "indexes_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.015625,
+              "peak": 0.015625,
+              "count": 4
+            },
+            "snapshot_xmin": {
+              "median": 848.0,
+              "peak": 893.0,
+              "count": 4
+            },
+            "xmin_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "oldest_xact_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "idle_in_tx_count": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "oldest_idle_in_tx_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "pg_notification_queue_usage": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "pg_wal_records": {
+              "median": 43496.5,
+              "peak": 43683.0,
+              "count": 4
+            },
+            "pg_wal_fpi": {
+              "median": 11257.0,
+              "peak": 11257.0,
+              "count": 4
+            },
+            "pg_wal_bytes": {
+              "median": 57653476.5,
+              "peak": 57676445.0,
+              "count": 4
+            },
+            "relfilenode_churn_total": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_type": {
+              "median": 4.0,
+              "peak": 4.0,
+              "count": 4
+            },
+            "catalog_size_mb@pg_catalog.pg_type": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 4
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_attribute": {
+              "median": 72.0,
+              "peak": 72.0,
+              "count": 4
+            },
+            "catalog_size_mb@pg_catalog.pg_attribute": {
+              "median": 0.7109375,
+              "peak": 0.7109375,
+              "count": 4
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_class": {
+              "median": 19.0,
+              "peak": 19.0,
+              "count": 4
+            },
+            "catalog_size_mb@pg_catalog.pg_class": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 4
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_depend": {
+              "median": 42.0,
+              "peak": 42.0,
+              "count": 4
+            },
+            "catalog_size_mb@pg_catalog.pg_depend": {
+              "median": 0.328125,
+              "peak": 0.328125,
+              "count": 4
+            },
+            "pg_db_xacts_total": {
+              "median": 274.5,
+              "peak": 352.0,
+              "count": 4
+            },
+            "pg_db_tup_updated_total": {
+              "median": 80.0,
+              "peak": 80.0,
+              "count": 4
+            },
+            "pg_db_tup_deleted_total": {
+              "median": 143.0,
+              "peak": 143.0,
+              "count": 4
+            },
+            "pg_db_tup_inserted_total": {
+              "median": 930.0,
+              "peak": 976.0,
+              "count": 4
+            },
+            "pg_backends_total": {
+              "median": 4.0,
+              "peak": 4.0,
+              "count": 4
+            },
+            "pg_backends_active": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "pg_backends_idle": {
+              "median": 4.0,
+              "peak": 4.0,
+              "count": 4
+            },
+            "pg_backends_idle_in_tx": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "pg_backends_listening": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "pg_database_size_mb": {
+              "median": 7.974303245544434,
+              "peak": 7.982115745544434,
+              "count": 4
+            },
+            "pg_cpu_seconds_total": {
+              "median": 2.6185549999999997,
+              "peak": 2.810419,
+              "count": 4
+            },
+            "adapter_cpu_seconds_total@replica-0": {
+              "median": 1.5763945,
+              "peak": 1.814296,
+              "count": 4
+            },
+            "adapter_cpu_seconds_total@replica-1": {
+              "median": 1.5391865,
+              "peak": 1.759072,
+              "count": 4
+            },
+            "active_xact_count": {
+              "median": 0.0,
+              "peak": 1.0,
+              "count": 4
+            },
+            "pgstattuple_dead_pct@pgmq.q_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.q_long_horizon_bench": {
+              "median": 7.97,
+              "peak": 7.97,
+              "count": 1
+            },
+            "pgstattuple_dead_pct@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 1
+            },
+            "subscriber_p50_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "completion_rate": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "end_to_end_p50_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "end_to_end_p95_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "enqueue_rate": {
+              "median": 6.0,
+              "peak": 6.0,
+              "count": 4
+            },
+            "end_to_end_p99_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "queue_depth": {
+              "median": 68.5,
+              "peak": 114.0,
+              "count": 4
+            },
+            "subscriber_p99_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "claim_p99_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "producer_target_rate": {
+              "median": 3.0,
+              "peak": 3.0,
+              "count": 4
+            },
+            "claim_p50_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "producer_p95_ms": {
+              "median": 6.6250949166715145,
+              "peak": 6.6250949166715145,
+              "count": 4
+            },
+            "producer_p50_ms": {
+              "median": 4.968364490196109,
+              "peak": 6.231514038518071,
+              "count": 4
+            },
+            "claim_p95_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "subscriber_p95_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 4
+            },
+            "producer_p99_ms": {
+              "median": 11.112082982435822,
+              "peak": 11.112082982435822,
+              "count": 4
+            }
+          },
+          "peak_table_size_mb": 0.125,
+          "peak_dead_tup": 0.0,
+          "median_dead_tup": 0.0,
+          "median_claim_p99_ms": 0.0,
+          "median_producer_p99_ms": 11.112082982435822,
+          "median_producer_call_p99_ms": null,
+          "median_subscriber_p99_ms": 0.0,
+          "median_end_to_end_p99_ms": 0.0,
+          "median_throughput_per_s": 0.0,
+          "median_enqueue_rate_per_s": 6.0,
+          "median_queue_depth": 68.5,
+          "median_running_depth": null,
+          "autovacuum_count_delta": 0.0,
+          "pg_wal_bytes_delta": 53633.0,
+          "pg_wal_records_delta": 369.0,
+          "pg_wal_fpi_delta": 1.0,
+          "pg_wal_bytes_per_s": 3575.5333333333333,
+          "relfilenode_churn_delta": 0.0,
+          "relfilenode_churn_per_s": 0.0,
+          "pg_db_xacts_delta": 154.0,
+          "pg_db_xacts_per_s": 10.266666666666667,
+          "pg_db_tup_updated_per_s": 0.0,
+          "pg_db_tup_inserted_per_s": 6.066666666666666,
+          "pg_db_tup_deleted_per_s": 0.0,
+          "pg_stmt_calls_per_s": null,
+          "pg_notify_calls_per_s": null,
+          "pg_cpu_cores": 0.024833533333333335,
+          "adapter_cpu_cores": 0.0646302,
+          "median_pg_backends": 4.0,
+          "peak_pg_backends": 4.0,
+          "median_pg_backends_listening": 0.0,
+          "peak_pg_backends_listening": 0.0,
+          "jobs_enqueued": 114.0,
+          "jobs_completed": 0.0,
+          "wal_bytes_per_job": 470.46491228070175,
+          "database_size_mb_start": 7.927428245544434,
+          "database_size_mb_end": 7.982115745544434,
+          "database_size_mb_peak": 7.982115745544434,
+          "event_relation_size_mb_start": 0.0703125,
+          "event_relation_size_mb_end": 0.125,
+          "event_relation_size_mb_peak": 0.125,
+          "event_toast_size_mb_start": 0.015625,
+          "event_toast_size_mb_end": 0.015625,
+          "event_toast_size_mb_peak": 0.015625,
+          "event_indexes_size_mb_start": 0.046875,
+          "event_indexes_size_mb_end": 0.046875,
+          "event_indexes_size_mb_peak": 0.046875,
+          "wal_bytes_per_completed_job": null,
+          "catalog": {
+            "dead_tup_peak": 137.0,
+            "dead_tup_end": 137.0,
+            "size_mb_end": 1.5078125,
+            "size_mb_delta": 0.0
+          },
+          "replicas": {
+            "0": {
+              "median_completion_rate": 0.0,
+              "peak_completion_rate": 0.0,
+              "count_completion_rate": 4,
+              "median_enqueue_rate": 3.0,
+              "peak_enqueue_rate": 3.0,
+              "count_enqueue_rate": 4,
+              "median_producer_p99_ms": 7.967780809849501,
+              "peak_producer_p99_ms": 7.967780809849501,
+              "count_producer_p99_ms": 4,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 0.0,
+              "peak_subscriber_p99_ms": 0.0,
+              "count_subscriber_p99_ms": 4,
+              "median_end_to_end_p99_ms": 0.0,
+              "peak_end_to_end_p99_ms": 0.0,
+              "count_end_to_end_p99_ms": 4,
+              "median_claim_p99_ms": 0.0,
+              "peak_claim_p99_ms": 0.0,
+              "count_claim_p99_ms": 4,
+              "median_queue_depth": 68.5,
+              "peak_queue_depth": 114.0,
+              "count_queue_depth": 4,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            },
+            "1": {
+              "median_completion_rate": 0.0,
+              "peak_completion_rate": 0.0,
+              "count_completion_rate": 4,
+              "median_enqueue_rate": 3.0,
+              "peak_enqueue_rate": 3.0,
+              "count_enqueue_rate": 4,
+              "median_producer_p99_ms": 11.112082982435822,
+              "peak_producer_p99_ms": 11.112082982435822,
+              "count_producer_p99_ms": 4,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 0.0,
+              "peak_subscriber_p99_ms": 0.0,
+              "count_subscriber_p99_ms": 4,
+              "median_end_to_end_p99_ms": 0.0,
+              "peak_end_to_end_p99_ms": 0.0,
+              "count_end_to_end_p99_ms": 4,
+              "median_claim_p99_ms": 0.0,
+              "peak_claim_p99_ms": 0.0,
+              "count_claim_p99_ms": 4,
+              "median_queue_depth": null,
+              "peak_queue_depth": null,
+              "count_queue_depth": 0,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            }
+          },
+          "wait_events": {
+            "top": [],
+            "total_active_samples": 0
+          },
+          "preload_jobs_requested": 150
+        },
+        "hold": {
+          "phase_type": "drain",
+          "metrics": {
+            "n_dead_tup@pgmq.q_long_horizon_bench": {
+              "median": 10.0,
+              "peak": 122.0,
+              "count": 9
+            },
+            "n_live_tup@pgmq.q_long_horizon_bench": {
+              "median": 122.0,
+              "peak": 122.0,
+              "count": 9
+            },
+            "autovacuum_count@pgmq.q_long_horizon_bench": {
+              "median": 1.0,
+              "peak": 1.0,
+              "count": 9
+            },
+            "total_relation_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.15625,
+              "peak": 0.15625,
+              "count": 9
+            },
+            "table_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.0859375,
+              "peak": 0.0859375,
+              "count": 9
+            },
+            "toast_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 9
+            },
+            "indexes_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.03125,
+              "peak": 0.03125,
+              "count": 9
+            },
+            "n_dead_tup@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "n_live_tup@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "autovacuum_count@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "total_relation_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0234375,
+              "peak": 0.0234375,
+              "count": 9
+            },
+            "table_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "toast_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 9
+            },
+            "indexes_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.015625,
+              "peak": 0.015625,
+              "count": 9
+            },
+            "snapshot_xmin": {
+              "median": 929.0,
+              "peak": 955.0,
+              "count": 9
+            },
+            "xmin_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "oldest_xact_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "idle_in_tx_count": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "oldest_idle_in_tx_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "pg_notification_queue_usage": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "pg_wal_records": {
+              "median": 44951.0,
+              "peak": 45586.0,
+              "count": 9
+            },
+            "pg_wal_fpi": {
+              "median": 11295.0,
+              "peak": 11295.0,
+              "count": 9
+            },
+            "pg_wal_bytes": {
+              "median": 58128964.0,
+              "peak": 58186804.0,
+              "count": 9
+            },
+            "relfilenode_churn_total": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_type": {
+              "median": 4.0,
+              "peak": 4.0,
+              "count": 9
+            },
+            "catalog_size_mb@pg_catalog.pg_type": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 9
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_attribute": {
+              "median": 70.0,
+              "peak": 72.0,
+              "count": 9
+            },
+            "catalog_size_mb@pg_catalog.pg_attribute": {
+              "median": 0.7109375,
+              "peak": 0.7109375,
+              "count": 9
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_class": {
+              "median": 19.0,
+              "peak": 19.0,
+              "count": 9
+            },
+            "catalog_size_mb@pg_catalog.pg_class": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 9
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_depend": {
+              "median": 42.0,
+              "peak": 42.0,
+              "count": 9
+            },
+            "catalog_size_mb@pg_catalog.pg_depend": {
+              "median": 0.328125,
+              "peak": 0.328125,
+              "count": 9
+            },
+            "pg_db_xacts_total": {
+              "median": 81609.0,
+              "peak": 149375.0,
+              "count": 9
+            },
+            "pg_db_tup_updated_total": {
+              "median": 202.0,
+              "peak": 324.0,
+              "count": 9
+            },
+            "pg_db_tup_deleted_total": {
+              "median": 143.0,
+              "peak": 143.0,
+              "count": 9
+            },
+            "pg_db_tup_inserted_total": {
+              "median": 993.0,
+              "peak": 993.0,
+              "count": 9
+            },
+            "pg_backends_total": {
+              "median": 204.0,
+              "peak": 204.0,
+              "count": 9
+            },
+            "pg_backends_active": {
+              "median": 2.0,
+              "peak": 4.0,
+              "count": 9
+            },
+            "pg_backends_idle": {
+              "median": 202.0,
+              "peak": 204.0,
+              "count": 9
+            },
+            "pg_backends_idle_in_tx": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "pg_backends_listening": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "pg_database_size_mb": {
+              "median": 8.044615745544434,
+              "peak": 8.044615745544434,
+              "count": 9
+            },
+            "pg_cpu_seconds_total": {
+              "median": 37.626678,
+              "peak": 65.851989,
+              "count": 9
+            },
+            "adapter_cpu_seconds_total@replica-0": {
+              "median": 10.813308,
+              "peak": 17.662794,
+              "count": 9
+            },
+            "adapter_cpu_seconds_total@replica-1": {
+              "median": 9.650218,
+              "peak": 15.907052,
+              "count": 9
+            },
+            "active_xact_count": {
+              "median": 2.0,
+              "peak": 4.0,
+              "count": 9
+            },
+            "last_autovacuum_age_s@pgmq.q_long_horizon_bench": {
+              "median": 11.907604,
+              "peak": 21.90756,
+              "count": 5
+            },
+            "pgstattuple_dead_pct@pgmq.q_long_horizon_bench": {
+              "median": 6.19,
+              "peak": 6.19,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.q_long_horizon_bench": {
+              "median": 50.08,
+              "peak": 50.08,
+              "count": 1
+            },
+            "pgstattuple_dead_pct@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 1
+            },
+            "subscriber_p50_ms": {
+              "median": 10346.0,
+              "peak": 42943.0,
+              "count": 9
+            },
+            "completion_rate": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "end_to_end_p50_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "end_to_end_p95_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "enqueue_rate": {
+              "median": 0.0,
+              "peak": 1.6,
+              "count": 9
+            },
+            "end_to_end_p99_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "queue_depth": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "subscriber_p99_ms": {
+              "median": 20245.0,
+              "peak": 50196.0,
+              "count": 9
+            },
+            "claim_p99_ms": {
+              "median": 20245.0,
+              "peak": 50196.0,
+              "count": 9
+            },
+            "producer_target_rate": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 9
+            },
+            "claim_p50_ms": {
+              "median": 10346.0,
+              "peak": 42943.0,
+              "count": 9
+            },
+            "producer_p95_ms": {
+              "median": 5.709953140467405,
+              "peak": 6.6250949166715145,
+              "count": 9
+            },
+            "producer_p50_ms": {
+              "median": 4.8515088856220245,
+              "peak": 4.883939167484641,
+              "count": 9
+            },
+            "claim_p95_ms": {
+              "median": 19366.0,
+              "peak": 50176.0,
+              "count": 9
+            },
+            "subscriber_p95_ms": {
+              "median": 19366.0,
+              "peak": 50176.0,
+              "count": 9
+            },
+            "producer_p99_ms": {
+              "median": 9.38190589658916,
+              "peak": 9.38190589658916,
+              "count": 9
+            }
+          },
+          "peak_table_size_mb": 0.1796875,
+          "peak_dead_tup": 122.0,
+          "median_dead_tup": 10.0,
+          "median_claim_p99_ms": 20245.0,
+          "median_producer_p99_ms": 9.38190589658916,
+          "median_producer_call_p99_ms": null,
+          "median_subscriber_p99_ms": 20245.0,
+          "median_end_to_end_p99_ms": 0.0,
+          "median_throughput_per_s": 0.0,
+          "median_enqueue_rate_per_s": 0.0,
+          "median_queue_depth": 0.0,
+          "median_running_depth": null,
+          "autovacuum_count_delta": 1.0,
+          "pg_wal_bytes_delta": 190259.0,
+          "pg_wal_records_delta": 1353.0,
+          "pg_wal_fpi_delta": 7.0,
+          "pg_wal_bytes_per_s": 4756.474999999999,
+          "relfilenode_churn_delta": 0.0,
+          "relfilenode_churn_per_s": 0.0,
+          "pg_db_xacts_delta": 137774.0,
+          "pg_db_xacts_per_s": 3444.3499999999995,
+          "pg_db_tup_updated_per_s": 6.099999999999999,
+          "pg_db_tup_inserted_per_s": 0.24999999999999994,
+          "pg_db_tup_deleted_per_s": 0.0,
+          "pg_stmt_calls_per_s": null,
+          "pg_notify_calls_per_s": null,
+          "pg_cpu_cores": 1.4292247249999999,
+          "adapter_cpu_cores": 0.68100595,
+          "median_pg_backends": 204.0,
+          "peak_pg_backends": 204.0,
+          "median_pg_backends_listening": 0.0,
+          "peak_pg_backends_listening": 0.0,
+          "jobs_enqueued": 8.0,
+          "jobs_completed": 0.0,
+          "wal_bytes_per_job": 23782.375,
+          "database_size_mb_start": 8.028990745544434,
+          "database_size_mb_end": 8.044615745544434,
+          "database_size_mb_peak": 8.044615745544434,
+          "event_relation_size_mb_start": 0.171875,
+          "event_relation_size_mb_end": 0.1796875,
+          "event_relation_size_mb_peak": 0.1796875,
+          "event_toast_size_mb_start": 0.015625,
+          "event_toast_size_mb_end": 0.015625,
+          "event_toast_size_mb_peak": 0.015625,
+          "event_indexes_size_mb_start": 0.046875,
+          "event_indexes_size_mb_end": 0.046875,
+          "event_indexes_size_mb_peak": 0.046875,
+          "wal_bytes_per_completed_job": null,
+          "catalog": {
+            "dead_tup_peak": 137.0,
+            "dead_tup_end": 135.0,
+            "size_mb_end": 1.5078125,
+            "size_mb_delta": 0.0
+          },
+          "replicas": {
+            "0": {
+              "median_completion_rate": 0.0,
+              "peak_completion_rate": 0.0,
+              "count_completion_rate": 9,
+              "median_enqueue_rate": 0.0,
+              "peak_enqueue_rate": 0.8,
+              "count_enqueue_rate": 9,
+              "median_producer_p99_ms": 7.967780809849501,
+              "peak_producer_p99_ms": 8.267253171652555,
+              "count_producer_p99_ms": 9,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 0.0,
+              "peak_subscriber_p99_ms": 48942.0,
+              "count_subscriber_p99_ms": 9,
+              "median_end_to_end_p99_ms": 0.0,
+              "peak_end_to_end_p99_ms": 0.0,
+              "count_end_to_end_p99_ms": 9,
+              "median_claim_p99_ms": 0.0,
+              "peak_claim_p99_ms": 48942.0,
+              "count_claim_p99_ms": 9,
+              "median_queue_depth": 0.0,
+              "peak_queue_depth": 0.0,
+              "count_queue_depth": 9,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            },
+            "1": {
+              "median_completion_rate": 0.0,
+              "peak_completion_rate": 0.0,
+              "count_completion_rate": 9,
+              "median_enqueue_rate": 0.0,
+              "peak_enqueue_rate": 0.8,
+              "count_enqueue_rate": 9,
+              "median_producer_p99_ms": 9.38190589658916,
+              "peak_producer_p99_ms": 9.38190589658916,
+              "count_producer_p99_ms": 9,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 20245.0,
+              "peak_subscriber_p99_ms": 50196.0,
+              "count_subscriber_p99_ms": 9,
+              "median_end_to_end_p99_ms": 0.0,
+              "peak_end_to_end_p99_ms": 0.0,
+              "count_end_to_end_p99_ms": 9,
+              "median_claim_p99_ms": 20245.0,
+              "peak_claim_p99_ms": 50196.0,
+              "count_claim_p99_ms": 9,
+              "median_queue_depth": null,
+              "peak_queue_depth": null,
+              "count_queue_depth": 0,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            }
+          },
+          "wait_events": {
+            "top": [
+              {
+                "event_type": "CPU",
+                "event": "CPU",
+                "count": 32
+              },
+              {
+                "event_type": "Client",
+                "event": "ClientRead",
+                "count": 16
+              }
+            ],
+            "total_active_samples": 48
+          },
+          "drain": {
+            "backlog_at_start": 114.0,
+            "drain_time_s": 3.6850000000000023,
+            "jobs_drained": 0.0,
+            "mean_drain_rate_per_s": 0.0,
+            "drain_throughput_deciles": [],
+            "drain_tail_to_head_ratio": null
+          }
+        },
+        "release": {
+          "phase_type": "drain",
+          "metrics": {
+            "n_dead_tup@pgmq.q_long_horizon_bench": {
+              "median": 122.0,
+              "peak": 245.0,
+              "count": 12
+            },
+            "n_live_tup@pgmq.q_long_horizon_bench": {
+              "median": 121.0,
+              "peak": 122.0,
+              "count": 12
+            },
+            "autovacuum_count@pgmq.q_long_horizon_bench": {
+              "median": 1.0,
+              "peak": 2.0,
+              "count": 12
+            },
+            "last_autovacuum_age_s@pgmq.q_long_horizon_bench": {
+              "median": 29.4076115,
+              "peak": 56.90761,
+              "count": 12
+            },
+            "total_relation_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.15625,
+              "peak": 0.15625,
+              "count": 12
+            },
+            "table_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.0859375,
+              "peak": 0.0859375,
+              "count": 12
+            },
+            "toast_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 12
+            },
+            "indexes_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.03125,
+              "peak": 0.03125,
+              "count": 12
+            },
+            "n_dead_tup@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "n_live_tup@pgmq.a_long_horizon_bench": {
+              "median": 1.0,
+              "peak": 4.0,
+              "count": 12
+            },
+            "autovacuum_count@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "total_relation_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.046875,
+              "peak": 0.046875,
+              "count": 12
+            },
+            "table_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 12
+            },
+            "toast_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 12
+            },
+            "indexes_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.03125,
+              "peak": 0.03125,
+              "count": 12
+            },
+            "snapshot_xmin": {
+              "median": 988.0,
+              "peak": 1010.0,
+              "count": 12
+            },
+            "xmin_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "oldest_xact_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "idle_in_tx_count": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "oldest_idle_in_tx_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "pg_notification_queue_usage": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "pg_wal_records": {
+              "median": 46266.0,
+              "peak": 46852.0,
+              "count": 12
+            },
+            "pg_wal_fpi": {
+              "median": 11297.0,
+              "peak": 11297.0,
+              "count": 12
+            },
+            "pg_wal_bytes": {
+              "median": 58246661.0,
+              "peak": 58295282.0,
+              "count": 12
+            },
+            "relfilenode_churn_total": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_type": {
+              "median": 4.0,
+              "peak": 4.0,
+              "count": 12
+            },
+            "catalog_size_mb@pg_catalog.pg_type": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 12
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_attribute": {
+              "median": 70.0,
+              "peak": 70.0,
+              "count": 12
+            },
+            "catalog_size_mb@pg_catalog.pg_attribute": {
+              "median": 0.7109375,
+              "peak": 0.7109375,
+              "count": 12
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_class": {
+              "median": 19.0,
+              "peak": 19.0,
+              "count": 12
+            },
+            "catalog_size_mb@pg_catalog.pg_class": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 12
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_depend": {
+              "median": 42.0,
+              "peak": 42.0,
+              "count": 12
+            },
+            "catalog_size_mb@pg_catalog.pg_depend": {
+              "median": 0.328125,
+              "peak": 0.328125,
+              "count": 12
+            },
+            "pg_db_xacts_total": {
+              "median": 248232.5,
+              "peak": 323552.0,
+              "count": 12
+            },
+            "pg_db_tup_updated_total": {
+              "median": 446.0,
+              "peak": 572.0,
+              "count": 12
+            },
+            "pg_db_tup_deleted_total": {
+              "median": 144.0,
+              "peak": 147.0,
+              "count": 12
+            },
+            "pg_db_tup_inserted_total": {
+              "median": 994.0,
+              "peak": 997.0,
+              "count": 12
+            },
+            "pg_backends_total": {
+              "median": 204.0,
+              "peak": 204.0,
+              "count": 12
+            },
+            "pg_backends_active": {
+              "median": 0.5,
+              "peak": 4.0,
+              "count": 12
+            },
+            "pg_backends_idle": {
+              "median": 203.5,
+              "peak": 204.0,
+              "count": 12
+            },
+            "pg_backends_idle_in_tx": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "pg_backends_listening": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "pg_database_size_mb": {
+              "median": 8.068053245544434,
+              "peak": 8.075865745544434,
+              "count": 12
+            },
+            "pg_cpu_seconds_total": {
+              "median": 109.037038,
+              "peak": 140.616254,
+              "count": 12
+            },
+            "adapter_cpu_seconds_total@replica-0": {
+              "median": 28.4667295,
+              "peak": 36.479245,
+              "count": 12
+            },
+            "adapter_cpu_seconds_total@replica-1": {
+              "median": 25.5620165,
+              "peak": 32.447064,
+              "count": 12
+            },
+            "active_xact_count": {
+              "median": 0.5,
+              "peak": 4.0,
+              "count": 12
+            },
+            "pgstattuple_dead_pct@pgmq.q_long_horizon_bench": {
+              "median": 19.61,
+              "peak": 19.61,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.q_long_horizon_bench": {
+              "median": 37.61,
+              "peak": 37.61,
+              "count": 1
+            },
+            "pgstattuple_dead_pct@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.a_long_horizon_bench": {
+              "median": 83.89,
+              "peak": 83.89,
+              "count": 1
+            },
+            "subscriber_p50_ms": {
+              "median": 70634.0,
+              "peak": 101952.0,
+              "count": 12
+            },
+            "completion_rate": {
+              "median": 0.0,
+              "peak": 0.4,
+              "count": 12
+            },
+            "end_to_end_p50_ms": {
+              "median": 75646.0,
+              "peak": 110973.0,
+              "count": 12
+            },
+            "end_to_end_p95_ms": {
+              "median": 75646.0,
+              "peak": 110973.0,
+              "count": 12
+            },
+            "enqueue_rate": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "end_to_end_p99_ms": {
+              "median": 75646.0,
+              "peak": 110973.0,
+              "count": 12
+            },
+            "queue_depth": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "subscriber_p99_ms": {
+              "median": 80195.0,
+              "peak": 110196.0,
+              "count": 12
+            },
+            "claim_p99_ms": {
+              "median": 80195.0,
+              "peak": 110196.0,
+              "count": 12
+            },
+            "producer_target_rate": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "claim_p50_ms": {
+              "median": 70634.0,
+              "peak": 101952.0,
+              "count": 12
+            },
+            "producer_p95_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "producer_p50_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            },
+            "claim_p95_ms": {
+              "median": 79962.0,
+              "peak": 109963.0,
+              "count": 12
+            },
+            "subscriber_p95_ms": {
+              "median": 79962.0,
+              "peak": 109963.0,
+              "count": 12
+            },
+            "producer_p99_ms": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 12
+            }
+          },
+          "peak_table_size_mb": 0.203125,
+          "peak_dead_tup": 245.0,
+          "median_dead_tup": 122.0,
+          "median_claim_p99_ms": 80195.0,
+          "median_producer_p99_ms": 0.0,
+          "median_producer_call_p99_ms": null,
+          "median_subscriber_p99_ms": 80195.0,
+          "median_end_to_end_p99_ms": 75646.0,
+          "median_throughput_per_s": 0.0,
+          "median_enqueue_rate_per_s": 0.0,
+          "median_queue_depth": 0.0,
+          "median_running_depth": null,
+          "autovacuum_count_delta": 1.0,
+          "pg_wal_bytes_delta": 108478.0,
+          "pg_wal_records_delta": 1266.0,
+          "pg_wal_fpi_delta": 2.0,
+          "pg_wal_bytes_per_s": 1972.3272727272727,
+          "relfilenode_churn_delta": 0.0,
+          "relfilenode_churn_per_s": 0.0,
+          "pg_db_xacts_delta": 159091.0,
+          "pg_db_xacts_per_s": 2892.5636363636363,
+          "pg_db_tup_updated_per_s": 4.509090909090909,
+          "pg_db_tup_inserted_per_s": 0.07272727272727272,
+          "pg_db_tup_deleted_per_s": 0.07272727272727272,
+          "pg_stmt_calls_per_s": null,
+          "pg_notify_calls_per_s": null,
+          "pg_cpu_cores": 1.2252581272727272,
+          "adapter_cpu_cores": 0.5788606181818181,
+          "median_pg_backends": 204.0,
+          "peak_pg_backends": 204.0,
+          "median_pg_backends_listening": 0.0,
+          "peak_pg_backends_listening": 0.0,
+          "jobs_enqueued": 0.0,
+          "jobs_completed": 4.0,
+          "wal_bytes_per_job": 27119.5,
+          "database_size_mb_start": 8.044615745544434,
+          "database_size_mb_end": 8.075865745544434,
+          "database_size_mb_peak": 8.075865745544434,
+          "event_relation_size_mb_start": 0.1796875,
+          "event_relation_size_mb_end": 0.203125,
+          "event_relation_size_mb_peak": 0.203125,
+          "event_toast_size_mb_start": 0.015625,
+          "event_toast_size_mb_end": 0.015625,
+          "event_toast_size_mb_peak": 0.015625,
+          "event_indexes_size_mb_start": 0.046875,
+          "event_indexes_size_mb_end": 0.0625,
+          "event_indexes_size_mb_peak": 0.0625,
+          "wal_bytes_per_completed_job": 29584.909090909092,
+          "catalog": {
+            "dead_tup_peak": 135.0,
+            "dead_tup_end": 135.0,
+            "size_mb_end": 1.5078125,
+            "size_mb_delta": 0.0
+          },
+          "replicas": {
+            "0": {
+              "median_completion_rate": 0.0,
+              "peak_completion_rate": 0.2,
+              "count_completion_rate": 12,
+              "median_enqueue_rate": 0.0,
+              "peak_enqueue_rate": 0.0,
+              "count_enqueue_rate": 12,
+              "median_producer_p99_ms": 0.0,
+              "peak_producer_p99_ms": 0.0,
+              "count_producer_p99_ms": 12,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 80195.0,
+              "peak_subscriber_p99_ms": 108942.0,
+              "count_subscriber_p99_ms": 12,
+              "median_end_to_end_p99_ms": 75646.0,
+              "peak_end_to_end_p99_ms": 110973.0,
+              "count_end_to_end_p99_ms": 12,
+              "median_claim_p99_ms": 80195.0,
+              "peak_claim_p99_ms": 108942.0,
+              "count_claim_p99_ms": 12,
+              "median_queue_depth": 0.0,
+              "peak_queue_depth": 0.0,
+              "count_queue_depth": 12,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            },
+            "1": {
+              "median_completion_rate": 0.0,
+              "peak_completion_rate": 0.4,
+              "count_completion_rate": 12,
+              "median_enqueue_rate": 0.0,
+              "peak_enqueue_rate": 0.0,
+              "count_enqueue_rate": 12,
+              "median_producer_p99_ms": 0.0,
+              "peak_producer_p99_ms": 0.0,
+              "count_producer_p99_ms": 12,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 77610.0,
+              "peak_subscriber_p99_ms": 110196.0,
+              "count_subscriber_p99_ms": 12,
+              "median_end_to_end_p99_ms": 0.0,
+              "peak_end_to_end_p99_ms": 80376.0,
+              "count_end_to_end_p99_ms": 12,
+              "median_claim_p99_ms": 77610.0,
+              "peak_claim_p99_ms": 110196.0,
+              "count_claim_p99_ms": 12,
+              "median_queue_depth": null,
+              "peak_queue_depth": null,
+              "count_queue_depth": 0,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            }
+          },
+          "wait_events": {
+            "top": [
+              {
+                "event_type": "CPU",
+                "event": "CPU",
+                "count": 44
+              },
+              {
+                "event_type": "Client",
+                "event": "ClientRead",
+                "count": 37
+              }
+            ],
+            "total_active_samples": 81
+          },
+          "drain": {
+            "backlog_at_start": 0.0,
+            "drain_time_s": 3.6829999999999927,
+            "jobs_drained": 4.0,
+            "mean_drain_rate_per_s": 1.086071137659519,
+            "drain_throughput_deciles": [],
+            "drain_tail_to_head_ratio": null
+          }
+        },
+        "steady": {
+          "phase_type": "clean",
+          "metrics": {
+            "n_dead_tup@pgmq.q_long_horizon_bench": {
+              "median": 181.5,
+              "peak": 532.0,
+              "count": 72
+            },
+            "n_live_tup@pgmq.q_long_horizon_bench": {
+              "median": 285.0,
+              "peak": 538.0,
+              "count": 72
+            },
+            "autovacuum_count@pgmq.q_long_horizon_bench": {
+              "median": 5.0,
+              "peak": 8.0,
+              "count": 72
+            },
+            "last_autovacuum_age_s@pgmq.q_long_horizon_bench": {
+              "median": 29.395459,
+              "peak": 56.905088,
+              "count": 72
+            },
+            "total_relation_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.2421875,
+              "peak": 0.2890625,
+              "count": 72
+            },
+            "table_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.171875,
+              "peak": 0.1796875,
+              "count": 72
+            },
+            "toast_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 72
+            },
+            "indexes_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.03125,
+              "peak": 0.0703125,
+              "count": 72
+            },
+            "n_dead_tup@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "n_live_tup@pgmq.a_long_horizon_bench": {
+              "median": 180.0,
+              "peak": 302.0,
+              "count": 72
+            },
+            "autovacuum_count@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "total_relation_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.15625,
+              "peak": 0.203125,
+              "count": 72
+            },
+            "table_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.09375,
+              "peak": 0.140625,
+              "count": 72
+            },
+            "toast_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 72
+            },
+            "indexes_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.03125,
+              "peak": 0.03125,
+              "count": 72
+            },
+            "snapshot_xmin": {
+              "median": 1882.5,
+              "peak": 2361.0,
+              "count": 72
+            },
+            "xmin_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "oldest_xact_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "idle_in_tx_count": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "oldest_idle_in_tx_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "pg_notification_queue_usage": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "pg_wal_records": {
+              "median": 55383.0,
+              "peak": 61324.0,
+              "count": 72
+            },
+            "pg_wal_fpi": {
+              "median": 11336.0,
+              "peak": 11340.0,
+              "count": 72
+            },
+            "pg_wal_bytes": {
+              "median": 59300390.0,
+              "peak": 59930716.0,
+              "count": 72
+            },
+            "relfilenode_churn_total": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_type": {
+              "median": 4.0,
+              "peak": 4.0,
+              "count": 72
+            },
+            "catalog_size_mb@pg_catalog.pg_type": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 72
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_attribute": {
+              "median": 70.0,
+              "peak": 70.0,
+              "count": 72
+            },
+            "catalog_size_mb@pg_catalog.pg_attribute": {
+              "median": 0.7109375,
+              "peak": 0.7109375,
+              "count": 72
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_class": {
+              "median": 19.0,
+              "peak": 19.0,
+              "count": 72
+            },
+            "catalog_size_mb@pg_catalog.pg_class": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 72
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_depend": {
+              "median": 42.0,
+              "peak": 42.0,
+              "count": 72
+            },
+            "catalog_size_mb@pg_catalog.pg_depend": {
+              "median": 0.328125,
+              "peak": 0.328125,
+              "count": 72
+            },
+            "pg_db_xacts_total": {
+              "median": 402810.5,
+              "peak": 404120.0,
+              "count": 72
+            },
+            "pg_db_tup_updated_total": {
+              "median": 1826.0,
+              "peak": 2647.0,
+              "count": 72
+            },
+            "pg_db_tup_deleted_total": {
+              "median": 323.0,
+              "peak": 445.0,
+              "count": 72
+            },
+            "pg_db_tup_inserted_total": {
+              "median": 1543.0,
+              "peak": 2021.0,
+              "count": 72
+            },
+            "pg_backends_total": {
+              "median": 204.0,
+              "peak": 204.0,
+              "count": 72
+            },
+            "pg_backends_active": {
+              "median": 0.0,
+              "peak": 2.0,
+              "count": 72
+            },
+            "pg_backends_idle": {
+              "median": 204.0,
+              "peak": 204.0,
+              "count": 72
+            },
+            "pg_backends_idle_in_tx": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "pg_backends_listening": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 72
+            },
+            "pg_database_size_mb": {
+              "median": 8.286803245544434,
+              "peak": 8.380553245544434,
+              "count": 72
+            },
+            "pg_cpu_seconds_total": {
+              "median": 179.5398505,
+              "peak": 183.976606,
+              "count": 72
+            },
+            "adapter_cpu_seconds_total@replica-0": {
+              "median": 47.893533500000004,
+              "peak": 50.368938,
+              "count": 72
+            },
+            "adapter_cpu_seconds_total@replica-1": {
+              "median": 41.968250499999996,
+              "peak": 44.264527,
+              "count": 72
+            },
+            "active_xact_count": {
+              "median": 0.0,
+              "peak": 2.0,
+              "count": 72
+            },
+            "pgstattuple_dead_pct@pgmq.q_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.q_long_horizon_bench": {
+              "median": 9.49,
+              "peak": 9.49,
+              "count": 1
+            },
+            "pgstattuple_dead_pct@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.a_long_horizon_bench": {
+              "median": 33.35,
+              "peak": 33.35,
+              "count": 1
+            },
+            "subscriber_p50_ms": {
+              "median": 168019.0,
+              "peak": 327398.0,
+              "count": 72
+            },
+            "completion_rate": {
+              "median": 1.2,
+              "peak": 24.8,
+              "count": 72
+            },
+            "end_to_end_p50_ms": {
+              "median": 135311.0,
+              "peak": 454614.0,
+              "count": 72
+            },
+            "end_to_end_p95_ms": {
+              "median": 231637.0,
+              "peak": 459635.0,
+              "count": 72
+            },
+            "enqueue_rate": {
+              "median": 2.0,
+              "peak": 2.0,
+              "count": 72
+            },
+            "end_to_end_p99_ms": {
+              "median": 232304.0,
+              "peak": 460181.0,
+              "count": 72
+            },
+            "queue_depth": {
+              "median": 149.0,
+              "peak": 426.0,
+              "count": 72
+            },
+            "subscriber_p99_ms": {
+              "median": 229253.0,
+              "peak": 329070.0,
+              "count": 72
+            },
+            "claim_p99_ms": {
+              "median": 229253.0,
+              "peak": 329070.0,
+              "count": 72
+            },
+            "producer_target_rate": {
+              "median": 1.0,
+              "peak": 1.0,
+              "count": 72
+            },
+            "claim_p50_ms": {
+              "median": 168019.0,
+              "peak": 327398.0,
+              "count": 72
+            },
+            "producer_p95_ms": {
+              "median": 4.593478050082922,
+              "peak": 6.067763082683086,
+              "count": 72
+            },
+            "producer_p50_ms": {
+              "median": 2.7455699164420366,
+              "peak": 4.065855871886015,
+              "count": 72
+            },
+            "claim_p95_ms": {
+              "median": 229242.0,
+              "peak": 328402.0,
+              "count": 72
+            },
+            "subscriber_p95_ms": {
+              "median": 229242.0,
+              "peak": 328402.0,
+              "count": 72
+            },
+            "producer_p99_ms": {
+              "median": 5.534630035981536,
+              "peak": 6.1924029141664505,
+              "count": 72
+            }
+          },
+          "peak_table_size_mb": 0.4921875,
+          "peak_dead_tup": 532.0,
+          "median_dead_tup": 181.5,
+          "median_claim_p99_ms": 227070.0,
+          "median_producer_p99_ms": 5.534630035981536,
+          "median_producer_call_p99_ms": null,
+          "median_subscriber_p99_ms": 227070.0,
+          "median_end_to_end_p99_ms": 232283.0,
+          "median_throughput_per_s": 0.7000000000000001,
+          "median_enqueue_rate_per_s": 2.0,
+          "median_queue_depth": 149.0,
+          "median_running_depth": null,
+          "autovacuum_count_delta": 6.0,
+          "pg_wal_bytes_delta": 1631815.0,
+          "pg_wal_records_delta": 14442.0,
+          "pg_wal_fpi_delta": 43.0,
+          "pg_wal_bytes_per_s": 4596.661971830986,
+          "relfilenode_churn_delta": 0.0,
+          "relfilenode_churn_per_s": 0.0,
+          "pg_db_xacts_delta": 68895.0,
+          "pg_db_xacts_per_s": 194.07042253521126,
+          "pg_db_tup_updated_per_s": 5.845070422535211,
+          "pg_db_tup_inserted_per_s": 2.8647887323943664,
+          "pg_db_tup_deleted_per_s": 0.8394366197183099,
+          "pg_stmt_calls_per_s": null,
+          "pg_notify_calls_per_s": null,
+          "pg_cpu_cores": 0.10627948169014087,
+          "adapter_cpu_cores": 0.06458332957746481,
+          "median_pg_backends": 204.0,
+          "peak_pg_backends": 204.0,
+          "median_pg_backends_listening": 0.0,
+          "peak_pg_backends_listening": 0.0,
+          "jobs_enqueued": 718.0,
+          "jobs_completed": 903.0,
+          "wal_bytes_per_job": 1807.1040974529346,
+          "database_size_mb_start": 8.075865745544434,
+          "database_size_mb_end": 8.380553245544434,
+          "database_size_mb_peak": 8.380553245544434,
+          "event_relation_size_mb_start": 0.203125,
+          "event_relation_size_mb_end": 0.4921875,
+          "event_relation_size_mb_peak": 0.4921875,
+          "event_toast_size_mb_start": 0.015625,
+          "event_toast_size_mb_end": 0.015625,
+          "event_toast_size_mb_peak": 0.015625,
+          "event_indexes_size_mb_start": 0.0625,
+          "event_indexes_size_mb_end": 0.1015625,
+          "event_indexes_size_mb_peak": 0.1015625,
+          "wal_bytes_per_completed_job": 1832.5562678395956,
+          "catalog": {
+            "dead_tup_peak": 135.0,
+            "dead_tup_end": 135.0,
+            "size_mb_end": 1.5078125,
+            "size_mb_delta": 0.0
+          },
+          "replicas": {
+            "0": {
+              "median_completion_rate": 0.30000000000000004,
+              "peak_completion_rate": 17.6,
+              "count_completion_rate": 72,
+              "median_enqueue_rate": 1.0,
+              "peak_enqueue_rate": 1.0,
+              "count_enqueue_rate": 72,
+              "median_producer_p99_ms": 5.534630035981536,
+              "peak_producer_p99_ms": 6.1924029141664505,
+              "count_producer_p99_ms": 72,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 225244.0,
+              "peak_subscriber_p99_ms": 327736.0,
+              "count_subscriber_p99_ms": 72,
+              "median_end_to_end_p99_ms": 232283.0,
+              "peak_end_to_end_p99_ms": 452310.0,
+              "count_end_to_end_p99_ms": 72,
+              "median_claim_p99_ms": 225244.0,
+              "peak_claim_p99_ms": 327736.0,
+              "count_claim_p99_ms": 72,
+              "median_queue_depth": 149.0,
+              "peak_queue_depth": 426.0,
+              "count_queue_depth": 72,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            },
+            "1": {
+              "median_completion_rate": 0.4,
+              "peak_completion_rate": 24.8,
+              "count_completion_rate": 72,
+              "median_enqueue_rate": 1.0,
+              "peak_enqueue_rate": 1.0,
+              "count_enqueue_rate": 72,
+              "median_producer_p99_ms": 2.55209906026721,
+              "peak_producer_p99_ms": 4.452337045222521,
+              "count_producer_p99_ms": 72,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 227070.0,
+              "peak_subscriber_p99_ms": 329070.0,
+              "count_subscriber_p99_ms": 72,
+              "median_end_to_end_p99_ms": 191996.0,
+              "peak_end_to_end_p99_ms": 460181.0,
+              "count_end_to_end_p99_ms": 72,
+              "median_claim_p99_ms": 227070.0,
+              "peak_claim_p99_ms": 329070.0,
+              "count_claim_p99_ms": 72,
+              "median_queue_depth": null,
+              "peak_queue_depth": null,
+              "count_queue_depth": 0,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            }
+          },
+          "wait_events": {
+            "top": [
+              {
+                "event_type": "CPU",
+                "event": "CPU",
+                "count": 25
+              },
+              {
+                "event_type": "Client",
+                "event": "ClientRead",
+                "count": 16
+              }
+            ],
+            "total_active_samples": 41
+          }
+        },
+        "tail": {
+          "phase_type": "drain",
+          "metrics": {
+            "n_dead_tup@pgmq.q_long_horizon_bench": {
+              "median": 216.0,
+              "peak": 438.0,
+              "count": 18
+            },
+            "n_live_tup@pgmq.q_long_horizon_bench": {
+              "median": 512.5,
+              "peak": 541.0,
+              "count": 18
+            },
+            "autovacuum_count@pgmq.q_long_horizon_bench": {
+              "median": 9.0,
+              "peak": 9.0,
+              "count": 18
+            },
+            "last_autovacuum_age_s@pgmq.q_long_horizon_bench": {
+              "median": 34.378862,
+              "peak": 56.881529,
+              "count": 18
+            },
+            "total_relation_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.3359375,
+              "peak": 0.34375,
+              "count": 18
+            },
+            "table_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.2265625,
+              "peak": 0.2265625,
+              "count": 18
+            },
+            "toast_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 18
+            },
+            "indexes_size_mb@pgmq.q_long_horizon_bench": {
+              "median": 0.0703125,
+              "peak": 0.078125,
+              "count": 18
+            },
+            "n_dead_tup@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "n_live_tup@pgmq.a_long_horizon_bench": {
+              "median": 331.5,
+              "peak": 384.0,
+              "count": 18
+            },
+            "autovacuum_count@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "total_relation_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.2109375,
+              "peak": 0.2265625,
+              "count": 18
+            },
+            "table_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.1484375,
+              "peak": 0.1640625,
+              "count": 18
+            },
+            "toast_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.0078125,
+              "peak": 0.0078125,
+              "count": 18
+            },
+            "indexes_size_mb@pgmq.a_long_horizon_bench": {
+              "median": 0.03125,
+              "peak": 0.03125,
+              "count": 18
+            },
+            "snapshot_xmin": {
+              "median": 2407.0,
+              "peak": 2455.0,
+              "count": 18
+            },
+            "xmin_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "oldest_xact_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "idle_in_tx_count": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "oldest_idle_in_tx_age_s": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "pg_notification_queue_usage": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "pg_wal_records": {
+              "median": 62449.5,
+              "peak": 64146.0,
+              "count": 18
+            },
+            "pg_wal_fpi": {
+              "median": 11340.0,
+              "peak": 11344.0,
+              "count": 18
+            },
+            "pg_wal_bytes": {
+              "median": 60047233.0,
+              "peak": 60221757.0,
+              "count": 18
+            },
+            "relfilenode_churn_total": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_type": {
+              "median": 4.0,
+              "peak": 4.0,
+              "count": 18
+            },
+            "catalog_size_mb@pg_catalog.pg_type": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 18
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_attribute": {
+              "median": 70.0,
+              "peak": 70.0,
+              "count": 18
+            },
+            "catalog_size_mb@pg_catalog.pg_attribute": {
+              "median": 0.7109375,
+              "peak": 0.7109375,
+              "count": 18
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_class": {
+              "median": 19.0,
+              "peak": 19.0,
+              "count": 18
+            },
+            "catalog_size_mb@pg_catalog.pg_class": {
+              "median": 0.234375,
+              "peak": 0.234375,
+              "count": 18
+            },
+            "catalog_n_dead_tup@pg_catalog.pg_depend": {
+              "median": 42.0,
+              "peak": 42.0,
+              "count": 18
+            },
+            "catalog_size_mb@pg_catalog.pg_depend": {
+              "median": 0.328125,
+              "peak": 0.328125,
+              "count": 18
+            },
+            "pg_db_xacts_total": {
+              "median": 404388.0,
+              "peak": 404640.0,
+              "count": 18
+            },
+            "pg_db_tup_updated_total": {
+              "median": 2838.0,
+              "peak": 3158.0,
+              "count": 18
+            },
+            "pg_db_tup_deleted_total": {
+              "median": 474.5,
+              "peak": 527.0,
+              "count": 18
+            },
+            "pg_db_tup_inserted_total": {
+              "median": 2054.5,
+              "peak": 2107.0,
+              "count": 18
+            },
+            "pg_backends_total": {
+              "median": 204.0,
+              "peak": 204.0,
+              "count": 18
+            },
+            "pg_backends_active": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "pg_backends_idle": {
+              "median": 204.0,
+              "peak": 204.0,
+              "count": 18
+            },
+            "pg_backends_idle_in_tx": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "pg_backends_listening": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "pg_database_size_mb": {
+              "median": 8.435240745544434,
+              "peak": 8.458678245544434,
+              "count": 18
+            },
+            "pg_cpu_seconds_total": {
+              "median": 185.18711050000002,
+              "peak": 186.259028,
+              "count": 18
+            },
+            "adapter_cpu_seconds_total@replica-0": {
+              "median": 50.541221,
+              "peak": 50.695175,
+              "count": 18
+            },
+            "adapter_cpu_seconds_total@replica-1": {
+              "median": 44.3854505,
+              "peak": 44.482142,
+              "count": 18
+            },
+            "active_xact_count": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "pgstattuple_dead_pct@pgmq.q_long_horizon_bench": {
+              "median": 13.57,
+              "peak": 13.57,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.q_long_horizon_bench": {
+              "median": 24.94,
+              "peak": 24.94,
+              "count": 1
+            },
+            "pgstattuple_dead_pct@pgmq.a_long_horizon_bench": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 1
+            },
+            "pgstattuple_free_pct@pgmq.a_long_horizon_bench": {
+              "median": 27.39,
+              "peak": 27.39,
+              "count": 1
+            },
+            "subscriber_p50_ms": {
+              "median": 261016.5,
+              "peak": 290027.0,
+              "count": 18
+            },
+            "completion_rate": {
+              "median": 3.2,
+              "peak": 25.0,
+              "count": 18
+            },
+            "end_to_end_p50_ms": {
+              "median": 509059.0,
+              "peak": 547396.0,
+              "count": 18
+            },
+            "end_to_end_p95_ms": {
+              "median": 519320.5,
+              "peak": 550966.0,
+              "count": 18
+            },
+            "enqueue_rate": {
+              "median": 0.0,
+              "peak": 0.8,
+              "count": 18
+            },
+            "end_to_end_p99_ms": {
+              "median": 520210.0,
+              "peak": 551396.0,
+              "count": 18
+            },
+            "queue_depth": {
+              "median": 378.0,
+              "peak": 430.0,
+              "count": 18
+            },
+            "subscriber_p99_ms": {
+              "median": 319288.0,
+              "peak": 321012.0,
+              "count": 18
+            },
+            "claim_p99_ms": {
+              "median": 319288.0,
+              "peak": 321012.0,
+              "count": 18
+            },
+            "producer_target_rate": {
+              "median": 0.0,
+              "peak": 0.0,
+              "count": 18
+            },
+            "claim_p50_ms": {
+              "median": 261016.5,
+              "peak": 290027.0,
+              "count": 18
+            },
+            "producer_p95_ms": {
+              "median": 0.0,
+              "peak": 5.6137810461223125,
+              "count": 18
+            },
+            "producer_p50_ms": {
+              "median": 0.0,
+              "peak": 2.8314609080553055,
+              "count": 18
+            },
+            "claim_p95_ms": {
+              "median": 318012.0,
+              "peak": 319277.0,
+              "count": 18
+            },
+            "subscriber_p95_ms": {
+              "median": 318012.0,
+              "peak": 319277.0,
+              "count": 18
+            },
+            "producer_p99_ms": {
+              "median": 0.0,
+              "peak": 5.989022087305784,
+              "count": 18
+            }
+          },
+          "peak_table_size_mb": 0.5703125,
+          "peak_dead_tup": 438.0,
+          "median_dead_tup": 216.0,
+          "median_claim_p99_ms": 315278.0,
+          "median_producer_p99_ms": 0.0,
+          "median_producer_call_p99_ms": null,
+          "median_subscriber_p99_ms": 315278.0,
+          "median_end_to_end_p99_ms": 520210.0,
+          "median_throughput_per_s": 2.4000000000000004,
+          "median_enqueue_rate_per_s": 0.0,
+          "median_queue_depth": 378.0,
+          "median_running_depth": null,
+          "autovacuum_count_delta": 1.0,
+          "pg_wal_bytes_delta": 289556.0,
+          "pg_wal_records_delta": 2810.0,
+          "pg_wal_fpi_delta": 4.0,
+          "pg_wal_bytes_per_s": 3406.541176470588,
+          "relfilenode_churn_delta": 0.0,
+          "relfilenode_churn_per_s": 0.0,
+          "pg_db_xacts_delta": 491.0,
+          "pg_db_xacts_per_s": 5.776470588235294,
+          "pg_db_tup_updated_per_s": 6.011764705882353,
+          "pg_db_tup_inserted_per_s": 0.9764705882352941,
+          "pg_db_tup_deleted_per_s": 0.9647058823529412,
+          "pg_stmt_calls_per_s": null,
+          "pg_notify_calls_per_s": null,
+          "pg_cpu_cores": 0.02511716470588246,
+          "adapter_cpu_cores": 0.005784388235294186,
+          "median_pg_backends": 204.0,
+          "peak_pg_backends": 204.0,
+          "median_pg_backends_listening": 0.0,
+          "peak_pg_backends_listening": 0.0,
+          "jobs_enqueued": 4.0,
+          "jobs_completed": 547.0,
+          "wal_bytes_per_job": 529.3528336380256,
+          "database_size_mb_start": 8.380553245544434,
+          "database_size_mb_end": 8.458678245544434,
+          "database_size_mb_peak": 8.458678245544434,
+          "event_relation_size_mb_start": 0.4921875,
+          "event_relation_size_mb_end": 0.5703125,
+          "event_relation_size_mb_peak": 0.5703125,
+          "event_toast_size_mb_start": 0.015625,
+          "event_toast_size_mb_end": 0.015625,
+          "event_toast_size_mb_peak": 0.015625,
+          "event_indexes_size_mb_start": 0.1015625,
+          "event_indexes_size_mb_end": 0.109375,
+          "event_indexes_size_mb_peak": 0.109375,
+          "wal_bytes_per_completed_job": 560.4912356167329,
+          "catalog": {
+            "dead_tup_peak": 135.0,
+            "dead_tup_end": 135.0,
+            "size_mb_end": 1.5078125,
+            "size_mb_delta": 0.0
+          },
+          "replicas": {
+            "0": {
+              "median_completion_rate": 1.6,
+              "peak_completion_rate": 14.4,
+              "count_completion_rate": 18,
+              "median_enqueue_rate": 0.0,
+              "peak_enqueue_rate": 0.4,
+              "count_enqueue_rate": 18,
+              "median_producer_p99_ms": 0.0,
+              "peak_producer_p99_ms": 5.989022087305784,
+              "count_producer_p99_ms": 18,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 315278.0,
+              "peak_subscriber_p99_ms": 321012.0,
+              "count_subscriber_p99_ms": 18,
+              "median_end_to_end_p99_ms": 520210.0,
+              "peak_end_to_end_p99_ms": 551396.0,
+              "count_end_to_end_p99_ms": 18,
+              "median_claim_p99_ms": 315278.0,
+              "peak_claim_p99_ms": 321012.0,
+              "count_claim_p99_ms": 18,
+              "median_queue_depth": 378.0,
+              "peak_queue_depth": 430.0,
+              "count_queue_depth": 18,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            },
+            "1": {
+              "median_completion_rate": 0.8,
+              "peak_completion_rate": 22.2,
+              "count_completion_rate": 18,
+              "median_enqueue_rate": 0.0,
+              "peak_enqueue_rate": 0.4,
+              "count_enqueue_rate": 18,
+              "median_producer_p99_ms": 0.0,
+              "peak_producer_p99_ms": 1.8010870553553104,
+              "count_producer_p99_ms": 18,
+              "median_producer_call_p99_ms": null,
+              "peak_producer_call_p99_ms": null,
+              "count_producer_call_p99_ms": 0,
+              "median_subscriber_p99_ms": 289273.0,
+              "peak_subscriber_p99_ms": 319288.0,
+              "count_subscriber_p99_ms": 18,
+              "median_end_to_end_p99_ms": 517653.5,
+              "peak_end_to_end_p99_ms": 547383.0,
+              "count_end_to_end_p99_ms": 18,
+              "median_claim_p99_ms": 289273.0,
+              "peak_claim_p99_ms": 319288.0,
+              "count_claim_p99_ms": 18,
+              "median_queue_depth": null,
+              "peak_queue_depth": null,
+              "count_queue_depth": 0,
+              "median_running_depth": null,
+              "peak_running_depth": null,
+              "count_running_depth": 0,
+              "median_retryable_depth": null,
+              "peak_retryable_depth": null,
+              "count_retryable_depth": 0,
+              "median_scheduled_depth": null,
+              "peak_scheduled_depth": null,
+              "count_scheduled_depth": 0,
+              "median_total_backlog": null,
+              "peak_total_backlog": null,
+              "count_total_backlog": 0
+            }
+          },
+          "wait_events": {
+            "top": [],
+            "total_active_samples": 0
+          },
+          "drain": {
+            "backlog_at_start": 426.0,
+            "drain_time_s": null,
+            "jobs_drained": 547.0,
+            "mean_drain_rate_per_s": null,
+            "drain_throughput_deciles": [
+              0.0,
+              12.5,
+              0.7,
+              0.0,
+              14.4,
+              1.4,
+              3.2,
+              3.2,
+              15.2,
+              4.800000000000001
+            ],
+            "drain_tail_to_head_ratio": null
+          }
+        }
+      },
+      "run": {
+        "jobs_enqueued_total": 844.0,
+        "jobs_completed_total": 1454.0,
+        "completion_excess": 610.0,
+        "database_size_mb_baseline": 7.903990745544434,
+        "database_size_mb_peak": 8.458678245544434,
+        "database_size_mb_final": 8.458678245544434,
+        "size_settle_s": 3.6739999999999995
+      }
+    }
+  }
+}

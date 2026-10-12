@@ -111,7 +111,7 @@ uv run bench run \
 uv run bench compare results/<run-id>
 ```
 
-Scenarios, phase types, chaos definitions, and Postgres-side diagnostics are in [`docs/method.md`](docs/method.md). Earlier reference runs: [awa vs pgque deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md) · [alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md) · [awa under a 10-minute held transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md) · [awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md).
+Scenarios, phase types, chaos definitions, and Postgres-side diagnostics are in [`docs/method.md`](docs/method.md). Earlier reference runs: [awa vs pgque deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md) · [alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md) · [awa under a 10-minute held transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md) · [awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md) · [2026-10-10 programme sweep](results/2026-10-10-programme-sweep/SUMMARY.md).
 
 ---
 
