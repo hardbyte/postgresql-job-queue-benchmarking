@@ -109,6 +109,30 @@ in `results/2026-10-12-post-sweep` (section below, filled in when complete).
   and escalation fixes are in `bench_harness` since b957194.
 - Postgres is capped at 4 CPUs; the host had other containers resident.
 
+## Post-sweep: same-host A/B of the awa stack, W256 and oban re-runs (2026-10-12)
+
+Four awa builds, each run twice interleaved (`r1`, `r2`) at ref800 and depth-target W4/W16/W64, 30 s warm-up and 150 s clean. Values are the two rounds, slash-separated.
+
+| build | ref800 e2e p99 ms | W4 jobs/s | W16 jobs/s | W64 jobs/s | W64 WAL B/job |
+|---|---:|---:|---:|---:|---:|
+| main (pre-#510, 4f7e79b) | 55 / 53 | 362 / 350 | 1,349 / 1,362 | 4,640 / 4,734 | 1,082 / 1,084 |
+| merged stack + #509 (09619d8) | 43 / 39 | 344 / 347 | 1,418 / 1,403 | 4,874 / 4,563 | 1,089 / 1,094 |
+| + #513 cursor fold | 55 / 56 | 352 / 345 | 1,334 / 1,347 | 4,848 / 4,305 | 1,120 / 945 |
+| + #515 slot functions and heartbeat | 61 / 58 | 372 / 365 | 1,370 / 1,322 | 4,704 / 4,632 | 1,121 / 1,131 |
+
+Reading: the merged stack (#510, #514, #512) lowers the reference-rate tail from about 54 ms to about 41 ms and adds a few percent at W16 and W64; round-to-round spread at W64 is about 5%, so neither #513 nor #515 moves throughput at these widths. Their case rests on per-claim cost (one transaction fewer per busy-lane claim; plan reuse per ring child), which the sweep does not isolate. The W4 floor of about 350 jobs/s is unchanged by every build: one claim round trip per freed worker permit.
+
+| W256 cell | jobs/s | e2e p99 ms | WAL B/job | peak dead tup |
+|---|---:|---:|---:|---:|
+| awa | 8,760 | 476 | 942 | 175 |
+| pgboss | 2,481 | 254 | 2,134 | 378,947 |
+| pgque | 24,255 | 275 | 436 | 1,544 |
+| pgmq | 2,185 | 564 | 1,883 | 323,812 |
+
+awa at 256 workers reaches 8,760 jobs/s here against 14,158 in May on the other host, the same 0.6 ratio pgque shows (24,255 against 39,898), so the gap is the host, not the build. pgmq and pg-boss do not scale past 64 workers.
+
+oban re-run with its Ecto pool sized from the worker count: W64 256 jobs/s with claim p99 38,883 ms, W128 0 jobs/s. The pool was not the only limit; the adapter's Oban queue concurrency (`queues: [benchmark: 50]` in oban-bench/config/config.exs) is fixed at 50 and the depth-target producer overwhelms it. The oban saturation cells above 50 workers should be read as an adapter limit, not an Oban one.
+
 ## Tables
 
 ## Depth-target saturation (target depth 4000, 1 ms jobs, one replica) — `sat_w128`
