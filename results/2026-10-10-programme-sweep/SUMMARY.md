@@ -108,6 +108,12 @@ in `results/2026-10-12-post-sweep` (section below, filled in when complete).
   are complete, but the sweep's wall time is not representative. The pacer
   and escalation fixes are in `bench_harness` since b957194.
 - Postgres is capped at 4 CPUs; the host had other containers resident.
+- The pgque `producer p99` column is not comparable: pgque-bench divided each
+  `send_batch` call's latency by its batch size and reported that per-message
+  figure under the per-call metric, while awa-bench reports the call itself
+  (about 20 rows per call at 800/s). Per message, awa is 0.34 ms p99 against
+  pgque's 0.26 ms; per call, 6.9 ms against about 5.2 ms. The adapter now
+  reports both correctly (fixed after this sweep).
 
 ## Post-sweep: same-host A/B of the awa stack, W256 and oban re-runs (2026-10-12)
 

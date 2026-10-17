@@ -371,6 +371,9 @@ async def scenario_long_horizon() -> None:
     producer_latencies_ms: collections.deque[tuple[float, float]] = collections.deque(
         maxlen=32768
     )
+    producer_call_latencies_ms: collections.deque[tuple[float, float]] = collections.deque(
+        maxlen=32768
+    )
     subscriber_latencies_ms: collections.deque[tuple[float, float]] = collections.deque(
         maxlen=32768
     )
@@ -604,6 +607,7 @@ async def scenario_long_horizon() -> None:
                 per_msg_ms = elapsed_ms / max(batch_count, 1)
                 for _ in range(batch_count):
                     producer_latencies_ms.append((sample_ts, per_msg_ms))
+                producer_call_latencies_ms.append((sample_ts, elapsed_ms))
                 enqueued += batch_count
             except Exception as exc:
                 print(f"[pgque] producer send failed: {exc}", file=sys.stderr)
@@ -968,6 +972,9 @@ async def scenario_long_horizon() -> None:
             producer_p50, producer_p95, producer_p99 = _percentiles(
                 producer_latencies_ms, window_s=30.0, now=loop.time()
             )
+            producer_call_p50, producer_call_p95, producer_call_p99 = _percentiles(
+                producer_call_latencies_ms, window_s=30.0, now=loop.time()
+            )
             subscriber_p50, subscriber_p95, subscriber_p99 = _percentiles(
                 subscriber_latencies_ms, window_s=30.0, now=loop.time()
             )
@@ -976,9 +983,9 @@ async def scenario_long_horizon() -> None:
             )
             ts = _now_iso()
             for metric, value, window_s in [
-                ("producer_call_p50_ms", producer_p50, 30.0),
-                ("producer_call_p95_ms", producer_p95, 30.0),
-                ("producer_call_p99_ms", producer_p99, 30.0),
+                ("producer_call_p50_ms", producer_call_p50, 30.0),
+                ("producer_call_p95_ms", producer_call_p95, 30.0),
+                ("producer_call_p99_ms", producer_call_p99, 30.0),
                 ("producer_p50_ms", producer_p50, 30.0),
                 ("producer_p95_ms", producer_p95, 30.0),
                 ("producer_p99_ms", producer_p99, 30.0),
