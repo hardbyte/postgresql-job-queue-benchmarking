@@ -330,6 +330,25 @@ def preflight_database(manifest: AdapterManifest, *, recreate: bool = False) -> 
 # destructive phase types can drive it.
 
 
+def die_with_parent() -> None:
+    """Child-side hook: have the kernel SIGKILL this adapter when the harness
+    process dies. A harness killed mid-run otherwise leaves native adapters
+    alive; they reconnect to the next cell's Postgres on the same port and
+    claim its jobs, so every later cell measures the wrong thing. Linux
+    only; a no-op elsewhere. ``docker run`` adapters are reaped separately
+    by ``remove_adapter_containers``."""
+    if sys.platform != "linux":
+        return
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        PR_SET_PDEATHSIG = 1
+        libc.prctl(PR_SET_PDEATHSIG, int(signal.SIGKILL), 0, 0, 0)
+    except (OSError, AttributeError):
+        pass
+
+
 def _tail_stdout(
     proc: subprocess.Popen,
     *,
@@ -413,6 +432,7 @@ def _launch_one_replica(
         stderr=sys.stderr,
         text=True,
         bufsize=1,  # line-buffered
+        preexec_fn=die_with_parent,
     )
     stop_event = threading.Event()
     # Start the harness pacer thread for fixed-rate, harness-paced runs.

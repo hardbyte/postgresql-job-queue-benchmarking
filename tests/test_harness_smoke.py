@@ -1554,6 +1554,43 @@ def test_chaos_aggregates_report_backlog_clear_time():
     assert agg["baseline_backlog_median"] == 10.0
 
 
+def test_native_adapters_die_with_the_harness():
+    """A child launched with the death-signal hook must be killed when its
+    parent exits, even if the parent is SIGKILLed and never reaps it."""
+    import os
+    import subprocess
+    import sys
+    import time
+
+    if sys.platform != "linux":
+        return
+    code = (
+        "import subprocess, sys, time\n"
+        f"sys.path.insert(0, {os.getcwd()!r})\n"
+        "from bench_harness.orchestrator import die_with_parent\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], preexec_fn=die_with_parent)\n"
+        "print(child.pid, flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    child_pid = int(parent.stdout.readline().strip())
+    assert os.path.exists(f"/proc/{child_pid}")
+    parent.kill()
+    parent.wait()
+
+    def child_alive() -> bool:
+        try:
+            with open(f"/proc/{child_pid}/stat") as f:
+                return f.read().split()[2] not in ("Z", "X")
+        except OSError:
+            return False
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and child_alive():
+        time.sleep(0.05)
+    assert not child_alive(), "adapter child outlived a killed harness"
+
+
 def test_pacer_follows_rate_file(tmp_path: Path):
     import io
     import threading
