@@ -818,6 +818,7 @@ def run_one_system(
     wait_event_sample_every_s: float = 1.0,
     adapter_env: dict[str, str] | None = None,
     wal_level: str = "replica",
+    skip_build: bool = False,
 ) -> dict:
     entry = ADAPTERS[system]
     manifest = AdapterManifest.load(entry.bench_dir)
@@ -830,7 +831,7 @@ def run_one_system(
     # ahead of it (`pgboss-bench` was missing at hour 2 of a 4-system
     # consolidated run despite being built at startup, because docker
     # GC reclaimed it during the long pgque phase).
-    entry.builder(False)
+    entry.builder(skip_build)
 
     # Sequential per-system fresh-PG isolation is the default.
     if not fast:
@@ -1251,6 +1252,7 @@ def drive(
                 wait_event_sample_every_s=wait_event_sample_every_s,
                 adapter_env=adapter_env,
                 wal_level=wal_level,
+                skip_build=skip_build,
             )
             # Merge the runtime descriptor the adapter emitted with the
             # harness-proven revision block (git SHA / submodule SHA /
