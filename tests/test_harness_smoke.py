@@ -1480,6 +1480,80 @@ def test_drain_hook_opens_consumer_gate(tmp_path: Path):
     assert gate.read_text() == "open"
 
 
+def test_postgres_restart_holds_producer_rate_at_zero_while_down(tmp_path: Path):
+    import threading
+    from bench_harness.hooks import enter_postgres_restart, exit_postgres_restart
+
+    rate_file = tmp_path / "rate.txt"
+    rate_file.write_text("800")
+    seen: list[str] = []
+    down = threading.Event()
+
+    def stop_fn() -> None:
+        seen.append(rate_file.read_text().strip())
+        down.set()
+
+    def start_fn() -> None:
+        seen.append(rate_file.read_text().strip())
+
+    runtime = PhaseRuntime(
+        database_url="postgres://unused",
+        phase=parse_phase_spec("r=postgres-restart:2s"),
+        state={
+            "postgres_restart_fn": lambda: None,
+            "postgres_stop_fn": stop_fn,
+            "postgres_start_fn": start_fn,
+            "producer_rate_control_file": str(rate_file),
+            "base_producer_rate": 800.0,
+        },
+    )
+    enter_postgres_restart(runtime)
+    assert down.wait(timeout=2.0)
+    exit_postgres_restart(runtime)
+    assert seen == ["0.0", "0.0"], seen
+    assert float(rate_file.read_text()) == 800.0
+
+
+def test_chaos_aggregates_report_backlog_clear_time():
+    from bench_harness.writers import _chaos_aggregates
+
+    def row(phase: str, t: float, metric: str, value: float) -> dict:
+        return {
+            "system": "awa",
+            "phase_label": phase,
+            "metric": metric,
+            "value": str(value),
+            "elapsed_s": str(t),
+            "sampled_at": f"2026-10-18T00:00:{int(t):02d}Z",
+            "window_s": "5",
+            "subject_kind": "adapter",
+            "instance_id": "0",
+        }
+
+    rows = []
+    for t in (0.0, 5.0):
+        rows.append(row("baseline", t, "completion_rate", 400.0))
+        rows.append(row("baseline", t, "queue_depth", 10.0))
+    for t in (10.0, 15.0):
+        rows.append(row("restart", t, "completion_rate", 0.0))
+        rows.append(row("restart", t, "queue_depth", 5000.0))
+    for t, rate, depth in ((20.0, 380.0, 4000.0), (25.0, 400.0, 1500.0), (30.0, 400.0, 8.0)):
+        rows.append(row("recovery", t, "completion_rate", rate))
+        rows.append(row("recovery", t, "queue_depth", depth))
+
+    agg = _chaos_aggregates(
+        rows,
+        system="awa",
+        chaos_labels=["restart"],
+        recovery_label="recovery",
+        baseline_label="baseline",
+    )
+    assert agg is not None
+    assert agg["chaos_recovery_time_s"] == 5.0
+    assert agg["backlog_clear_s"] == 15.0
+    assert agg["baseline_backlog_median"] == 10.0
+
+
 def test_pacer_follows_rate_file(tmp_path: Path):
     import io
     import threading

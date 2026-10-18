@@ -144,6 +144,8 @@ SECTIONS: dict[str, tuple[str, list[Column]]] = {
             ("baseline", "median_throughput_per_s", "baseline jobs/s", "{:,.0f}"),
             ("restart", "median_throughput_per_s", "restart jobs/s", "{:,.0f}"),
             ("recovery", "median_throughput_per_s", "recovery jobs/s", "{:,.0f}"),
+            ("recovery", "chaos_recovery_time_s", "workers back s", "{:,.0f}"),
+            ("recovery", "backlog_clear_s", "backlog clear s", "{:,.0f}"),
             ("recovery", "median_end_to_end_p99_ms", "recovery e2e p99 ms", "{:,.0f}"),
             ("recovery", "median_queue_depth", "recovery depth", "{:,.0f}"),
         ],

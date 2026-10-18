@@ -1404,12 +1404,37 @@ def _chaos_aggregates(
                     chaos_recovery_time_s = t - chaos_end_t
                     break
 
+    # Backlog clear: time from the end of the chaos span until the backlog
+    # is back at or below its pre-chaos baseline median. Separates "the
+    # workers came back" (chaos_recovery_time_s) from "the pile they found
+    # on return is gone", which is what the recovery tail latency tracks.
+    backlog_metric = "total_backlog"
+    if not _rate_samples([recovery_label], backlog_metric):
+        backlog_metric = "queue_depth"
+    backlog_clear_s: float | None = None
+    baseline_backlog_median: float | None = None
+    if baseline_label:
+        baseline_backlog = _rate_samples([baseline_label], backlog_metric)
+        if baseline_backlog:
+            baseline_backlog_median = _median([v for _, v, _ in baseline_backlog])
+    chaos_backlog = _rate_samples(chaos_labels, backlog_metric)
+    recovery_backlog = _rate_samples([recovery_label], backlog_metric)
+    if chaos_backlog and recovery_backlog:
+        chaos_end_t = chaos_backlog[-1][0]
+        target = max(0.0, baseline_backlog_median or 0.0)
+        for t, v, _ in recovery_backlog:
+            if v <= target:
+                backlog_clear_s = max(0.0, t - chaos_end_t)
+                break
+
     return {
         "jobs_enqueued": jobs_enqueued,
         "jobs_completed": jobs_completed,
         "jobs_lost": jobs_lost,
         "chaos_recovery_time_s": chaos_recovery_time_s,
         "baseline_completion_rate_median": baseline_median,
+        "backlog_clear_s": backlog_clear_s,
+        "baseline_backlog_median": baseline_backlog_median,
     }
 
 

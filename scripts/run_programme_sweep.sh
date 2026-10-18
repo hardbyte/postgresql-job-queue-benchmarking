@@ -61,7 +61,7 @@ section_ref800() {
 
 section_idle() {
   run_all idle idle --producer-rate 200 --worker-count 8 \
-    --phase warmup=warmup:60s --phase idle_1=idle-background:10m
+    --phase warmup=warmup:60s --phase "idle_1=idle-background(rate=0):10m"
 }
 
 section_chaos() {

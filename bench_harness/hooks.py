@@ -296,10 +296,18 @@ def enter_postgres_restart(runtime: PhaseRuntime) -> None:
     stop_fn = runtime.state.get("postgres_stop_fn")
     start_fn = runtime.state.get("postgres_start_fn")
 
+    base_rate = float(runtime.state.get("base_producer_rate", 800.0))
+
     def _run() -> None:
         try:
             half = max(1.0, duration_s / 2.0)
             if stop_fn:
+                # Hold the offered rate at zero while the server is down.
+                # Producers cannot insert anyway; letting the pacer queue
+                # tokens would replay the whole outage as a burst on
+                # recovery and turn the recovery tail into a drain
+                # measurement.
+                _set_producer_rate(runtime.state, 0.0)
                 stop_fn()
             else:
                 # No split helpers: do the whole stop+start now and
@@ -314,6 +322,9 @@ def enter_postgres_restart(runtime: PhaseRuntime) -> None:
                 start_fn()
         except Exception as exc:  # surfaced by the exit hook
             holder["error"] = exc
+        finally:
+            if stop_fn:
+                _set_producer_rate(runtime.state, base_rate)
 
     thread = threading.Thread(
         target=_run, name="postgres-restart-driver", daemon=True
