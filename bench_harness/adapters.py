@@ -413,6 +413,19 @@ def launch_absurd(manifest, overrides):
 # ─── Registry ────────────────────────────────────────────────────────────
 
 
+def build_segmented(skip: bool) -> None:
+    # Pure-Python spike adapter, launched with the harness interpreter. Nothing
+    # to build; --skip-build is a no-op either way.
+    return
+
+
+def launch_segmented(manifest: AdapterManifest, overrides: dict[str, str]) -> LaunchSpec:
+    return LaunchSpec(
+        argv=[sys.executable, str(SCRIPT_DIR / "segmented-bench" / "main.py")],
+        env=_base_env(manifest, overrides),
+    )
+
+
 @dataclass
 class AdapterEntry:
     bench_dir: Path
@@ -475,6 +488,11 @@ ADAPTERS: dict[str, AdapterEntry] = {
         bench_dir=SCRIPT_DIR / "absurd-bench",
         builder=build_absurd,
         launcher=launch_absurd,
+    ),
+    "segmented": AdapterEntry(
+        bench_dir=SCRIPT_DIR / "segmented-bench",
+        builder=build_segmented,
+        launcher=launch_segmented,
     ),
 }
 
