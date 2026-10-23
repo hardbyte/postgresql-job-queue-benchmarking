@@ -3,163 +3,133 @@ const { resolve } = require("node:path");
 const { runInNewContext, Script } = require("node:vm");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const root = __dirname;
-const html = readFileSync(resolve(root, "index.html"), "utf8");
-const model = html.match(/<script id="awa-model">([\s\S]*?)<\/script>/)[1];
-const context = {};
-runInNewContext(model, context);
+const html = readFileSync(resolve(__dirname, "index.html"), "utf8"),
+  context = {};
+runInNewContext(
+  html.match(/<script id="awa-model">([\s\S]*?)<\/script>/)[1],
+  context,
+);
 const M = context.AwaLab;
-const last = (chapter, config) => M.trace(chapter, config).frames.at(-1).state;
-const at = (chapter, config, type) =>
-  M.trace(chapter, config).frames.find((f) => f.type === type).state;
-
-test("all selectable configurations preserve accounting and deterministic replay", () => {
-  let configurations = 0;
-  for (const [chapter, definition] of Object.entries(M.definitions)) {
-    const [[keyA, , optionsA], [keyB, , optionsB]] = definition.options;
-    for (const [a] of optionsA)
-      for (const [b] of optionsB) {
-        configurations++;
-        const config = { [keyA]: a, [keyB]: b };
-        const trace = M.trace(chapter, config);
-        assert.equal(
-          JSON.stringify(trace),
-          JSON.stringify(M.trace(chapter, config)),
+const run = (key, ...actions) => actions.reduce(M.act, M.create(key));
+test("clean execution completes one job with one request and one receipt", () => {
+  const s = run(false, "claim", "send", "complete");
+  assert.equal(s.job, "completed");
+  assert.equal(s.attempt, 1);
+  assert.equal(s.calls, 1);
+  assert.equal(s.deliveries.length, 1);
+});
+test("a stop before the external request recovers without duplicating an effect", () => {
+  const s = run(
+    false,
+    "claim",
+    "crash",
+    "recover",
+    "claim",
+    "send",
+    "complete",
+  );
+  assert.equal(s.attempt, 2);
+  assert.equal(s.calls, 1);
+  assert.equal(s.deliveries.length, 1);
+});
+test("a stop after the external request preserves its receipt through rescue and replay", () => {
+  let s = run(false, "claim", "send");
+  const receipt = JSON.stringify(s.deliveries);
+  s = M.act(s, "crash");
+  assert.equal(s.job, "running");
+  assert.equal(JSON.stringify(s.deliveries), receipt);
+  s = M.act(s, "recover");
+  assert.equal(s.job, "available");
+  assert.equal(JSON.stringify(s.deliveries), receipt);
+  s = ["claim", "send", "complete"].reduce(M.act, s);
+  assert.equal(s.attempt, 2);
+  assert.equal(s.calls, 2);
+  assert.equal(s.deliveries.length, 2);
+  assert.equal(s.job, "completed");
+});
+test("provider keys suppress repeated effects, not handler starts or requests", () => {
+  const s = run(
+    true,
+    "claim",
+    "send",
+    "crash",
+    "recover",
+    "claim",
+    "send",
+    "complete",
+  );
+  assert.equal(s.attempt, 2);
+  assert.equal(s.calls, 2);
+  assert.equal(s.deliveries.length, 1);
+  assert.equal(s.job, "completed");
+});
+test("repeated failures preserve accounting and the same stable provider key", () => {
+  for (const key of [false, true]) {
+    let s = M.create(key);
+    for (let i = 0; i < 5; i++)
+      s = ["claim", "send", "crash", "recover"].reduce(M.act, s);
+    s = ["claim", "send", "complete"].reduce(M.act, s);
+    assert.equal(s.attempt, 6);
+    assert.equal(s.calls, 6);
+    assert.equal(s.deliveries.length, key ? 1 : 6);
+  }
+});
+test("all reachable action sequences preserve accounting and completion preconditions", () => {
+  let states = 0;
+  function explore(s, depth) {
+    states++;
+    assert.ok(s.deliveries.length <= s.calls);
+    assert.ok(s.calls <= s.attempt);
+    if (s.providerKey) assert.ok(s.deliveries.length <= 1);
+    if (s.job === "completed") {
+      assert.equal(s.worker.status, "finished");
+      assert.equal(s.worker.sent, true);
+      assert.deepEqual(Array.from(M.available(s)), []);
+    }
+    if (depth)
+      for (const action of M.available(s)) {
+        const before = JSON.stringify(s);
+        const next = M.act(s, action);
+        assert.equal(JSON.stringify(s), before);
+        assert.ok(
+          next.events.every((e) => e.sources.every((id) => M.sources[id])),
         );
-        for (const f of trace.frames) {
-          const s = f.state;
-          assert.ok(s.effects <= s.calls);
-          assert.ok(s.calls <= s.runs);
-          assert.ok(s.job === "absent" || s.order);
-          assert.equal(s.owner !== null, s.job === "running");
-          assert.ok(s.rejected <= 1);
-          if (config.provider === "key") assert.ok(s.effects <= 1);
-          assert.ok(M.sources[f.source], f.source);
-        }
+        explore(next, depth - 1);
       }
   }
-  assert.equal(configurations, 18);
+  explore(M.create(false), 12);
+  explore(M.create(true), 12);
+  assert.ok(states > 100);
 });
-
-test("crash at the handoff gap rolls back both atomic writes but orphans a split order", () => {
-  const atomic = last("handoff", { mode: "atomic", fault: "gap" });
-  assert.equal(atomic.order, false);
-  assert.equal(atomic.job, "absent");
-  assert.equal(atomic.pendingJob, false);
-  assert.equal(atomic.pendingOrder, false);
-  const split = last("handoff", { mode: "split", fault: "gap" });
-  assert.equal(split.order, true);
-  assert.equal(split.job, "absent");
-  assert.equal(split.runs, 0);
+test("invalid transitions cannot complete unsent work or act through a stopped worker", () => {
+  assert.throws(() => run(false, "complete"));
+  assert.throws(() => run(false, "claim", "complete"));
+  assert.throws(() => run(false, "claim", "send", "send"));
+  assert.throws(() => run(false, "claim", "crash", "send"));
+  assert.throws(() => run(false, "claim", "send", "complete", "crash"));
 });
-
-test("crash after either complete handoff leaves a runnable committed job", () => {
-  for (const mode of ["atomic", "split"]) {
-    const crashed = at("handoff", { mode, fault: "after" }, "app_crash");
-    assert.equal(crashed.order, true);
-    assert.equal(crashed.job, "available");
-    assert.equal(last("handoff", { mode, fault: "after" }).job, "completed");
-  }
+test("both scripts parse and the standalone component has no external runtime assets", () => {
+  const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
+  assert.equal(scripts.length, 2);
+  for (const [, source] of scripts) new Script(source);
+  assert.ok(!/<(?:script|link|img)[^>]+(?:src|href)="https?:/.test(html));
+  assert.ok(!/id="play"|id="position"|data-chapter=/.test(html));
 });
-
-test("external success before worker death repeats execution and effect without provider keys", () => {
-  const s = last("replay");
-  assert.equal(s.job, "completed");
-  assert.equal(s.runs, 2);
-  assert.equal(s.calls, 2);
-  assert.equal(s.effects, 2);
-  assert.equal(s.attempt, 2);
-  assert.equal(last("replay", { fault: "none" }).effects, 1);
-});
-
-test("provider deduplication suppresses effects but never execution or request counts", () => {
-  for (const chapter of ["replay", "fence", "wal"]) {
-    const s = last(chapter, { provider: "key" });
-    assert.equal(s.runs, 2);
-    assert.equal(s.calls, 2);
-    assert.equal(s.effects, 1);
-    assert.equal(s.job, "completed");
-  }
-});
-
-test("old completion cannot mutate B’s open attempt, for either rescue trigger", () => {
-  for (const rescue of ["heartbeat", "deadline"]) {
-    const frames = M.trace("fence", { rescue }).frames;
-    const i = frames.findIndex((f) => f.type === "complete");
-    const before = frames[i - 1].state;
-    const after = frames[i].state;
-    for (const field of ["job", "lease", "attempt", "owner", "effects"])
-      assert.equal(after[field], before[field]);
-    assert.equal(after.owner, "B");
-    assert.equal(after.lease, 2);
-    assert.equal(after.rejected, 1);
-    assert.equal(last("fence", { rescue }).job, "completed");
-    assert.equal(last("fence", { rescue }).effects, 2);
-  }
-});
-
-test("lost asynchronous claim restores durable enqueue and rewinds DB attempts, not effects", () => {
-  const s = at("wal", { wal: "lost" }, "db_restart");
-  assert.equal(s.job, "available");
-  assert.equal(s.order, true);
-  assert.equal(s.attempt, 0);
-  assert.equal(s.lease, 0);
-  assert.equal(s.runs, 1);
-  assert.equal(s.effects, 1);
-  const frames = M.trace("wal").frames;
-  assert.ok(!frames.some((f) => f.type === "rescue"));
-  const completed = frames.at(-1).state;
-  assert.equal(completed.runs, 2);
-  assert.equal(completed.attempt, 1);
-});
-
-test("a flushed claim survives the local crash and requires rescue before a new claim", () => {
-  const s = at("wal", { wal: "flushed" }, "db_restart");
-  assert.equal(s.job, "running");
-  assert.equal(s.attempt, 1);
-  assert.equal(s.claimDurable, true);
-  const frames = M.trace("wal", { wal: "flushed" }).frames;
-  assert.ok(frames.some((f) => f.type === "rescue"));
-  assert.equal(frames.at(-1).state.attempt, 2);
-  assert.equal(frames.at(-1).state.runs, 2);
-});
-
-test("completion replay is stale and does not duplicate terminal effects", () => {
-  const s = last("replay", { fault: "none" });
-  const replayed = M.reduce(s, { type: "complete", worker: "A", lease: 1 }, {});
-  assert.equal(replayed.job, "completed");
-  assert.equal(replayed.effects, 1);
-  assert.equal(replayed.rejected, 1);
-});
-
-test("inline scripts parse, source links pin the revision, and the page has no external runtime assets", () => {
-  for (const [, script] of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g))
-    new Script(script);
-  assert.ok(!/<(?:script|link|img)[^>]+(?:src|href)=["']https?:/i.test(html));
-  for (const [path, line] of Object.values(M.sources)) {
-    assert.ok(line > 0);
-    assert.ok(
-      path.startsWith("awa-") ||
-        path.startsWith("docs/") ||
-        path.startsWith("correctness/"),
-    );
-    assert.match(M.base, new RegExp("/" + M.revision + "/$"));
-  }
-});
-
-const awaRoot = process.env.AWA_SOURCE_ROOT;
 test(
-  "source anchors match the exact inspected Awa checkout",
-  { skip: !awaRoot },
+  "source anchors match the pinned inspected Awa implementation",
+  { skip: !process.env.AWA_SOURCE_ROOT },
   () => {
-    const { execFileSync } = require("node:child_process");
-    const revision = execFileSync("git", ["-C", awaRoot, "rev-parse", "HEAD"], {
-      encoding: "utf8",
-    }).trim();
-    assert.equal(revision, M.revision);
-    for (const [path, line] of Object.values(M.sources)) {
-      const source = readFileSync(resolve(awaRoot, path), "utf8").split("\n");
-      assert.ok(line > 0 && line <= source.length, `${path}:${line}`);
+    const { execFileSync } = require("node:child_process"),
+      root = process.env.AWA_SOURCE_ROOT;
+    assert.equal(
+      execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim(),
+      M.revision,
+    );
+    for (const [file, line] of Object.values(M.sources)) {
+      const text = readFileSync(resolve(root, file), "utf8");
+      assert.ok(line <= text.split("\n").length, file);
     }
   },
 );

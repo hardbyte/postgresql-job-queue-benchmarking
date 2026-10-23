@@ -33,6 +33,8 @@ jobs:
         run: npm --prefix website run lint
       - name: Test
         run: node --test --test-isolation=none website/test.cjs
+      - name: Test the interactive model
+        run: node --test --test-isolation=none simulations/awa-failure-windows/model.test.cjs
       - name: Build
         run: node website/build.cjs
       - name: Select runner Chrome
@@ -43,6 +45,10 @@ jobs:
           echo "BROWSER_EXECUTABLE=$chrome_path" >> "$GITHUB_ENV"
       - name: Browser and accessibility checks
         run: npm --prefix website run browser
+      - name: Direct-action model browser checks
+        env:
+          PLAYWRIGHT_MODULE: ${{ github.workspace }}/website/node_modules/playwright
+        run: node simulations/awa-failure-windows/browser.test.cjs
       - name: Retain a downloadable build
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

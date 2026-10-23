@@ -23,13 +23,13 @@ python3 -m http.server 8765 --bind 127.0.0.1 --directory website/dist
 
 Open `http://127.0.0.1:8765/`. The output uses relative paths and directory indexes so it also works under the GitHub project prefix `/postgresql-job-queue-benchmarking/`.
 
-`build.cjs` replaces only the ignored, generated `website/dist` directory on each build. Do not store manual work in that directory. It emits 23 HTML pages: a concise start page, a separate system finder, 14 profiles, question-focused comparison, methodology, primary sources, benchmark methodology, failure-boundary lessons, the canonical lab, a 404 page and static assets. The lab bytes are copied from `simulations/awa-failure-windows/index.html`, which remains their only canonical source.
+`build.cjs` replaces only the ignored, generated `website/dist` directory on each build. Do not store manual work in that directory. It emits 14 profile pages, directory/filter UI, comparison, methodology, primary sources, benchmark methodology, the direct-action job/worker/mailbox model, a 404 page and static assets. The lab bytes are copied from `simulations/awa-failure-windows/index.html`, which remains their only canonical source.
 
 ## Architecture and maintenance
 
 - `data/catalog.json`: curated system records, inspected source revisions, release metadata, dated primary evidence, seven capability fields, unknown/qualified statuses, operational tradeoffs and coverage labels. `hasAdapter` means only that an adapter exists locally.
 - `build.cjs`: escaped HTML templates and a deterministic static build. No framework or backend runtime.
-- `assets/app.js`: directory filters, two-system shortlists and one-question comparisons, query links, accessible menu and optional localStorage persistence. No analytics or external runtime requests.
+- `assets/app.js`: directory filters, four-system comparison selection, query links, accessible menu and optional localStorage persistence. No analytics or external runtime requests.
 - `lint.cjs` / `test.cjs`: JavaScript/schema/source-reference checks, contract distinctions, adapter identity, generated link/base-path checks, canonical lab identity and publication-surface checks.
 - `browser.test.cjs`: browser interactions and WCAG 2.1 AA axe checks, desktop and narrow-screen QA. Generated screenshots/reports are ignored under `artifacts/`.
 
@@ -48,7 +48,7 @@ npx playwright install chromium
 npm run browser
 ```
 
-`BROWSER_EXECUTABLE` can select an installed Chromium/Chrome. The test serves the generated site at the actual project-style base path. It validates directory filters and empty states, compare selection/query navigation, all profiles, sources, keyboard skip/navigation, the full-page lesson, 360/390/412px portrait and 844×390 landscape layouts, repeated interactions, 200% text reflow and 2× page scale, local path and external-request absence, and axe WCAG 2.1 AA rules. This is automated accessibility coverage, not a replacement for a full screen-reader/user audit.
+`BROWSER_EXECUTABLE` can select an installed Chromium/Chrome. The test serves the generated site at the actual project-style base path. It validates directory filters and empty states, compare selection/query navigation, all profiles, sources, keyboard skip/navigation, the direct-action job/worker/mailbox model, desktop/390/768px layouts, local path and external-request absence, and axe WCAG 2.1 AA rules. This is automated accessibility coverage, not a replacement for a full screen-reader/user audit.
 
 `SITE_URL` can run the same checks against an explicitly authorized hosted URL. Static lint/tests build locally and require no database, Docker, or live benchmark execution. Existing harness/adapter code is unchanged.
 

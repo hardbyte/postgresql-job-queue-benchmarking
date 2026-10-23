@@ -3,227 +3,248 @@ const { mkdirSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
-const output = join(__dirname, "artifacts");
-const url =
-  process.env.LAB_URL || pathToFileURL(join(__dirname, "index.html")).href;
-const launchOptions = { headless: true };
-if (process.env.BROWSER_EXECUTABLE)
-  launchOptions.executablePath = process.env.BROWSER_EXECUTABLE;
-const failures = [],
-  externalRequests = [],
-  cases = [];
-
+const output = join(__dirname, "artifacts"),
+  url =
+    process.env.LAB_URL || pathToFileURL(join(__dirname, "index.html")).href;
 (async () => {
   mkdirSync(output, { recursive: true });
-  const browser = await chromium.launch(launchOptions);
+  const browser = await chromium.launch({
+    headless: true,
+    ...(process.env.BROWSER_EXECUTABLE
+      ? { executablePath: process.env.BROWSER_EXECUTABLE }
+      : {}),
+  });
+  const errors = [],
+    externalRequests = [],
+    checks = [];
   try {
     const context = await browser.newContext({
-      viewport: { width: 1440, height: 1100 },
+      viewport: { width: 1440, height: 1000 },
       reducedMotion: "reduce",
+      hasTouch: true,
     });
     const page = await context.newPage();
-    page.on("pageerror", (error) => failures.push(error.message));
+    page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => {
-      if (message.type() === "error") failures.push(message.text());
+      if (message.type() === "error") errors.push(message.text());
     });
     await context.route("**/*", (route) => {
-      const request = new URL(route.request().url());
-      if (
-        request.protocol === "file:" ||
-        ["127.0.0.1", "localhost"].includes(request.hostname)
-      )
+      const target = new URL(route.request().url());
+      if (target.protocol === "file:" || target.origin === new URL(url).origin)
         return route.continue();
-      externalRequests.push(request.href);
+      externalRequests.push(target.href);
       return route.abort();
     });
-    await page.goto(url);
-    await page.getByRole("heading", { level: 1 }).waitFor();
-    await page.evaluate(
-      () =>
-        new Promise((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(resolve)),
-        ),
-    );
-    await page.screenshot({
-      path: join(output, "desktop-start.png"),
-      fullPage: true,
-    });
-    const definitions = await page.evaluate(() => AwaLab.definitions);
-    for (const [chapter, definition] of Object.entries(definitions)) {
-      const [[keyA, , choicesA], [keyB, , choicesB]] = definition.options;
-      for (const [a] of choicesA)
-        for (const [b] of choicesB) {
-          await page.locator(`[data-chapter="${chapter}"]`).click();
-          await page.locator("#option-" + keyA).selectOption(a);
-          await page.locator("#option-" + keyB).selectOption(b);
-          const slider = page.locator("#position");
-          await slider.focus();
-          await slider.press("End");
-          const expected = await page.evaluate(
-            ({ chapter, config }) =>
-              AwaLab.trace(chapter, config).frames.at(-1).state,
-            { chapter, config: { [keyA]: a, [keyB]: b } },
-          );
-          for (const [id, value] of Object.entries({
-            "stat-runs": expected.runs,
-            "stat-calls": expected.calls,
-            "stat-effects": expected.effects,
-            "stat-rejected": expected.rejected,
-          })) {
-            assert.equal(
-              await page.locator("#" + id).textContent(),
-              String(value),
-              `${chapter}/${a}/${b}/${id}`,
-            );
-          }
-          assert.equal(await page.locator("#next").isDisabled(), true);
-          cases.push(`${chapter}/${a}/${b}`);
-        }
-    }
-    const choose = async (chapter, options = {}) => {
-      await page.locator(`[data-chapter="${chapter}"]`).click();
-      for (const [key, value] of Object.entries(options))
-        await page.locator("#option-" + key).selectOption(value);
-    };
-    const finish = async () => {
-      await page.locator("#position").focus();
-      await page.locator("#position").press("End");
-    };
-    await choose("replay");
-    await finish();
-    assert.equal(await page.locator("#stat-effects").textContent(), "2");
-    await page.screenshot({
-      path: join(output, "desktop-replay-duplicate.png"),
-      fullPage: true,
-    });
-    await page.locator("#option-provider").selectOption("key");
-    assert.match(await page.locator("#step-count").textContent(), /EVENT 00/);
-    await finish();
-    assert.equal(await page.locator("#stat-calls").textContent(), "2");
-    assert.equal(await page.locator("#stat-effects").textContent(), "1");
-    await page.screenshot({
-      path: join(output, "desktop-provider-key.png"),
-      fullPage: true,
-    });
-    await choose("fence");
-    await page
-      .getByRole("button", { name: /A’s completion is rejected/ })
-      .click();
-    assert.equal(await page.locator("#job-state").textContent(), "running");
-    assert.equal(await page.locator("#stat-rejected").textContent(), "1");
-    assert.match(await page.locator("#worker-detail").textContent(), /B/);
-    await page.screenshot({
-      path: join(output, "desktop-stale-completion.png"),
-      fullPage: true,
-    });
-    await page.locator("#back").click();
-    assert.equal(await page.locator("#stat-rejected").textContent(), "0");
-    await page.locator("#next").focus();
-    await page.locator("#next").press("Enter");
-    assert.equal(await page.locator("#stat-rejected").textContent(), "1");
-    await choose("wal");
-    await page
-      .getByRole("button", { name: /PostgreSQL crashes and recovers/ })
-      .click();
-    assert.equal(await page.locator("#job-state").textContent(), "available");
-    assert.equal(await page.locator("#stat-runs").textContent(), "1");
-    await page.screenshot({
-      path: join(output, "desktop-lost-claim.png"),
-      fullPage: true,
-    });
-    await page.locator("#reset").click();
-    await page.locator("#speed").selectOption("900");
-    await page.locator("#play").click();
-    await page.waitForFunction(
-      () => Number(document.querySelector("#position").value) > 0,
-    );
-    await page.locator("#play").click();
-    assert.match(await page.locator("#play").textContent(), /Play/);
-    await page.locator("#reset").click();
-    await page.locator("#position").focus();
-    await page.locator("#position").press("ArrowRight");
-    assert.equal(await page.locator("#position").inputValue(), "1");
-    assert.equal(await page.locator("#pulse i").count(), 0);
-    assert.equal(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth > innerWidth,
-      ),
-      false,
-    );
-    await context.setOffline(true);
-    await page.reload();
-    assert.equal(await page.locator("#stat-runs").textContent(), "0");
-    await context.setOffline(false);
-    for (const width of [390, 768]) {
-      await page.setViewportSize({ width, height: 844 });
-      await choose("replay", { provider: "key" });
-      await finish();
-      assert.equal(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth > innerWidth,
-        ),
-        false,
-        "horizontal overflow at " + width,
-      );
-      for (const selector of [
-        "#play",
-        "#next",
-        "#option-provider",
-        "#position",
-      ]) {
-        const box = await page.locator(selector).boundingBox();
-        assert.ok(
-          box && box.width > 20 && box.x >= 0 && box.x + box.width <= width,
-          selector,
-        );
-      }
-      await page.screenshot({
-        path: join(output, `layout-${width}.png`),
-        fullPage: true,
-      });
-    }
-    await page.emulateMedia({ reducedMotion: "no-preference" });
-    await page.setViewportSize({ width: 1440, height: 1100 });
-    await choose("replay");
-    await page.locator("#next").click();
-    assert.equal(await page.locator("#pulse i").count(), 1);
-    assert.equal(
+    async function paint() {
       await page.evaluate(
         () =>
-          getComputedStyle(document.querySelector("#pulse i")).animationName,
-      ),
-      "travel",
+          new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+          ),
+      );
+    }
+    async function reset(key = false) {
+      if ((await page.locator("#provider-key").isChecked()) !== key)
+        await page.locator("#provider-key").setChecked(key);
+      else await page.locator("#reset").click();
+    }
+    async function act() {
+      if (page.viewportSize().width <= 844) await page.locator("#action").tap();
+      else await page.locator("#action").click();
+    }
+    async function trial(key, where) {
+      await reset(key);
+      await act();
+      if (where === "before") {
+        await page.locator("#crash").tap();
+        await act();
+        await act();
+        await act();
+      } else if (where === "after") {
+        await act();
+        await page.evaluate(
+          () => (window.receiptNode = document.querySelector(".letter")),
+        );
+        await page.locator("#crash").tap();
+        assert.equal(
+          await page.locator("#job-status").textContent(),
+          "Running",
+        );
+        assert.equal(
+          await page.evaluate(
+            () => window.receiptNode === document.querySelector(".letter"),
+          ),
+          true,
+        );
+        await act();
+        assert.equal(await page.locator("#job-status").textContent(), "Queued");
+        assert.equal(
+          await page.evaluate(
+            () => window.receiptNode === document.querySelector(".letter"),
+          ),
+          true,
+        );
+        await act();
+        await act();
+      } else await act();
+      await act();
+      assert.equal(
+        await page.locator("#job-status").textContent(),
+        "Completed",
+      );
+      assert.equal(
+        await page.locator("#delivery-count").textContent(),
+        `${where === "after" && !key ? 2 : 1} delivered`,
+      );
+      assert.match(
+        await page.locator("#run-count").textContent(),
+        where === "clean" ? /1 start/ : /2 starts/,
+      );
+    }
+    async function overflow(label) {
+      assert.equal(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        ),
+        false,
+        label,
+      );
+    }
+    await page.goto(url);
+    await page.locator("#action").waitFor();
+    await paint();
+    await page.screenshot({
+      path: join(output, "desktop-model.png"),
+      fullPage: true,
+    });
+    for (const key of [false, true])
+      for (const where of ["clean", "before", "after"]) {
+        await trial(key, where);
+        checks.push(`${key ? "key" : "no key"} / stop ${where}`);
+      }
+    assert.equal(await page.locator("#runs .run").count(), 4);
+    await page.locator("#action").click();
+    assert.equal(await page.locator("#provider-key").isChecked(), false);
+    assert.equal(await page.locator("#job-status").textContent(), "Queued");
+    checks.push(
+      "compare actual completed runs; other-assumption action resets the model",
     );
-    assert.deepEqual(failures, []);
+    await reset(false);
+    await act();
+    await act();
+    await page.locator("#crash").tap();
+    await act();
+    await act();
+    await act();
+    await act();
+    await page.screenshot({
+      path: join(output, "desktop-duplicate.png"),
+      fullPage: true,
+    });
+    for (const [width, height] of [
+      [360, 800],
+      [390, 844],
+      [412, 915],
+      [844, 390],
+    ]) {
+      await page.setViewportSize({ width, height });
+      await page.reload();
+      await trial(false, "after");
+      await overflow(`${width}x${height}`);
+      await page.screenshot({
+        path: join(output, `model-${width}.png`),
+        fullPage: true,
+      });
+      await page.locator("#action").click();
+      await act();
+      await act();
+      await page.locator("#crash").tap();
+      await act();
+      await act();
+      await act();
+      await act();
+      assert.equal(
+        await page.locator("#delivery-count").textContent(),
+        "1 delivered",
+      );
+      await overflow("key " + width);
+      for (const id of ["action", "reset"]) {
+        const rect = await page.locator("#" + id).boundingBox();
+        assert.ok(rect.height >= 44, `${id} touch height`);
+      }
+      checks.push(
+        `${width}x${height}: direct failure/recovery, provider comparison, stable mailbox, touch targets`,
+      );
+      if (width === 390) {
+        await page.screenshot({
+          path: join(output, "mobile-key.png"),
+          fullPage: true,
+        });
+      }
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
+    await page.evaluate(
+      () => (document.documentElement.style.fontSize = "200%"),
+    );
+    await overflow("200% text");
+    await page.locator("#action").focus();
+    await page.keyboard.press("Space");
+    assert.equal(await page.locator("#job-status").textContent(), "Running");
+    await act();
+    await page.locator("#crash").tap();
+    await act();
+    await act();
+    await act();
+    await act();
+    await overflow("200% text completed");
+    checks.push("200% text reflow and keyboard actions");
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 2 });
+    await page.locator("#reset").focus();
+    await page.keyboard.press("Space");
+    assert.equal(await page.locator("#job-status").textContent(), "Queued");
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+    checks.push("2× page scale and keyboard reset");
+    await page.reload();
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await act();
+    await act();
+    assert.equal(
+      await page
+        .locator(".letter")
+        .evaluate((el) => getComputedStyle(el).animationName),
+      "arrive",
+    );
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    assert.equal(
+      await page
+        .locator(".letter")
+        .evaluate((el) => getComputedStyle(el).animationName),
+      "none",
+    );
+    checks.push("new delivery animation and reduced motion");
+    if (url.startsWith("file:")) {
+      await context.setOffline(true);
+      await page.reload();
+      await trial(false, "after");
+      await context.setOffline(false);
+      checks.push("offline file reload and complete recovery run");
+    }
+    assert.deepEqual(errors, []);
     assert.deepEqual(externalRequests, []);
-    const report = {
-      url,
-      browser: browser.version(),
-      configurations: cases,
-      checks: [
-        "all-18-settings",
-        "explicit-duplicate-effect",
-        "provider-key-comparison",
-        "stale-write-while-B-runs",
-        "claim-loss-rewinds-db-only",
-        "play-pause-speed",
-        "step-back-reset",
-        "keyboard-scrub",
-        "390-and-768-width",
-        "reduced-motion",
-        "offline-load",
-        "no-external-requests",
-        "no-browser-errors",
-      ],
-      errors: failures,
-      externalRequests,
-    };
     writeFileSync(
       join(output, "browser-report.json"),
-      JSON.stringify(report, null, 2) + "\n",
+      JSON.stringify(
+        { url, browser: browser.version(), checks, errors, externalRequests },
+        null,
+        2,
+      ) + "\n",
     );
     console.log(
-      `Browser QA passed: ${cases.length} settings combinations; desktop/mobile, controls, offline and reduced motion. Screenshots: ${output}`,
+      `Direct-action model QA passed: ${checks.length} checks, phone/landscape, provider comparison, keyboard/zoom and mailbox persistence.`,
     );
   } finally {
     await browser.close();

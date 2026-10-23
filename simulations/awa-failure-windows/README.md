@@ -1,74 +1,41 @@
-# Failure windows: an interactive Awa lab
+# One job. How many receipts?
 
-[Open the interactive lab](index.html)
+A self-contained, interactive Awa teaching model. The reader operates a job and its worker directly: claim, send a receipt, record completion, stop the worker, and make an abandoned job ready for retry. There is no scripted player, timeline or animation speed.
 
-One order, one job, two possible workers. Step through a failure, change one setting, and replay it. On phones the current event, compact state and controls stay together; settings and detailed state expand on demand. Links with `?experiment=handoff`, `replay`, `fence` or `wal` open a particular lesson. The lab works offline as a single HTML file; it does not contact PostgreSQL or an email provider.
+The learning outcome is to distinguish **job completion, handler execution, external requests and delivered effects**. A stop after the provider succeeds can repeat execution and delivery. An optional provider assumption atomically deduplicates a stable operation key; it suppresses a repeated effect, not a repeated handler start or request.
 
-The four experiments explore different boundaries:
+The database, worker and mailbox remain visible together. Receipts stay in the mailbox when a worker stops or recovery runs. Only newly delivered receipts animate. Feedback explains the consequence of the reader's last action, and completed runs retain their actual counters in page memory for comparison. Changing the provider assumption starts a fresh run. Nothing connects to PostgreSQL or sends an email, and no results persist after reload.
 
-| Experiment | Change | Observe |
-| --- | --- | --- |
-| The handoff | Shared transaction versus separate commits; application crash point | A shared transaction prevents a committed order with a missing enqueue. |
-| The replay | Worker crash after an external effect; provider deduplication | A completed job can have multiple handler executions and external effects. |
-| The late worker | Stale heartbeat or hard deadline; provider deduplication | Awa rejects an old attempt's completion, while external calls can still repeat. |
-| The lost claim | Unflushed or flushed claim WAL before a local database crash | An acknowledged asynchronous claim can disappear, leaving its already durable job claimable again. |
+## Source and model boundary
 
-This directory contains simulations, kept separate from the measured runs under `results/`. Its Awa source revision is newer than the benchmark adapter pin at this repository’s base revision (`6595b544`). No adapter pin or benchmark result is changed. Nothing here establishes a performance ranking or behavior of the other queue systems.
+Grounded in [hardbyte/awa at b9341ae5718f06aa6c176d7107c3642015aa4133](https://github.com/hardbyte/awa/tree/b9341ae5718f06aa6c176d7107c3642015aa4133), a development snapshot of the 0.7 queue-storage implementation, distinct from this benchmark repository's adapter pin.
 
-## What the model represents
+The model starts with an already committed order and job. Starting a worker collapses claim and handler start. The example handler makes one provider request before completing. Claims are assumed durable; workers really stop. It does not model asynchronous claim loss, a database crash, standby promotion, live stale workers, retry exhaustion, SQL failures, batching, or other production interleavings.
 
-The lab is grounded in [hardbyte/awa at `b9341ae5718f06aa6c176d7107c3642015aa4133`](https://github.com/hardbyte/awa/tree/b9341ae5718f06aa6c176d7107c3642015aa4133), a development revision of the 0.7 queue-storage implementation. It is an original teaching model, not a captured execution trace or a performance measurement. Each event links to its source at that revision.
+“Recover for retry” compresses rescue, backoff and due-job promotion. It assumes working maintenance, enough retry budget and eventual worker availability. Real heartbeat recovery normally uses a 90-second staleness threshold and a 30-second scan interval and can take longer. No click count predicts latency. The cards represent logical state, not physical row movement.
 
-Transactional enqueue comes from [`insert_with`](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/awa-model/src/insert.rs#L360) accepting the caller's PostgreSQL executor. Both the business write and enqueue must actually use the same transaction in the same database. See [Transactional enqueue](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/docs/concepts/transactional-enqueue.md).
+Provider idempotency is an explicit external assumption, not an Awa feature or enqueue uniqueness guarantee. The proposed ADR-042 caller-owned handler `complete_in_tx` API was not implemented in the inspected revision and is not assumed here.
 
-Claims advance the attempt and `run_lease` in the [queue-storage SQL](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/awa-model/migrations/v023_install_queue_storage_substrate.sql#L3264). [Rescue](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/awa-model/src/queue_storage.rs#L15329), [promotion](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/awa-worker/src/maintenance.rs#L2409) and [guarded completion](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/awa-model/src/queue_storage.rs#L7190) account for the replay and stale-worker examples. Real receipt completion also validates physical claim identity and closure evidence; the lab collapses that into an open ownership token. See [Job lifecycle](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/docs/concepts/job-lifecycle.md) and [ADR-013](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/docs/adr/013-run-lease-and-guarded-finalization.md).
-
-The lost-claim experiment follows [`CLAIM_TRANSACTION_BEGIN`](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/awa-model/src/queue_storage.rs#L34), which sets `synchronous_commit = off` for queue-storage claim transactions. The comparison chooses whether that claim has reached durable WAL before a local crash. It does not change Awa's production configuration. Enqueues and completions retain normal commit behavior, which depends on PostgreSQL and storage configuration. See [Architecture](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/docs/architecture.md) and the [async-claim correctness mapping](https://github.com/hardbyte/awa/blob/b9341ae5718f06aa6c176d7107c3642015aa4133/correctness/storage/MAPPING.md#L342). The mapping's SQL regressions reconstruct failure state deterministically; they are not real replication/failover rehearsals.
-
-## Assumptions and limits
-
-- The model assumes successful SQL, an already durable enqueue in the execution experiments, a healthy maintenance leader after recovery, sufficient retry budget and eventual worker availability. Retry exhaustion and terminal failure paths are omitted.
-- Backoff, rescue scans and polling are separate events with compressed waits. No event count or playback interval predicts recovery latency. Heartbeat rescue normally uses a 90-second staleness threshold and a 30-second scan interval; delays and database outages can extend recovery.
-- The provider-key comparison assumes the provider atomically deduplicates a stable operation key across attempts and workers. Awa does not provide that external guarantee. An enqueue uniqueness key is not a substitute for provider idempotency.
-- The WAL experiment assumes the durable enqueue survives, storage honors flushes, no relevant later WAL was flushed in the unflushed branch, and both the old worker and database crash before completion. Standby promotion, corrupt storage and an old completion arriving after a lost claim are outside this experiment. Database attempt state can rewind; the all-time execution counter does not.
-- The late-worker experiment assumes the original claim is durable. It does not assert monotonic lease identities across lost asynchronous commits.
-- The storage boxes represent logical state, not one physical row moving through tables. The lab omits ring rotation, cursor replay, batching, callbacks, priorities, capacity, cancellation and uniqueness races.
-- The lab neither reproduces nor establishes metastability in Awa. A load/retry animation would require a separate capacity model and measurements before making production claims.
-
-Awa's caller-owned completion transaction design in ADR-042 is not presented as an available handler API: `complete_in_tx` is not implemented in the inspected revision. This lab stays within the ordinary handler contract.
+Each action links to the inspected enqueue/effect documentation, claim SQL, rescue, promotion or guarded completion implementation. Optional technical detail is inside the component; the model tests can check the pinned source anchors against an exact Awa checkout.
 
 ## Inspiration
 
-Marc Brooker's [Animations for System Builders: Metastability and Lost Writes](https://brooker.co.za/blog/2026/10/23/animations.html) uses animations to expose failure mechanisms, including real Postgres and etcd traces, alongside a linked [Stability Sim retry-storm example](https://stability-sim.systems/?example=metastable-retry). This lab adopts the educational approach with original Awa scenarios, prose, graphics and code. It reuses no article assets or simulator code.
+Marc Brooker's [Animations for System Builders: Metastability and Lost Writes](https://brooker.co.za/blog/2026/10/23/animations.html) and linked [Stability Sim retry example](https://stability-sim.systems/?example=metastable-retry) expose a mechanism so a reader can see causality. This is an original Awa model, prose, graphics and code, using no article assets or simulator code. It is not a captured trace, benchmark, liveness proof or evidence of metastability.
 
-## Local preview and checks
+## Build and preview
 
-Open `simulations/awa-failure-windows/index.html` directly in a browser, or serve the repository locally:
+Open `index.html` directly, or serve the directory with `python3 -m http.server 8765 --bind 127.0.0.1`. No runtime dependencies or external assets are required.
 
-```bash
-python3 -m http.server 8765 --bind 127.0.0.1
-# http://127.0.0.1:8765/simulations/awa-failure-windows/
-```
-
-The shipped page is self-contained and has no runtime dependencies. Its model and UI scripts are inline. Only clicking a source/inspiration link leaves the local page.
-
-From this directory, run the dependency-free model tests and validate/build a standalone copy (Node.js 22.8+):
+With Node.js 22.8+:
 
 ```bash
 node --test --test-isolation=none model.test.cjs
 node build.cjs
-# dist/index.html
-```
-
-To additionally check source anchors against the inspected Awa checkout:
-
-```bash
+# Optional exact-source verification:
 AWA_SOURCE_ROOT=/path/to/awa node --test --test-isolation=none model.test.cjs
 ```
 
-The optional source check requires the checkout to be exactly at `b9341ae5718f06aa6c176d7107c3642015aa4133`. Tests otherwise verify pinned link structure without needing an Awa checkout or network.
-
-Browser checks require Playwright only for development:
+Browser checks use the pinned development-only Playwright dependency:
 
 ```bash
 npm ci
@@ -76,8 +43,8 @@ npx playwright install chromium
 npm run browser
 ```
 
-`PLAYWRIGHT_MODULE` can point to an existing Playwright package, and `BROWSER_EXECUTABLE` to an installed Chromium/Chrome. `LAB_URL` can point to a locally served build for the same tests; by default the browser opens `index.html` using `file://`. The checks cover all 18 settings combinations, stepping, rewind, scrubbing, playback/pause, speed changes, keyboard operation, narrow screens, reduced motion, offline loading, and browser errors. Screenshots and a machine-readable report go in ignored `artifacts/`.
+`BROWSER_EXECUTABLE` selects an installed Chrome/Chromium, `PLAYWRIGHT_MODULE` an existing Playwright package and `LAB_URL` a permitted local/hosted build. Checks cover clean runs, stops before/after send, repeated recovery, provider comparison, causal mailbox persistence, keyboard/touch controls, reset, mobile portrait/landscape, text enlargement, reduced motion and offline use. Generated evidence stays in ignored `artifacts/`.
 
-## Review scope
+## Maintenance
 
-This simulation is also included in the comparison website under `website/`. Its build copies this directory's `index.html` to `lab/awa.html`; edit this canonical file rather than the generated copy. Awa's documentation embeds that hosted page, so changes require reviewing and publishing the website build. Rust adapters, Python harnesses, database settings and recorded benchmark results are untouched. The simulation has its own model and browser checks; no live benchmark run is required to validate these static additions.
+This `index.html` is canonical. The website build copies it to `lab/awa.html`; Awa docs launch that hosted component and offer an optional wider-screen embed. Edit and test it here, then review and publish the website build. Do not edit the generated copy or duplicate its state machine into Awa docs. The catalogue, adapters, database configuration and recorded benchmark evidence are separate from this teaching model.
