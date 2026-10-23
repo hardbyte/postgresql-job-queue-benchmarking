@@ -52,6 +52,8 @@ npm run browser
 
 `SITE_URL` can run the same checks against an explicitly authorized hosted URL. Static lint/tests build locally and require no database, Docker, or live benchmark execution. Existing harness/adapter code is unchanged.
 
+GitHub CI uses the Chrome supplied by the Ubuntu 24.04 runner, prints its version and records the actual browser version in the QA report. This avoids downloading extra system packages from Ubuntu mirrors. It runs the same full browser/accessibility suite; newer commits supersede older runs and each job has a 15-minute timeout.
+
 ## Publication
 
 See [DEPLOYMENT.md](DEPLOYMENT.md). Publication uses only the reviewed generated build, not the repository tree. No research scratch files, artifacts, local paths, node_modules, credentials or old result reports belong in the upload. The prepared GitHub workflow validates on relevant pull requests or manual dispatch, including browser/accessibility checks, and cannot publish by itself. Public hosting and source PRs are separate operations; no merge is automated.
