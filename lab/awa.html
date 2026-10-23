@@ -3,36 +3,28 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Awa · One job, two receipts?</title>
     <meta
       name="description"
-      content="An interactive, source-grounded exploration of Awa's enqueue, replay, lease and durability boundaries."
+      content="An interactive Awa teaching model: operate a job, stop its worker, recover it, and see what happens to an external receipt."
     />
-    <title>Awa · Failure windows</title>
     <style>
       :root {
         color-scheme: light;
-        --ink: #142e2b;
-        --muted: #52665f;
-        --paper: #f6f6ef;
-        --line: #d4ded5;
-        --green: #146854;
-        --lime: #dcf59a;
-        --orange: #a64016;
-        --orange-bg: #fff0df;
-        --blue: #285a97;
-        --blue-bg: #e8f0fc;
-        --red: #a22c35;
-        --red-bg: #ffecef;
-        --radius: 18px;
-        font-family:
-          Inter,
-          ui-sans-serif,
-          system-ui,
+        --ink: #193830;
+        --muted: #53685f;
+        --paper: #f5f6ef;
+        --line: #ccd9ce;
+        --green: #17654c;
+        --soft: #e8f0e4;
+        --orange: #91401d;
+        --orange-bg: #fff0dd;
+        font:
+          16px/1.5 system-ui,
           -apple-system,
           BlinkMacSystemFont,
           "Segoe UI",
           sans-serif;
-        font-size: 15px;
       }
       * {
         box-sizing: border-box;
@@ -41,556 +33,418 @@
         margin: 0;
         background: var(--paper);
         color: var(--ink);
-        line-height: 1.5;
       }
       button,
-      select,
-      input {
+      input,
+      summary {
         font: inherit;
       }
       button,
-      select {
+      summary,
+      input {
+        touch-action: manipulation;
+      }
+      button,
+      summary {
         cursor: pointer;
       }
-      button {
-        color: inherit;
+      button:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      button:focus-visible,
+      a:focus-visible,
+      input:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid #2269a3;
+        outline-offset: 4px;
       }
       a {
         color: var(--green);
         text-underline-offset: 3px;
-      }
-      button:focus-visible,
-      a:focus-visible,
-      select:focus-visible,
-      input:focus-visible,
-      summary:focus-visible {
-        outline: 3px solid var(--blue);
-        outline-offset: 4px;
-      }
-      button:disabled {
-        cursor: default;
-        opacity: 0.4;
+        overflow-wrap: anywhere;
       }
       h1,
       h2,
-      h3,
       p {
         margin: 0;
       }
       h1 {
-        font-size: clamp(2.25rem, 5vw, 4rem);
-        line-height: 1.06;
-        letter-spacing: -0.055em;
+        font-size: clamp(2rem, 4.6vw, 3.6rem);
         font-weight: 650;
+        letter-spacing: -0.055em;
+        line-height: 1.07;
       }
       h2 {
-        font-size: 1.35rem;
-        letter-spacing: -0.025em;
+        font-size: 1rem;
       }
-      h3 {
-        font-size: 0.92rem;
+      small {
+        font-size: 0.78rem;
+        color: var(--muted);
       }
       .wrap {
-        max-width: 1440px;
+        max-width: 1080px;
         margin: auto;
-        padding: 25px 36px 36px;
+        padding: 24px 32px 40px;
       }
       .masthead {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-bottom: 32px;
-        gap: 12px;
+        gap: 20px;
+        margin-bottom: 28px;
       }
       .brand {
+        font-weight: 800;
+        font-size: 1.1rem;
+        letter-spacing: 0.08em;
+      }
+      .model-label {
+        font-size: 0.72rem;
+        color: var(--muted);
+      }
+      .intro {
+        max-width: 720px;
+      }
+      .intro p {
+        color: var(--muted);
+        margin-top: 14px;
+        max-width: 59ch;
+        font-size: 1rem;
+      }
+      .lab {
+        margin-top: 28px;
+      }
+      .assumption {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 24px;
+        margin-bottom: 18px;
+      }
+      .key-control {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 48px;
+        cursor: pointer;
+        font-size: 0.92rem;
+        font-weight: 600;
+      }
+      .key-control input {
+        width: 22px;
+        height: 22px;
+        accent-color: var(--green);
+        flex: none;
+      }
+      .key-control small {
+        display: block;
+        font-weight: 400;
+        margin-top: 2px;
+      }
+      .reset {
+        border: 1px solid #a9bdae;
+        background: transparent;
+        color: var(--green);
+        padding: 9px 15px;
+        border-radius: 7px;
+        min-height: 46px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        flex: none;
+      }
+      .board {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1.2fr;
+        gap: 14px;
+      }
+      .zone {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: white;
+        padding: 20px;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+      .zone-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 0.73rem;
+        color: var(--muted);
+        margin-bottom: 14px;
+      }
+      .zone-label strong {
+        font-weight: 650;
+        color: var(--ink);
+        font-size: 0.83rem;
+      }
+      .job-card {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+      .job-symbol {
+        background: var(--soft);
+        border: 1px solid #b4cbb8;
+        border-radius: 7px;
+        padding: 12px;
+        font-weight: 700;
+        font-size: 0.9rem;
+      }
+      .job-copy b,
+      .worker-copy b {
+        display: block;
+        font-size: 1rem;
+      }
+      .job-copy small {
+        display: block;
+        margin-top: 3px;
+      }
+      .worker {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+      .worker-light {
+        width: 44px;
+        height: 44px;
+        background: var(--soft);
+        color: var(--green);
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-weight: 750;
+        flex: none;
+      }
+      .worker-copy small {
+        display: block;
+        margin-top: 3px;
+      }
+      .zone.stopped {
+        background: var(--orange-bg);
+        border-color: #dca77d;
+      }
+      .zone.running {
+        border-color: var(--green);
+      }
+      .zone.done {
+        background: #edf5e8;
+        border-color: #a5c094;
+      }
+      .mail-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .mail-heading h2 {
+        font-size: 0.9rem;
+      }
+      .delivery-count {
+        font-size: 0.8rem;
+        font-weight: 650;
+        color: var(--green);
+      }
+      .letters {
         display: flex;
         gap: 10px;
         align-items: center;
-        font-size: 1.4rem;
-        font-weight: 800;
-        letter-spacing: 0.04em;
+        min-height: 84px;
+        flex-wrap: wrap;
+        padding-top: 12px;
       }
-      .brand svg {
-        width: 32px;
-        height: 26px;
+      .letter {
+        display: grid;
+        place-items: center;
+        gap: 2px;
+        background: #eff5e9;
+        border: 1px solid #a7c39c;
+        border-radius: 6px;
+        padding: 8px 14px;
+        animation: arrive 0.25s ease-out;
       }
-      .eyebrow {
-        text-transform: uppercase;
-        font-size: 0.71rem;
-        letter-spacing: 0.15em;
-        font-weight: 750;
-        color: var(--muted);
+      .letter svg {
+        width: 30px;
+        height: 22px;
+        stroke: var(--green);
+        fill: none;
+        stroke-width: 1.5;
       }
-      .label {
-        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-        font-size: 0.75rem;
+      .letter span {
+        font-size: 0.65rem;
+        color: var(--green);
       }
-      .pill {
-        border: 1px solid var(--line);
-        border-radius: 30px;
-        padding: 6px 11px;
+      .mailbox.duplicate {
+        background: #fff5e8;
+        border-color: #dca77d;
+      }
+      .mailbox.duplicate .letter {
+        background: #fff;
+        border-color: #d6b286;
+      }
+      .request-count {
         font-size: 0.74rem;
         color: var(--muted);
-        white-space: nowrap;
+        margin-top: 9px;
       }
-      .intro {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-end;
-        gap: 35px;
-        margin-bottom: 27px;
-      }
-      .intro p {
-        max-width: 435px;
+      .empty-mail {
+        font-size: 0.82rem;
         color: var(--muted);
-        font-size: 1rem;
       }
-      .intro .eyebrow {
-        margin-bottom: 9px;
-      }
-      .chapters {
+      .decision {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 8px;
-        margin-bottom: 22px;
-      }
-      .chapter {
-        display: flex;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 30px;
         align-items: center;
-        gap: 12px;
-        text-align: left;
-        padding: 13px 15px;
-        background: transparent;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        font-size: 0.88rem;
-        font-weight: 650;
-      }
-      .chapter span {
-        font:
-          12px ui-monospace,
-          monospace;
-        opacity: 0.65;
-      }
-      .chapter[aria-pressed="true"] {
-        background: var(--ink);
-        color: white;
-        border-color: var(--ink);
-      }
-      .chapter:hover {
-        border-color: var(--green);
-      }
-      .experiment {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 290px;
-        gap: 18px;
-      }
-      .stage {
-        background: white;
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        overflow: hidden;
-      }
-      .stage-head {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        padding: 22px 24px 18px;
-        gap: 15px;
-        border-bottom: 1px solid var(--line);
-      }
-      .stage-head p {
-        color: var(--muted);
-        font-size: 0.87rem;
-        margin-top: 5px;
-        max-width: 570px;
-      }
-      .step-label {
-        white-space: nowrap;
-        color: var(--green);
-        margin-top: 5px;
-      }
-      .scene {
-        position: relative;
         padding: 24px;
-        isolation: isolate;
+        margin-top: 16px;
+        background: var(--ink);
+        color: white;
+        border-radius: 12px;
+        min-height: 132px;
       }
-      .lanes {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 12px;
+      .feedback {
+        font-size: 1.05rem;
+        font-weight: 600;
+        line-height: 1.45;
+        max-width: 55ch;
       }
-      .lane-title {
-        height: 38px;
-        display: flex;
-        align-items: flex-start;
-        gap: 7px;
-        font-size: 0.7rem;
-        font-weight: 750;
-        text-transform: uppercase;
-        letter-spacing: 0.07em;
-        color: var(--muted);
-      }
-      .lane-title span {
-        color: var(--green);
-      }
-      .node {
-        position: relative;
-        z-index: 1;
-        min-height: 184px;
-        border: 1px solid var(--line);
-        background: #fbfcf8;
-        border-radius: 13px;
-        padding: 13px 11px;
-        transition:
-          background 0.35s,
-          border-color 0.35s,
-          box-shadow 0.35s;
-      }
-      .node.active {
-        border-color: var(--green);
-        box-shadow: 0 0 0 3px #14685413;
-      }
-      .node.danger {
-        background: var(--red-bg);
-        border-color: #df9ba3;
-      }
-      .node.warning {
-        background: var(--orange-bg);
-        border-color: #e4b28c;
-      }
-      .node.good {
-        background: #f0f8dc;
-        border-color: #afcd79;
-      }
-      .node .eyebrow {
-        font-size: 0.59rem;
-        margin-bottom: 9px;
-        letter-spacing: 0.07em;
-      }
-      .node-name {
+      .next-hint {
         font-size: 0.84rem;
-        font-weight: 700;
-      }
-      .node-state {
-        font-size: 0.75rem;
-        color: var(--muted);
+        color: #d5e2d5;
         margin-top: 7px;
-        min-height: 35px;
-        overflow-wrap: anywhere;
+        max-width: 60ch;
       }
-      .mini {
-        font:
-          10px ui-monospace,
-          monospace;
-        line-height: 1.6;
-        border-top: 1px dashed var(--line);
-        padding-top: 9px;
-        margin-top: 10px;
-        color: var(--muted);
-        white-space: pre-line;
-      }
-      .db-row {
-        padding: 6px 8px;
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        font-size: 0.72rem;
-        margin-top: 7px;
+      .actions {
         display: flex;
-        justify-content: space-between;
-        gap: 4px;
-      }
-      .db-row b {
-        font-weight: 650;
-      }
-      .worker-row {
-        font-size: 0.72rem;
-        padding: 7px 0;
-        border-bottom: 1px dashed var(--line);
-      }
-      .worker-row:last-child {
-        border-bottom: 0;
-      }
-      .worker-row b {
-        display: block;
-      }
-      .flow {
-        height: 35px;
-        position: relative;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-      }
-      .flow::before {
-        content: "";
-        position: absolute;
-        left: 4%;
-        right: 4%;
-        height: 1px;
-        background: var(--line);
-      }
-      .flow span {
-        z-index: 1;
-        background: white;
-        padding: 3px 12px;
-        border: 1px solid var(--line);
-        border-radius: 20px;
-        color: var(--green);
-        font:
-          11px ui-monospace,
-          monospace;
-      }
-      .pulse {
-        position: absolute;
-        top: 45px;
-        left: 15%;
-        right: 15%;
-        height: 6px;
-        z-index: 2;
-        pointer-events: none;
-      }
-      .pulse i {
-        display: block;
-        width: 7px;
-        height: 7px;
-        background: var(--green);
-        border-radius: 50%;
-        animation: travel 0.65s ease-out both;
-      }
-      .pulse.reverse i {
-        animation-direction: reverse;
-      }
-      .pulse.failed i {
-        background: var(--red);
-      }
-      @keyframes travel {
-        from {
-          transform: translateX(0);
-          opacity: 0.3;
-        }
-        to {
-          transform: translateX(var(--travel, 500px));
-          opacity: 1;
-        }
-      }
-      .stats {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        border-top: 1px solid var(--line);
-        background: #fafbf7;
-      }
-      .stat {
-        padding: 14px 18px;
-        border-right: 1px solid var(--line);
-      }
-      .stat:last-child {
-        border: 0;
-      }
-      .stat b {
-        font-size: 1.35rem;
-        font-weight: 600;
-        display: block;
-        letter-spacing: -0.03em;
-      }
-      .stat span {
-        font-size: 0.68rem;
-        color: var(--muted);
-      }
-      .stat.alert b {
-        color: var(--red);
-      }
-      .transport {
-        padding: 15px 22px;
-        display: flex;
-        align-items: center;
         gap: 9px;
-        border-top: 1px solid var(--line);
-      }
-      .control {
-        border: 1px solid var(--line);
-        background: white;
-        border-radius: 9px;
-        padding: 8px 12px;
-        font-size: 0.8rem;
-        font-weight: 600;
-      }
-      .control.primary {
-        background: var(--ink);
-        border-color: var(--ink);
-        color: white;
-        min-width: 93px;
-      }
-      .transport label {
-        margin-left: auto;
-        display: flex;
         align-items: center;
-        gap: 5px;
-        font-size: 0.75rem;
-        color: var(--muted);
+        flex-wrap: wrap;
       }
-      .transport select {
-        padding: 5px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: white;
-      }
-      .scrubber {
-        padding: 0 23px 18px;
-      }
-      .scrubber input {
-        display: block;
-        width: 100%;
-        accent-color: var(--green);
-        cursor: pointer;
-      }
-      .scrub-labels {
-        display: flex;
-        justify-content: space-between;
-        color: var(--muted);
-        font-size: 0.65rem;
-      }
-      .sidebar {
-        display: flex;
-        flex-direction: column;
-        gap: 13px;
-      }
-      .setup {
-        padding: 19px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: #eef1e7;
-      }
-      .setup .eyebrow {
-        margin-bottom: 12px;
-      }
-      .setup label {
-        display: block;
-        font-size: 0.77rem;
-        font-weight: 650;
-        margin-top: 13px;
-      }
-      .setup select {
-        display: block;
-        width: 100%;
-        padding: 9px 10px;
-        margin-top: 6px;
-        border: 1px solid #bac9bd;
-        border-radius: 8px;
-        background: white;
+      .primary {
+        background: #def2c3;
         color: var(--ink);
-        font-size: 0.8rem;
+        border: 1px solid #def2c3;
+        border-radius: 7px;
+        padding: 12px 18px;
+        min-height: 48px;
+        font-weight: 700;
+        font-size: 0.9rem;
       }
-      .setup small {
-        display: block;
+      .crash {
+        background: transparent;
+        color: #fff0df;
+        border: 1px solid #b6a78f;
+        border-radius: 7px;
+        min-height: 48px;
+        padding: 10px 14px;
+        font-size: 0.85rem;
+      }
+      .question {
+        display: flex;
+        gap: 12px;
+        align-items: baseline;
+        justify-content: space-between;
+        padding: 16px 2px 0;
+      }
+      .question p {
+        font-size: 0.86rem;
         color: var(--muted);
-        font-size: 0.72rem;
-        margin-top: 12px;
+        max-width: 65ch;
       }
-      .insight {
-        padding: 19px;
-        background: var(--ink);
-        border-radius: var(--radius);
-        color: white;
-        flex: 1;
+      .question a {
+        font-size: 0.8rem;
+        flex: none;
       }
-      .insight .eyebrow {
-        color: var(--lime);
-        margin-bottom: 9px;
+      .results {
+        margin-top: 22px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 20px;
+        background: #fff;
       }
-      .insight p {
-        font-size: 0.87rem;
+      .results h2 {
+        margin-bottom: 6px;
       }
-      .insight a {
-        color: var(--lime);
-        font-size: 0.72rem;
-        display: inline-block;
+      .results > p {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      .runs {
+        display: flex;
+        gap: 12px;
         margin-top: 14px;
+        flex-wrap: wrap;
       }
-      .event {
-        margin-top: 18px;
-        display: grid;
-        grid-template-columns: 94px minmax(0, 1fr);
-        gap: 16px;
-        padding: 20px 24px;
-        background: #e8eee2;
-        border-radius: 14px;
-        min-height: 124px;
+      .run {
+        padding: 12px 16px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        font-size: 0.82rem;
+        flex: 1;
+        min-width: 180px;
       }
-      .event .time {
-        font:
-          12px ui-monospace,
-          monospace;
-        color: var(--green);
-        padding-top: 4px;
-      }
-      .event h3 {
-        font-size: 1.03rem;
+      .run b {
+        display: block;
         margin-bottom: 5px;
       }
-      .event p {
-        font-size: 0.88rem;
-        color: #344d42;
-        max-width: 850px;
-      }
-      .event a {
-        font-size: 0.72rem;
-      }
-      .trail {
-        display: flex;
-        gap: 6px;
-        padding-top: 13px;
-        overflow-x: auto;
-        padding-bottom: 8px;
-      }
-      .trail button {
-        flex: 0 0 auto;
-        border: 1px solid var(--line);
-        background: transparent;
-        border-radius: 7px;
-        padding: 6px 9px;
-        font-size: 0.68rem;
-      }
-      .trail button[aria-current="step"] {
-        background: var(--green);
-        color: white;
-        border-color: var(--green);
-      }
-      .trail button.done {
-        border-color: #9cb09f;
-      }
-      .notes {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 30px;
-        margin-top: 25px;
-        padding-top: 22px;
-        border-top: 1px solid var(--line);
+      .run p {
         font-size: 0.8rem;
         color: var(--muted);
       }
-      .notes summary {
-        cursor: pointer;
+      .depth {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        margin-top: 28px;
+        border-top: 1px solid var(--line);
+        padding-top: 15px;
+      }
+      .depth details {
+        font-size: 0.85rem;
+        min-width: 0;
+      }
+      .depth summary {
+        padding: 12px 0;
+        min-height: 48px;
         font-weight: 650;
-        color: var(--ink);
-        margin-bottom: 9px;
       }
-      .notes p {
-        margin: 8px 0;
+      .depth p {
+        margin: 10px 0;
+        color: var(--muted);
       }
-      .notes ul {
-        padding-left: 18px;
+      .depth ul,
+      .depth ol {
+        padding-left: 20px;
       }
-      .notes li {
-        margin: 6px 0;
+      .depth li {
+        margin: 10px 0;
+        color: var(--muted);
+      }
+      .source-list a {
+        font-size: 0.8rem;
+      }
+      .event-log {
+        font-size: 0.8rem;
+      }
+      .event-log a {
+        font-size: 0.72rem;
       }
       .footer {
-        margin-top: 20px;
-        color: var(--muted);
-        font-size: 0.72rem;
         display: flex;
         justify-content: space-between;
         gap: 20px;
+        margin-top: 25px;
+        font-size: 0.72rem;
+        color: var(--muted);
       }
       .sr-only {
         position: absolute;
@@ -599,159 +453,196 @@
         overflow: hidden;
         clip-path: inset(50%);
       }
-      code {
-        font:
-          0.92em ui-monospace,
-          monospace;
+      @keyframes arrive {
+        from {
+          opacity: 0;
+          transform: translateY(-8px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
       }
-      noscript {
-        display: block;
-        background: var(--orange-bg);
-        padding: 20px;
-        margin: 20px;
-      }
-      @media (min-width: 1500px) {
+      @media (max-width: 760px), (max-height: 500px) and (max-width: 1000px) {
         .wrap {
-          padding-top: 36px;
-        }
-        .intro {
-          margin-bottom: 35px;
-        }
-        .node {
-          min-height: 210px;
-        }
-        .scene {
-          padding-top: 30px;
-          padding-bottom: 30px;
-        }
-      }
-      @media (max-width: 1050px) {
-        .wrap {
-          padding: 22px;
-        }
-        .experiment {
-          grid-template-columns: minmax(0, 1fr);
-        }
-        .sidebar {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-        }
-        .setup {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0 15px;
-        }
-        .setup .eyebrow,
-        .setup small {
-          width: 100%;
-        }
-        .setup label {
-          flex: 1;
-          min-width: 180px;
-          margin-top: 0;
-        }
-        .intro p {
-          max-width: 330px;
-        }
-        .notes {
-          gap: 20px;
-        }
-      }
-      @media (max-width: 650px) {
-        .wrap {
-          padding: 18px 14px;
+          padding: 17px 16px 28px;
         }
         .masthead {
-          margin-bottom: 25px;
+          margin-bottom: 22px;
         }
-        .masthead .pill {
-          font-size: 0.6rem;
+        .model-label {
+          font-size: 0.64rem;
+          text-align: right;
+          max-width: 140px;
         }
-        .intro {
-          display: block;
+        .intro h1 {
+          font-size: 2.1rem;
+          max-width: 16ch;
         }
         .intro p {
-          margin-top: 16px;
-          max-width: none;
-        }
-        .chapters {
-          grid-template-columns: 1fr 1fr;
-        }
-        .chapter {
-          font-size: 0.77rem;
-          padding: 10px;
-          gap: 7px;
-        }
-        .stage-head {
-          padding: 18px;
-          display: block;
-        }
-        .step-label {
-          font-size: 0.65rem;
-        }
-        .scene {
-          padding: 17px;
-        }
-        .lanes {
-          grid-template-columns: 1fr 1fr;
-          gap: 17px 12px;
-        }
-        .lane-title {
-          height: 25px;
-        }
-        .node {
-          min-height: 165px;
-          padding: 11px;
-        }
-        .flow {
-          margin-top: 10px;
-        }
-        .stats {
-          grid-template-columns: 1fr 1fr;
-        }
-        .stat {
-          padding: 10px 16px;
-          border-bottom: 1px solid var(--line);
-        }
-        .stat:nth-child(2) {
-          border-right: 0;
-        }
-        .transport {
-          padding: 14px;
-          gap: 6px;
-          flex-wrap: wrap;
-        }
-        .control {
-          padding: 9px;
-        }
-        .transport label {
-          font-size: 0.7rem;
-        }
-        .sidebar {
-          display: block;
-        }
-        .insight {
+          font-size: 0.91rem;
           margin-top: 12px;
         }
-        .event {
-          grid-template-columns: 1fr;
-          gap: 4px;
-          padding: 17px;
+        .lab {
+          margin-top: 20px;
         }
-        .notes {
-          grid-template-columns: 1fr;
-          gap: 12px;
+        .assumption {
+          gap: 10px;
+          margin-bottom: 13px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        .key-control {
+          font-size: 0.82rem;
+          gap: 10px;
+          min-width: 0;
+          flex: 1 1 200px;
+        }
+        .key-control small {
+          font-size: 0.71rem;
+        }
+        .reset {
+          font-size: 0.77rem;
+          padding-inline: 11px;
+        }
+        .board {
+          grid-template-columns: repeat(
+            auto-fit,
+            minmax(min(100%, max(9rem, calc((100% - 10px) / 2))), 1fr)
+          );
+          gap: 10px;
+        }
+        .zone {
+          padding: 15px 13px;
+          border-radius: 9px;
+        }
+        .zone-label {
+          font-size: 0.66rem;
+          margin-bottom: 10px;
+        }
+        .zone-label strong {
+          font-size: 0.76rem;
+        }
+        .job-card,
+        .worker {
+          gap: 9px;
+          align-items: flex-start;
+        }
+        .job-symbol {
+          padding: 9px 7px;
+          font-size: 0.78rem;
+        }
+        .job-copy b,
+        .worker-copy b {
+          font-size: 0.85rem;
+        }
+        .job-copy small,
+        .worker-copy small {
+          font-size: 0.72rem;
+          line-height: 1.4;
+        }
+        .worker-light {
+          width: 33px;
+          height: 33px;
+          font-size: 0.8rem;
+        }
+        .mailbox {
+          grid-column: 1/-1;
+        }
+        .mail-heading h2 {
+          font-size: 0.85rem;
+        }
+        .letters {
+          min-height: 62px;
+          padding-top: 9px;
+        }
+        .letter {
+          padding: 6px 12px;
+        }
+        .letter svg {
+          width: 25px;
+          height: 19px;
+        }
+        .delivery-count {
+          font-size: 0.75rem;
+        }
+        .request-count {
+          font-size: 0.71rem;
+          margin-top: 6px;
+        }
+        .decision {
+          display: block;
+          padding: 18px 16px;
+          margin-top: 12px;
+          min-height: 0;
+          border-radius: 9px;
+        }
+        .feedback {
+          font-size: 0.97rem;
+        }
+        .next-hint {
+          font-size: 0.8rem;
+          margin-top: 7px;
+        }
+        .actions {
+          margin-top: 16px;
+          gap: 10px;
+        }
+        .primary {
+          flex: 1;
+          font-size: 0.87rem;
+          padding: 11px 12px;
+          min-height: 48px;
+        }
+        .crash {
+          font-size: 0.82rem;
+          padding: 10px 12px;
+          min-height: 48px;
+        }
+        .question {
+          display: block;
+          padding-top: 14px;
+        }
+        .question p {
+          font-size: 0.83rem;
+        }
+        .question a {
+          display: inline-block;
+          padding: 10px 0;
+          min-height: 44px;
+        }
+        .results {
+          padding: 18px 16px;
+        }
+        .depth {
+          display: block;
+          margin-top: 20px;
+        }
+        .depth details {
+          border-bottom: 1px solid var(--line);
+        }
+        .depth summary {
+          font-size: 0.87rem;
         }
         .footer {
           display: block;
+          font-size: 0.69rem;
         }
         .footer span {
           display: block;
-          margin: 5px 0;
+          margin-top: 8px;
         }
-        .pulse {
-          display: none;
-        }
+      }
+      h1,
+      p,
+      b,
+      li {
+        overflow-wrap: anywhere;
+      }
+      .job-card,
+      .worker,
+      .zone-label {
+        flex-wrap: wrap;
       }
       @media (prefers-reduced-motion: reduce) {
         *,
@@ -766,262 +657,191 @@
   <body>
     <div class="wrap">
       <header class="masthead">
-        <div class="brand">
-          <svg viewBox="0 0 40 30" aria-hidden="true">
-            <path
-              d="M2 22 11 5 20 22 29 5 38 22"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="4"
-              stroke-linejoin="round"
-            /></svg
-          >AWA
-        </div>
-        <span class="pill">AWA SIMULATION · No measured data</span>
+        <span class="brand">AWA / LAB</span
+        ><span class="model-label"
+          >Teaching model<br />No live system or measured timing</span
+        >
       </header>
-      <section class="intro">
-        <div>
-          <p class="eyebrow">Postgres-native jobs, under failure</p>
-          <h1>Where does the<br />guarantee end?</h1>
-        </div>
-        <p>
-          One order. One job. A badly timed crash.<br />Move through four
-          failure windows to see what Awa protects—and what your handler still
-          owns.
-        </p>
-      </section>
-      <nav class="chapters" aria-label="Experiments">
-        <button class="chapter" data-chapter="handoff" aria-pressed="true">
-          <span>01</span> The handoff
-        </button>
-        <button class="chapter" data-chapter="replay" aria-pressed="false">
-          <span>02</span> The replay
-        </button>
-        <button class="chapter" data-chapter="fence" aria-pressed="false">
-          <span>03</span> The late worker
-        </button>
-        <button class="chapter" data-chapter="wal" aria-pressed="false">
-          <span>04</span> The lost claim
-        </button>
-      </nav>
       <main>
-        <div class="experiment">
-          <section class="stage" aria-labelledby="experiment-title">
-            <div class="stage-head">
-              <div>
-                <h2 id="experiment-title"></h2>
-                <p id="experiment-subtitle"></p>
-              </div>
-              <span id="step-count" class="label step-label"></span>
-            </div>
-            <div class="scene" id="scene">
-              <div class="lanes">
-                <div>
-                  <div class="lane-title"><span>01</span> Application</div>
-                  <div id="app-node" class="node">
-                    <div class="eyebrow">Order #42</div>
-                    <div class="node-name" id="app-name"></div>
-                    <div class="node-state" id="app-state"></div>
-                    <div class="mini" id="app-detail"></div>
-                  </div>
-                </div>
-                <div>
-                  <div class="lane-title"><span>02</span> PostgreSQL</div>
-                  <div id="db-node" class="node">
-                    <div class="eyebrow">Logical database view</div>
-                    <div class="db-row">
-                      <span>order</span><b id="order-state"></b>
-                    </div>
-                    <div class="db-row">
-                      <span>job J42</span><b id="job-state"></b>
-                    </div>
-                    <div class="mini" id="db-detail"></div>
-                  </div>
-                </div>
-                <div>
-                  <div class="lane-title"><span>03</span> Workers</div>
-                  <div id="worker-node" class="node">
-                    <div class="eyebrow">Execution can repeat</div>
-                    <div class="worker-row">
-                      <b>Worker A</b><span id="worker-a"></span>
-                    </div>
-                    <div class="worker-row">
-                      <b>Worker B</b><span id="worker-b"></span>
-                    </div>
-                    <div class="mini" id="worker-detail"></div>
-                  </div>
-                </div>
-                <div>
-                  <div class="lane-title"><span>04</span> External system</div>
-                  <div id="effect-node" class="node">
-                    <div class="eyebrow">Outside the DB transaction</div>
-                    <div class="node-name">Send order email</div>
-                    <div class="node-state" id="effect-state"></div>
-                    <div class="mini" id="effect-detail"></div>
-                  </div>
-                </div>
-              </div>
-              <div class="flow"><span id="flow-label"></span></div>
-              <div id="pulse" class="pulse" aria-hidden="true"></div>
-            </div>
-            <div class="stats" aria-label="Simulation counters">
-              <div class="stat">
-                <b id="stat-runs">0</b><span>handler starts, all time</span>
-              </div>
-              <div class="stat">
-                <b id="stat-calls">0</b><span>external requests</span>
-              </div>
-              <div class="stat" id="effects-stat">
-                <b id="stat-effects">0</b><span>emails actually sent</span>
-              </div>
-              <div class="stat">
-                <b id="stat-rejected">0</b><span>stale writes rejected</span>
-              </div>
-            </div>
-            <div class="transport">
-              <button class="control primary" id="play">▶ Play</button
-              ><button class="control" id="back" aria-label="Previous event">
-                ←</button
-              ><button class="control" id="next">Step →</button
-              ><button class="control" id="reset">Reset</button
-              ><label
-                >Speed
-                <select id="speed" aria-label="Playback speed">
-                  <option value="1800">1×</option>
-                  <option value="900">2×</option>
-                  <option value="3600">½×</option>
-                </select></label
-              >
-            </div>
-            <div class="scrubber">
-              <label class="sr-only" for="position">Event position</label
-              ><input type="range" id="position" min="0" value="0" />
-              <div class="scrub-labels">
-                <span>Initial state</span
-                ><span>Move the playhead to inspect any event</span
-                ><span>Outcome</span>
-              </div>
-            </div>
-          </section>
-          <aside class="sidebar">
-            <form class="setup" id="setup">
-              <p class="eyebrow">Change the experiment</p>
-              <div id="options"></div>
-              <small
-                >Changing a setting rewinds the model. Nothing connects to a
-                database or sends an email.</small
-              >
-            </form>
-            <div class="insight">
-              <p class="eyebrow">Watch for this</p>
-              <p id="lesson"></p>
-              <a id="lesson-source" href="#">Read the implementation ↗</a>
-            </div>
-          </aside>
-        </div>
-        <section class="event" aria-live="polite" aria-atomic="true">
-          <div class="time" id="event-time"></div>
-          <div>
-            <h3 id="event-title"></h3>
-            <p id="event-body"></p>
-            <a id="event-source" href="#"></a>
-          </div>
+        <section class="intro">
+          <h1>One job.<br />How many receipts?</h1>
+          <p>
+            Operate a worker. Stop it at a bad moment. Find out what the
+            database can—and cannot—undo.
+          </p>
         </section>
-        <div
-          id="trail"
-          class="trail"
-          role="group"
-          aria-label="Jump to an event"
-        ></div>
-        <div class="notes">
-          <details>
-            <summary>Model boundaries & assumptions</summary>
-            <p>
-              This is a deterministic teaching model, not a trace, benchmark,
-              formal proof, or Awa runtime. The playhead counts events; playback
-              speed has no relationship to production timing.
+        <section class="lab" aria-label="Interactive job and receipt model">
+          <div class="assumption">
+            <label class="key-control"
+              ><input type="checkbox" id="provider-key" /><span
+                >Provider remembers a stable key<small
+                  >Changing this starts a new run.</small
+                ></span
+              ></label
+            ><button class="reset" id="reset">Reset run</button>
+          </div>
+          <div class="board" aria-label="Current simulation state">
+            <section class="zone" id="database">
+              <div class="zone-label">
+                <strong>PostgreSQL</strong><span>1 job</span>
+              </div>
+              <div class="job-card">
+                <span class="job-symbol">J42</span>
+                <div class="job-copy">
+                  <b id="job-status">Queued</b
+                  ><small
+                    >Order #42<br /><span id="completion-count"
+                      >Not completed</span
+                    ></small
+                  >
+                </div>
+              </div>
+            </section>
+            <section class="zone" id="worker-zone">
+              <div class="zone-label">
+                <strong>Worker</strong><span id="run-count">0 starts</span>
+              </div>
+              <div class="worker">
+                <span class="worker-light" id="worker-light">—</span>
+                <div class="worker-copy">
+                  <b id="worker-status">Not started</b
+                  ><small id="worker-detail">Ready to claim J42</small>
+                </div>
+              </div>
+            </section>
+            <section class="zone mailbox" id="mailbox">
+              <div class="mail-heading">
+                <h2>External mailbox</h2>
+                <span class="delivery-count" id="delivery-count"
+                  >0 delivered</span
+                >
+              </div>
+              <div class="letters" id="letters">
+                <span class="empty-mail">No receipt yet.</span>
+              </div>
+              <p class="request-count" id="request-count">
+                0 requests to the provider
+              </p>
+            </section>
+          </div>
+          <div class="decision">
+            <div>
+              <p
+                class="feedback"
+                id="feedback"
+                role="status"
+                aria-live="polite"
+              >
+                One committed order and one queued job.
+              </p>
+              <p class="next-hint" id="hint">
+                Start a worker to claim the job.
+              </p>
+            </div>
+            <div class="actions">
+              <button class="primary" id="action">Start worker</button
+              ><button class="crash" id="crash" hidden>Stop worker</button>
+            </div>
+          </div>
+          <div class="question">
+            <p id="challenge">
+              Try this: send the receipt, then stop the worker before saving
+              completion.
             </p>
-            <ul>
-              <li>
-                One immediately runnable job, two possible workers, successful
-                SQL, healthy maintenance, and enough attempts to retry. Database
-                availability eventually returns.
-              </li>
-              <li>
-                Rescue, backoff, due-job promotion and polling are separate
-                events with compressed waits. Default heartbeat staleness is 90
-                seconds, with a default 30-second rescue scan; recovery can take
-                longer. Hard deadlines are a separate trigger.
-              </li>
-              <li>
-                The provider either sends on every request or atomically
-                deduplicates a stable operation key across both workers. That
-                deduplication is an explicit provider assumption, not an Awa
-                feature.
-              </li>
-              <li>
-                The lost-claim experiment assumes the enqueue is already
-                durable, storage honors flushes, and the claim is the only
-                unflushed state. It models a local PostgreSQL crash, not
-                arbitrary standby promotion or storage corruption.
-              </li>
-              <li>
-                “Logical database view” collapses ready rows, receipt claims,
-                leases and terminal history. A claim does not physically move
-                one canonical row through these boxes. Closed receipts, lease
-                tokens and cursor evidence enforce the real transitions.
-              </li>
-              <li>
-                The late-worker experiment assumes its original claim survived
-                WAL recovery. It does not model lease identities across a lost
-                asynchronous commit.
-              </li>
-              <li>
-                Priorities, batching, callbacks, unique enqueue conflicts,
-                cancellation, retry exhaustion, DLQ, partitions, capacity and
-                all other production interleavings are omitted. No throughput or
-                metastability claim follows from these examples.
-              </li>
-            </ul>
+            <a id="action-source" href="#">Why does this happen? ↗</a>
+          </div>
+          <section class="results" id="results" hidden>
+            <h2>Your completed runs</h2>
+            <p>
+              Counts from your actions in this model. No performance
+              measurements.
+            </p>
+            <div class="runs" id="runs"></div>
+          </section>
+        </section>
+        <div class="depth">
+          <details>
+            <summary>What happened in my run?</summary>
+            <ol id="event-log" class="event-log"></ol>
           </details>
           <details>
-            <summary>Source notes & inspiration</summary>
+            <summary>What this model assumes</summary>
+            <p>
+              The example handler sends one receipt, then records completion.
+              The order and job are already committed. Claims survive; only the
+              worker process stops. No database crash, rollback or standby
+              failover is simulated.
+            </p>
+            <p>
+              “Recover for retry” compresses Awa’s rescue, backoff and due-job
+              promotion into one action. It assumes healthy maintenance,
+              sufficient retry budget and eventual worker availability. It does
+              not predict recovery latency. Heartbeat staleness normally
+              defaults to 90 seconds with a 30-second rescue scan; real recovery
+              can take longer.
+            </p>
+            <p>
+              The provider-key option assumes an external provider atomically
+              deduplicates a stable operation key across attempts. Awa does not
+              provide that external guarantee. Job enqueue uniqueness is a
+              different boundary.
+            </p>
+            <p>
+              Workers here really stop. The model omits live stale workers,
+              attempt-fencing races, asynchronous claim loss, SQL errors,
+              terminal failure, batching and other production interleavings.
+              Database and job cards show logical state, not physical row
+              movement.
+            </p>
+          </details>
+          <details>
+            <summary>How this maps to Awa</summary>
             <p>
               Grounded in
-              <a id="revision-link" href="#"
-                ><code>hardbyte/awa @ b9341ae5</code></a
-              >, inspected against public <code>main</code>. The examples
-              describe that development revision, not every released Awa version
-              or the Awa revision pinned by this benchmark repository. No
-              benchmark result is used or changed.
+              <a id="revision-link" href="#">hardbyte/awa @ b9341ae5</a>, a
+              development snapshot of the 0.7 queue-storage implementation. It
+              is not a guarantee about every released version or the benchmark
+              adapter pin.
             </p>
-            <ul id="sources"></ul>
+            <ul class="source-list" id="sources"></ul>
             <p>
-              Inspired by Marc Brooker’s
+              No caller-owned handler completion API is assumed. The proposed
+              ADR-042 <code>complete_in_tx</code> API was not implemented in
+              this snapshot.
+            </p>
+          </details>
+          <details>
+            <summary>Why an interactive model?</summary>
+            <p>
+              Changing where a worker stops makes the external-effect boundary
+              tangible. Try both provider assumptions and compare only runs you
+              have actually completed.
+            </p>
+            <p>
+              Inspired by
               <a href="https://brooker.co.za/blog/2026/10/23/animations.html"
-                >Animations for System Builders: Metastability and Lost
-                Writes</a
-              >
-              and its
-              <a href="https://stability-sim.systems/?example=metastable-retry"
-                >Stability Sim retry example</a
-              >. This original explainer borrows the teaching approach: expose
-              the mechanism, inject a failure, compare outcomes. No article
-              prose, assets or demo code are reused. Unlike the article’s
-              Postgres/etcd examples, these scenarios are not captured
-              production traces.
+                >Marc Brooker’s systems animations</a
+              >. This original model uses no article assets or simulator code.
+              It is not a captured Awa trace, a benchmark, or a proof of
+              metastability.
             </p>
           </details>
         </div>
       </main>
       <footer class="footer">
-        <span>AWA · At-least-once delivery. Explicit boundaries.</span
-        ><span>Teaching model · Works offline · Awa @ b9341ae5</span>
+        <span
+          >Awa-specific teaching model · Works offline · No emails are
+          sent.</span
+        ><span
+          ><a id="guide-link" href="../"
+            >Back to the comparison guide →</a
+          ></span
+        >
       </footer>
     </div>
     <noscript
-      >This interactive model needs JavaScript. The accompanying Scheduler Lab
-      documentation explains the guarantees and links to the source.</noscript
+      >This model needs JavaScript. Read the Awa source links and assumptions
+      for its scope.</noscript
     >
     <script id="awa-model">
       "use strict";
@@ -1030,14 +850,9 @@
         const base = `https://github.com/hardbyte/awa/blob/${revision}/`;
         const sources = {
           enqueue: [
-            "awa-model/src/insert.rs",
-            360,
-            "insert_with accepts the caller’s PgExecutor",
-          ],
-          atomic: [
             "docs/concepts/transactional-enqueue.md",
             1,
-            "Atomic handoff and external-effect boundary",
+            "Committed enqueue and the external-effect boundary",
           ],
           claim: [
             "awa-model/migrations/v023_install_queue_storage_substrate.sql",
@@ -1047,19 +862,14 @@
           rescue: [
             "awa-model/src/queue_storage.rs",
             15329,
-            "Stale-heartbeat rescue closes and defers the attempt",
-          ],
-          deadline: [
-            "awa-model/src/queue_storage.rs",
-            15481,
-            "Hard-deadline rescue",
+            "Rescue closes an abandoned attempt and defers retry",
           ],
           promote: [
             "awa-worker/src/maintenance.rs",
             2409,
             "Promote due retries",
           ],
-          fence: [
+          complete: [
             "awa-model/src/queue_storage.rs",
             7190,
             "Receipt completion validates open attempt evidence",
@@ -1069,787 +879,294 @@
             1,
             "Attempt ownership and guarded finalization",
           ],
-          async: [
-            "awa-model/src/queue_storage.rs",
-            34,
-            "Claim transactions use synchronous_commit = off",
-          ],
-          durability: [
-            "docs/architecture.md",
-            167,
-            "Async claims; normal enqueue and completion commit behavior",
-          ],
-          recovery: [
-            "docs/architecture.md",
-            187,
-            "Recovery and bounded finalization retries",
-          ],
-          mapping: [
-            "correctness/storage/MAPPING.md",
-            342,
-            "Async-claim durability and cursor proof boundary",
-          ],
         };
         const sourceUrl = (key) =>
           base + sources[key][0] + "#L" + sources[key][1];
-        const initial = () => ({
-          order: false,
-          pendingOrder: false,
-          pendingJob: false,
-          job: "absent",
-          lease: 0,
-          attempt: 0,
-          owner: null,
-          workers: { A: "idle", B: "idle" },
-          runs: 0,
-          calls: 0,
-          effects: 0,
-          keys: [],
-          rejected: 0,
-          app: "ready",
-          lastResult: "—",
-          claimDurable: true,
-        });
-        function reduce(previous, event, config) {
-          const s = JSON.parse(JSON.stringify(previous));
-          const worker = event.worker || "A";
-          switch (event.type) {
-            case "stage_order":
-              s.pendingOrder = true;
-              s.app = "transaction open";
-              break;
-            case "stage_job":
-              s.pendingJob = true;
-              break;
-            case "order_commit":
-              s.order = true;
-              s.app = "order committed";
-              break;
-            case "handoff_commit":
-              s.order = true;
-              s.job = "available";
-              s.pendingOrder = false;
-              s.pendingJob = false;
-              s.app = "handoff committed";
-              break;
-            case "enqueue":
-              s.job = "available";
-              s.app = "handoff committed";
-              break;
-            case "app_crash":
-              s.pendingOrder = false;
-              s.pendingJob = false;
-              s.app = "process crashed";
-              break;
-            case "claim":
-              if (s.job !== "available")
-                throw new Error("Only available work can be claimed");
-              s.job = "running";
-              s.lease++;
-              s.attempt++;
-              s.owner = worker;
-              s.runs++;
-              s.workers[worker] = "running";
-              s.claimDurable = event.durable !== false;
-              break;
-            case "effect":
-              s.calls++;
-              if (
-                config.provider !== "key" ||
-                !s.keys.includes("order:42:email")
-              ) {
-                s.effects++;
-                s.keys.push("order:42:email");
-              }
-              break;
-            case "worker_crash":
-              s.workers[worker] = "crashed";
-              break;
-            case "disconnect":
-              s.workers[worker] = "disconnected";
-              break;
-            case "return":
-              s.workers[worker] = "returned late";
-              break;
-            case "rescue":
-              if (s.job !== "running")
-                throw new Error("Rescue requires an open attempt");
-              s.job = "retryable";
-              s.owner = null;
-              s.lastResult = "old attempt closed";
-              break;
-            case "due":
-              if (s.job !== "retryable")
-                throw new Error("Promotion requires a retry");
-              s.job = "available";
-              break;
-            case "complete":
-              if (
-                s.job === "running" &&
-                s.owner === worker &&
-                s.lease === event.lease
-              ) {
-                s.job = "completed";
-                s.owner = null;
-                s.workers[worker] = "finished";
-                s.lastResult = "completion accepted";
-                s.claimDurable = true;
-              } else {
-                s.rejected++;
-                s.lastResult = "stale completion rejected";
-                s.workers[worker] = "stale result";
-              }
-              break;
-            case "flush":
-              s.claimDurable = true;
-              break;
-            case "db_restart":
-              if (!s.claimDurable) {
-                s.job = "available";
-                s.lease = 0;
-                s.attempt = 0;
-                s.owner = null;
-                s.claimDurable = true;
-              }
-              break;
-            case "observe":
-              break;
-            default:
-              throw new Error("Unknown event " + event.type);
-          }
-          return s;
-        }
-        const event = (
-          type,
-          title,
-          body,
-          source,
-          lane = "db",
-          extras = {},
-        ) => ({ type, title, body, source, lane, ...extras });
-        const defaults = {
-          handoff: { mode: "atomic", fault: "gap", provider: "raw" },
-          replay: { provider: "raw", fault: "crash" },
-          fence: { rescue: "heartbeat", provider: "raw" },
-          wal: { wal: "lost", provider: "raw" },
-        };
-        const definitions = {
-          handoff: {
-            title: "A durable order needs a durable handoff.",
-            subtitle:
-              "Commit the business write and enqueue together, then crash at the boundary.",
-            lesson:
-              "With the same PostgreSQL transaction, both writes become visible together. A process crash before commit leaves neither. A separate enqueue leaves a gap after the order commits.",
+        function create(providerKey = false) {
+          return {
+            providerKey,
+            job: "available",
+            attempt: 0,
+            calls: 0,
+            deliveries: [],
+            worker: null,
+            keySeen: false,
+            crashes: 0,
+            events: [
+              {
+                action: "enqueue",
+                title: "Order #42 and job J42 are already committed.",
+                sources: ["enqueue"],
+              },
+            ],
+            message: "One committed order and one queued job.",
             source: "enqueue",
-            options: [
-              [
-                "mode",
-                "Write boundary",
-                [
-                  ["atomic", "One transaction"],
-                  ["split", "Separate commits"],
-                ],
-              ],
-              [
-                "fault",
-                "Application failure",
-                [
-                  ["gap", "At the handoff boundary"],
-                  ["after", "After durable handoff"],
-                  ["none", "No crash"],
-                ],
-              ],
-            ],
-          },
-          replay: {
-            title: "One completed job can send two emails.",
-            subtitle:
-              "Crash after the external effect succeeds, before Awa records completion.",
-            lesson:
-              "The database cannot roll back an email. Rescue permits another execution. A stable provider idempotency key can suppress the repeated effect; it does not suppress the second handler start.",
-            source: "atomic",
-            options: [
-              [
-                "provider",
-                "External provider",
-                [
-                  ["raw", "Send on every request"],
-                  ["key", "Deduplicate operation key"],
-                ],
-              ],
-              [
-                "fault",
-                "Worker failure",
-                [
-                  ["crash", "Crash after the email"],
-                  ["none", "No crash"],
-                ],
-              ],
-            ],
-          },
-          fence: {
-            title: "An old worker must not finish a new attempt.",
-            subtitle:
-              "Keep Worker A alive but isolated. Rescue the job, then let A return late.",
-            lesson:
-              "A new claim advances run_lease. Awa’s guarded finalization rejects A’s closed attempt. This protects scheduler state; it cannot stop A calling an external provider.",
-            source: "fence",
-            options: [
-              [
-                "rescue",
-                "Rescue trigger",
-                [
-                  ["heartbeat", "Heartbeat becomes stale"],
-                  ["deadline", "Hard deadline expires"],
-                ],
-              ],
-              [
-                "provider",
-                "External provider",
-                [
-                  ["raw", "Send on every request"],
-                  ["key", "Deduplicate operation key"],
-                ],
-              ],
-            ],
-          },
-          wal: {
-            title: "Losing a claim can mean running again.",
-            subtitle:
-              "Awa 0.7’s queue-storage claim path acknowledges before a WAL flush.",
-            lesson:
-              "A claim acknowledgement is not a durability boundary. If unflushed claim state is lost, the already durable job can be claimed again. A completed WAL flush changes this crash outcome.",
-            source: "async",
-            options: [
-              [
-                "wal",
-                "Before the PostgreSQL crash",
-                [
-                  ["lost", "Claim WAL still unflushed"],
-                  ["flushed", "Claim WAL flush completed"],
-                ],
-              ],
-              [
-                "provider",
-                "External provider",
-                [
-                  ["raw", "Send on every request"],
-                  ["key", "Deduplicate operation key"],
-                ],
-              ],
-            ],
-          },
-        };
-        function eventsFor(chapter, c) {
-          const e = [];
-          const add = (...args) => e.push(event(...args));
-          const claim = (worker, lease, durable = true) =>
-            add(
-              "claim",
-              `${worker} claims J42`,
-              `Worker ${worker} starts the handler. The database records a new attempt${chapter === "wal" ? "; the execution counter includes starts before the crash" : ` with run_lease ${lease}`}.`,
-              "claim",
-              "worker",
-              { worker, durable },
-            );
-          const effect = (worker) =>
-            add(
-              "effect",
-              `The provider receives ${worker}’s request`,
-              c.provider === "key"
-                ? "The provider atomically checks the same operation key, order:42:email. A repeated request returns the existing result without sending another email. This is our provider assumption."
-                : "The provider sends an email for every request. Sending succeeds independently of the later job-completion transaction.",
-              "atomic",
-              "effect",
-              { worker },
-            );
-          const complete = (worker, lease) =>
-            add(
-              "complete",
-              `${worker} submits completion`,
-              "Awa validates the open attempt identity and commits terminal evidence. This acknowledges scheduler completion; it does not make the external call atomic.",
-              "fence",
-              "db",
-              { worker, lease },
-            );
-          const rescue = () => {
-            const deadline = c.rescue === "deadline";
-            add(
-              "rescue",
-              deadline
-                ? "The hard deadline expires"
-                : "Maintenance finds a stale heartbeat",
-              deadline
-                ? "Maintenance closes the expired attempt even if the process is still alive. This trace assumes its configured deadline expires before useful completion."
-                : "The maintenance leader closes the old attempt and schedules a retry with backoff. This requires maintenance and database availability; the wait here is compressed.",
-              deadline ? "deadline" : "rescue",
-            );
-            add(
-              "due",
-              "Backoff elapses; maintenance promotes the retry",
-              "The retry becomes available again once due. We assume sufficient retry budget and a worker able to claim it.",
-              "promote",
-            );
           };
-          if (chapter === "handoff") {
-            if (c.mode === "atomic") {
-              add(
-                "stage_order",
-                "Write the order inside a transaction",
-                "The order exists only inside the application transaction. Other sessions cannot claim uncommitted work.",
-                "enqueue",
-                "app",
-              );
-              add(
-                "stage_job",
-                "Enqueue J42 in that same transaction",
-                "insert_with receives the transaction executor. Both writes are still uncommitted.",
-                "enqueue",
-                "db",
-              );
-              if (c.fault === "gap") {
-                add(
-                  "app_crash",
-                  "The application crashes before COMMIT",
-                  "PostgreSQL rolls back the open transaction when its connection ends. Neither the order nor its job is committed. Retrying the application operation is a separate concern.",
-                  "atomic",
-                  "app",
-                );
-                add(
-                  "observe",
-                  "No orphaned order",
-                  "There is no committed order awaiting a job that was never enqueued. Awa cannot execute a job that did not commit.",
-                  "atomic",
-                );
-              } else {
-                add(
-                  "handoff_commit",
-                  "One COMMIT publishes both",
-                  "The order and its job become visible atomically in PostgreSQL. Normal commit durability assumes correct database and storage configuration.",
-                  "atomic",
-                );
-                if (c.fault === "after")
-                  add(
-                    "app_crash",
-                    "The application crashes after COMMIT",
-                    "The committed job survives the application crash. A worker can continue from the database without the producer process.",
-                    "atomic",
-                    "app",
-                  );
-                claim("A", 1);
-                effect("A");
-                complete("A", 1);
-              }
-            } else {
-              add(
-                "order_commit",
-                "Commit the order first",
-                "The business order is durable. The application still needs to perform a separate enqueue. This is a comparison pattern, not a requirement imposed by Awa.",
-                "atomic",
-                "app",
-              );
-              if (c.fault === "gap") {
-                add(
-                  "app_crash",
-                  "The application crashes before enqueue",
-                  "The order committed, but the enqueue never ran. There is no job for maintenance to rescue.",
-                  "atomic",
-                  "app",
-                );
-                add(
-                  "observe",
-                  "A missing handoff",
-                  "Awa cannot discover missing application intent on its own. Use a shared transaction to close this gap; an independent reconciliation process is outside this model.",
-                  "atomic",
-                );
-              } else {
-                add(
-                  "enqueue",
-                  "Enqueue J42 in a second commit",
-                  "The handoff succeeds this time, but the window between the two commits existed.",
-                  "enqueue",
-                );
-                if (c.fault === "after")
-                  add(
-                    "app_crash",
-                    "The application crashes after enqueue",
-                    "Both commits succeeded before the crash. The committed job can run.",
-                    "atomic",
-                    "app",
-                  );
-                claim("A", 1);
-                effect("A");
-                complete("A", 1);
-              }
-            }
-          } else {
-            add(
-              "handoff_commit",
-              "Begin with a committed order and job",
-              "The enqueue has already committed with normal durability. We now examine execution, outside the application’s transaction.",
-              "atomic",
-            );
-            claim("A", 1, chapter !== "wal");
-            if (chapter === "fence") {
-              add(
-                "disconnect",
-                "A loses contact with PostgreSQL",
-                "A is alive, but cannot renew its heartbeat. Its original claim is assumed durable. A deadline can also trigger rescue independently of heartbeat freshness.",
-                "recovery",
-                "worker",
-              );
-              rescue();
-              claim("B", 2);
-              add(
-                "return",
-                "A returns while B owns the job",
-                "Rescue cannot guarantee that an isolated old process has stopped. Both handler executions may overlap.",
-                "lease",
-                "worker",
-              );
-              effect("A");
-              add(
-                "complete",
-                "A’s completion is rejected",
-                "A presents its old run_lease 1. That attempt is closed, so it cannot finalize B’s running lease 2. The email already sent by A is outside this guard.",
-                "fence",
-                "db",
-                { worker: "A", lease: 1 },
-              );
-              effect("B");
-              complete("B", 2);
-            } else if (chapter === "replay") {
-              effect("A");
-              if (c.fault === "crash") {
-                add(
-                  "worker_crash",
-                  "A crashes before completion",
-                  "The email succeeded, but A never submits completion. No surviving in-process finalizer can record the handler’s result. The database still shows an open attempt.",
-                  "recovery",
-                  "worker",
-                );
-                rescue();
-                claim("B", 2);
-                effect("B");
-                complete("B", 2);
-              } else complete("A", 1);
-            } else if (chapter === "wal") {
-              effect("A");
-              if (c.wal === "flushed")
-                add(
-                  "flush",
-                  "The claim WAL reaches durable storage",
-                  "A completed WAL flush, including one caused by a later local synchronous commit, makes the preceding claim durable on this server. Standby failover depends on replication configuration.",
-                  "durability",
-                );
-              add(
-                "worker_crash",
-                "A stops before submitting completion",
-                "We stop A as well so the recovered database can be inspected without a late completion race. The provider’s successful email remains outside PostgreSQL.",
-                "atomic",
-                "worker",
-              );
-              add(
-                "db_restart",
-                "PostgreSQL crashes and recovers",
-                c.wal === "lost"
-                  ? "This trace chooses the allowed outcome where the unflushed claim and its cursor state are lost. The prior durable enqueue remains, so J42 is immediately claimable again. Recovery rewinds database attempt state, not the external provider."
-                  : "The flushed claim survives this local crash. J42 is still running, so it cannot be claimed immediately. Recovery must close the abandoned attempt before a retry.",
-                "mapping",
-              );
-              if (c.wal === "flushed") rescue();
-              claim("B", c.wal === "lost" ? 1 : 2);
-              effect("B");
-              complete("B", c.wal === "lost" ? 1 : 2);
-            }
-          }
-          return e;
         }
-        function trace(chapter, overrides = {}) {
-          if (!definitions[chapter]) throw new Error("Unknown experiment");
-          const config = { ...defaults[chapter], ...overrides };
-          const events = eventsFor(chapter, config);
-          let state = initial();
-          const frames = [
-            {
-              ...event(
-                "observe",
-                "Ready to explore",
-                "Use Step or Play. Change one setting, replay the same failure, and compare the outcome.",
-                "atomic",
-                "app",
-              ),
-              state,
-            },
-          ];
-          for (const e of events) {
-            state = reduce(state, e, config);
-            frames.push({ ...e, state });
+        function available(state) {
+          if (state.job === "available") return ["claim"];
+          if (state.job === "completed") return [];
+          if (state.worker.status === "stopped") return ["recover"];
+          return state.worker.sent ? ["complete", "crash"] : ["send", "crash"];
+        }
+        function act(previous, action) {
+          if (!available(previous).includes(action))
+            throw new Error(`Action ${action} is not available`);
+          const state = JSON.parse(JSON.stringify(previous));
+          let title, refs;
+          if (action === "claim") {
+            state.job = "running";
+            state.attempt++;
+            state.worker = {
+              id: state.attempt,
+              status: "running",
+              sent: false,
+            };
+            state.message = `Worker ${state.attempt} claimed the job.`;
+            title = state.message;
+            refs = ["claim"];
+          } else if (action === "send") {
+            state.calls++;
+            state.worker.sent = true;
+            const duplicate = state.providerKey && state.keySeen;
+            if (!duplicate)
+              state.deliveries.push({
+                worker: state.worker.id,
+                request: state.calls,
+              });
+            if (state.providerKey) state.keySeen = true;
+            state.message = duplicate
+              ? "The provider recognized the key. No second receipt."
+              : state.deliveries.length > 1
+                ? "A second receipt arrived for the same order."
+                : "Receipt delivered. The job is still running.";
+            title = `Worker ${state.worker.id} requested a receipt: ${duplicate ? "provider deduplicated it" : "delivery " + state.deliveries.length + " arrived"}.`;
+            refs = ["enqueue"];
+          } else if (action === "crash") {
+            state.worker.status = "stopped";
+            state.crashes++;
+            state.message = "The worker stopped. The job is still unfinished.";
+            title = `Worker ${state.worker.id} stopped ${state.worker.sent ? "after the provider request" : "before sending a receipt"}.`;
+            refs = ["rescue"];
+          } else if (action === "recover") {
+            state.job = "available";
+            state.message =
+              "The abandoned attempt is closed. A retry is ready.";
+            title =
+              "Maintenance rescued the attempt; backoff elapsed and the due retry was promoted (compressed).";
+            refs = ["rescue", "promote"];
+          } else if (action === "complete") {
+            state.job = "completed";
+            state.worker.status = "finished";
+            state.message =
+              state.deliveries.length > 1
+                ? `One completed job. ${state.deliveries.length} delivered receipts.`
+                : state.attempt > 1
+                  ? "Recovery repeated execution. One delivered receipt."
+                  : "One clean execution. One delivered receipt.";
+            title = `Worker ${state.worker.id} recorded completion. External receipts remain as delivered.`;
+            refs = ["complete"];
           }
-          return { config, frames };
+          state.source = refs[0];
+          state.events.push({ action, title, sources: refs });
+          return state;
         }
         globalThis.AwaLab = {
           revision,
           base,
           sources,
           sourceUrl,
-          initial,
-          reduce,
-          defaults,
-          definitions,
-          trace,
+          create,
+          available,
+          act,
         };
       })();
     </script>
     <script id="awa-ui">
       "use strict";
       (() => {
-        const M = globalThis.AwaLab;
-        const $ = (id) => document.getElementById(id);
-        let chapter = "handoff",
-          config = { ...M.defaults.handoff },
-          frames = [],
-          index = 0,
-          timer = null;
-        const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
+        const M = globalThis.AwaLab,
+          $ = (id) => document.getElementById(id);
+        let state = M.create(),
+          completed = [];
         const labels = {
-          absent: "—",
-          available: "available",
-          running: "running",
-          retryable: "retryable",
-          completed: "completed",
+          claim: "Start worker",
+          send: "Send receipt",
+          complete: "Save completion",
+          recover: "Recover for retry",
         };
-        function pause() {
-          if (timer !== null) clearTimeout(timer);
-          timer = null;
-          $("play").textContent = "▶ Play";
+        function reset() {
+          state = M.create($("provider-key").checked);
+          state.message = "New run. One committed order and one queued job.";
+          render();
         }
         function render() {
-          const f = frames[index],
-            s = f.state;
-          $("step-count").textContent =
-            `EVENT ${String(index).padStart(2, "0")} / ${String(frames.length - 1).padStart(2, "0")}`;
-          $("position").max = frames.length - 1;
-          $("position").value = index;
-          $("back").disabled = index === 0;
-          $("next").disabled = index === frames.length - 1;
-          $("app-name").textContent = s.app;
-          $("app-state").textContent =
-            s.pendingOrder || s.pendingJob
-              ? "Transaction open; not yet committed."
-              : s.order
-                ? "Order is visible in PostgreSQL."
-                : "No committed order.";
-          $("app-detail").textContent =
-            s.pendingOrder || s.pendingJob
-              ? `pending order: ${s.pendingOrder ? "yes" : "no"}\npending job: ${s.pendingJob ? "yes" : "no"}`
-              : config.mode === "split"
-                ? "Separate commit boundary"
-                : "Same transaction at enqueue";
-          $("order-state").textContent = s.order
-            ? "committed"
-            : s.pendingOrder
-              ? "uncommitted"
-              : "—";
-          $("job-state").textContent = s.pendingJob
-            ? "uncommitted"
-            : labels[s.job];
-          $("db-detail").textContent =
-            chapter === "wal"
-              ? `claim: ${s.job === "absent" || s.job === "available" ? "none" : s.claimDurable ? "WAL durable" : "acknowledged, unflushed"}\nDB attempt: ${s.attempt}`
-              : `run_lease: ${s.lease || "—"}\nattempt: ${s.attempt}`;
-          $("worker-a").textContent = s.workers.A;
-          $("worker-b").textContent = s.workers.B;
-          $("worker-detail").textContent = s.owner
-            ? `current owner: ${s.owner}`
-            : s.lastResult;
-          $("effect-state").textContent =
-            s.effects === 0
-              ? "No email sent."
-              : s.effects === 1
-                ? "One email sent."
-                : `${s.effects} emails sent for one order.`;
-          $("effect-detail").textContent =
-            config.provider === "key"
-              ? "stable operation key:\norder:42:email"
-              : "no provider deduplication";
-          $("stat-runs").textContent = s.runs;
-          $("stat-calls").textContent = s.calls;
-          $("stat-effects").textContent = s.effects;
-          $("stat-rejected").textContent = s.rejected;
-          $("effects-stat").classList.toggle("alert", s.effects > 1);
-          for (const lane of ["app", "db", "worker", "effect"])
-            $(lane + "-node").className =
-              "node" + (f.lane === lane ? " active" : "");
-          if (s.app === "process crashed")
-            $("app-node").classList.add("danger");
-          if (s.order && s.job === "absent" && s.app === "process crashed")
-            $("db-node").classList.add("danger");
-          if (s.effects > 1) $("effect-node").classList.add("danger");
-          else if (s.effects === 1) $("effect-node").classList.add("good");
-          if (s.job === "completed") $("db-node").classList.add("good");
-          if (!s.claimDurable) $("db-node").classList.add("warning");
-          $("flow-label").textContent =
-            f.type === "complete"
-              ? s.lastResult
-              : f.type === "effect"
-                ? "external effect ≠ job completion"
-                : f.type === "app_crash"
-                  ? "producer process stops"
-                  : f.type === "db_restart"
-                    ? "recover from durable WAL"
-                    : f.type === "rescue"
-                      ? "close attempt → deferred retry"
-                      : f.type === "claim"
-                        ? "available → running"
-                        : f.type === "handoff_commit"
-                          ? "one atomic commit"
-                          : f.type === "stage_job"
-                            ? "insert_with(transaction, job)"
-                            : "event model · waits compressed";
-          $("event-time").textContent =
-            `EVENT ${String(index).padStart(2, "0")}`;
-          $("event-title").textContent = f.title;
-          $("event-body").textContent = f.body;
-          $("event-source").href = M.sourceUrl(f.source);
-          $("event-source").textContent = `${M.sources[f.source][0]} ↗`;
-          for (const button of $("trail").children) {
-            const n = Number(button.dataset.index);
-            button.classList.toggle("done", n < index);
-            if (n === index) button.setAttribute("aria-current", "step");
-            else button.removeAttribute("aria-current");
+          const actions = M.available(state),
+            primary = actions.find((action) => action !== "crash");
+          $("job-status").textContent = {
+            available: "Queued",
+            running: "Running",
+            completed: "Completed",
+          }[state.job];
+          $("completion-count").textContent =
+            state.job === "completed" ? "Completion saved" : "Not completed";
+          $("database").className =
+            "zone" +
+            (state.job === "running"
+              ? " running"
+              : state.job === "completed"
+                ? " done"
+                : "");
+          $("run-count").textContent =
+            `${state.attempt} ${state.attempt === 1 ? "start" : "starts"}`;
+          $("worker-light").textContent = state.worker ? state.worker.id : "—";
+          $("worker-status").textContent = !state.worker
+            ? "Not started"
+            : state.worker.status === "stopped"
+              ? "Stopped"
+              : state.worker.status === "finished"
+                ? "Finished"
+                : `Worker ${state.worker.id}`;
+          $("worker-detail").textContent = !state.worker
+            ? "Ready to claim J42"
+            : state.worker.status === "stopped"
+              ? state.job === "available"
+                ? "A replacement can start"
+                : "Recovery needed"
+              : state.worker.status === "finished"
+                ? "Completion recorded"
+                : state.worker.sent
+                  ? "Receipt requested"
+                  : "Holding job J42";
+          $("worker-zone").className =
+            "zone" +
+            (state.worker?.status === "stopped"
+              ? " stopped"
+              : state.worker?.status === "running"
+                ? " running"
+                : "");
+          $("delivery-count").textContent =
+            `${state.deliveries.length} delivered`;
+          $("request-count").textContent =
+            `${state.calls} ${state.calls === 1 ? "request" : "requests"} to the provider${state.providerKey ? " · key: order:42:receipt" : " · no deduplication key"}`;
+          $("mailbox").classList.toggle(
+            "duplicate",
+            state.deliveries.length > 1,
+          );
+          if (!state.deliveries.length) $("letters").replaceChildren();
+          const existing = $("letters").querySelectorAll(".letter").length;
+          if (state.deliveries.length)
+            $("letters").querySelector(".empty-mail")?.remove();
+          if (!state.deliveries.length) {
+            const empty = document.createElement("span");
+            empty.className = "empty-mail";
+            empty.textContent = "No receipt yet.";
+            $("letters").append(empty);
           }
-          $("pulse").replaceChildren();
-          if (index && !motionPreference.matches) {
-            const dot = document.createElement("i");
-            dot.style.setProperty(
-              "--travel",
-              Math.max(0, $("scene").clientWidth * 0.7 - 10) + "px",
+          state.deliveries.forEach((delivery, index) => {
+            if (index < existing) return;
+            const letter = document.createElement("div");
+            letter.className = "letter";
+            letter.setAttribute(
+              "aria-label",
+              `Receipt ${index + 1} for order 42, sent by worker ${delivery.worker}`,
             );
-            $("pulse").append(dot);
-          }
-        }
-        function rebuild() {
-          pause();
-          index = 0;
-          ({ frames } = M.trace(chapter, config));
-          const d = M.definitions[chapter];
-          $("experiment-title").textContent = d.title;
-          $("experiment-subtitle").textContent = d.subtitle;
-          $("lesson").textContent = d.lesson;
-          $("lesson-source").href = M.sourceUrl(d.source);
-          $("trail").replaceChildren();
-          frames.forEach((f, n) => {
-            const b = document.createElement("button");
-            b.type = "button";
-            b.dataset.index = n;
-            b.textContent = `${n.toString().padStart(2, "0")} ${f.title}`;
-            b.addEventListener("click", () => {
-              pause();
-              index = n;
-              render();
-            });
-            $("trail").append(b);
+            letter.innerHTML =
+              '<svg viewBox="0 0 32 24" aria-hidden="true"><rect x="1" y="2" width="30" height="20" rx="2"/><path d="m2 4 14 10L30 4"/></svg>';
+            const caption = document.createElement("span");
+            caption.textContent = `#42 · ${index + 1}`;
+            letter.append(caption);
+            $("letters").append(letter);
           });
-          render();
-        }
-        function options() {
-          $("options").replaceChildren();
-          for (const [key, label, choices] of M.definitions[chapter].options) {
-            const wrapper = document.createElement("label");
-            wrapper.textContent = label;
-            const select = document.createElement("select");
-            select.id = "option-" + key;
-            select.name = key;
-            for (const [value, text] of choices) {
-              const option = document.createElement("option");
-              option.value = value;
-              option.textContent = text;
-              select.append(option);
+          $("feedback").textContent = state.message;
+          $("hint").textContent =
+            state.job === "completed"
+              ? state.crashes
+                ? "Compare this with a new run under the other provider assumption."
+                : "Now try stopping a worker after it sends the receipt."
+              : state.job === "available"
+                ? state.attempt
+                  ? "Start a replacement worker. The external mailbox has not been rolled back."
+                  : "Start a worker to claim the job."
+                : state.worker.status === "stopped"
+                  ? "Recovery is a separate maintenance path. Try making its retry ready."
+                  : state.worker.sent
+                    ? "The email is outside PostgreSQL. Save completion—or stop the worker here."
+                    : "The worker owns J42. Its next handler operation sends the receipt.";
+          $("action").textContent = primary
+            ? primary === "claim" && state.attempt
+              ? "Start replacement"
+              : labels[primary]
+            : "Try the other assumption";
+          $("action").dataset.action = primary || "contrast";
+          $("crash").hidden = !actions.includes("crash");
+          $("challenge").textContent =
+            state.job === "completed"
+              ? state.deliveries.length > 1
+                ? "Recovery repeated the handler. Job completion did not undo either receipt."
+                : state.providerKey && state.calls > state.deliveries.length
+                  ? "Provider deduplication removed a repeated effect, not the repeated execution."
+                  : state.crashes
+                    ? "The worker stopped before sending. No delivered receipt was replayed."
+                    : "A clean run does not expose the crash window. Try a stop before completion."
+              : "Try this: send the receipt, then stop the worker before saving completion.";
+          $("action-source").href = M.sourceUrl(state.source);
+          $("event-log").replaceChildren();
+          for (const event of state.events) {
+            const item = document.createElement("li");
+            item.append(document.createTextNode(event.title + " "));
+            for (const source of event.sources) {
+              const link = document.createElement("a");
+              link.href = M.sourceUrl(source);
+              link.textContent = "Source ↗ ";
+              item.append(link);
             }
-            select.value = config[key];
-            select.addEventListener("change", () => {
-              config[key] = select.value;
-              rebuild();
-            });
-            wrapper.append(select);
-            $("options").append(wrapper);
+            $("event-log").append(item);
+          }
+          $("results").hidden = completed.length === 0;
+          $("runs").replaceChildren();
+          for (const result of completed.slice(-4)) {
+            const node = document.createElement("div");
+            node.className = "run";
+            const title = document.createElement("b");
+            title.textContent = result.providerKey
+              ? "Provider key on"
+              : "Provider key off";
+            const counts = document.createElement("p");
+            counts.textContent = `1 completed job · ${result.attempt} handler starts · ${result.calls} requests · ${result.deliveries.length} ${result.deliveries.length === 1 ? "receipt" : "receipts"}`;
+            const crash = document.createElement("p");
+            crash.textContent = `${result.crashes} worker ${result.crashes === 1 ? "stop" : "stops"}${result.crashes ? " · " + [...new Set(result.events.filter((event) => event.action === "crash").map((event) => (event.title.includes("after the provider") ? "after request" : "before request")))].join(" / ") : " (clean run)"}`;
+            node.append(title, counts, crash);
+            $("runs").append(node);
           }
         }
-        document.querySelectorAll("[data-chapter]").forEach((b) =>
-          b.addEventListener("click", () => {
-            chapter = b.dataset.chapter;
-            config = { ...M.defaults[chapter] };
-            for (const other of document.querySelectorAll("[data-chapter]"))
-              other.setAttribute("aria-pressed", String(other === b));
-            options();
-            rebuild();
-          }),
-        );
-        function tick() {
-          if (index >= frames.length - 1) {
-            pause();
-            return;
-          }
-          index++;
+        function perform(action) {
+          state = M.act(state, action);
+          if (action === "complete") completed.push(state);
           render();
-          if (index === frames.length - 1) {
-            pause();
-            return;
-          }
-          timer = setTimeout(tick, Number($("speed").value));
+          if (action === "crash") $("action").focus({ preventScroll: true });
         }
-        $("play").addEventListener("click", () => {
-          if (timer !== null) {
-            pause();
-            return;
-          }
-          if (index === frames.length - 1) index = 0;
-          render();
-          $("play").textContent = "Ⅱ Pause";
-          timer = setTimeout(tick, Number($("speed").value));
+        $("action").addEventListener("click", () => {
+          const action = $("action").dataset.action;
+          if (action === "contrast") {
+            $("provider-key").checked = !state.providerKey;
+            reset();
+          } else perform(action);
         });
-        $("next").addEventListener("click", () => {
-          pause();
-          index = Math.min(index + 1, frames.length - 1);
-          render();
-        });
-        $("back").addEventListener("click", () => {
-          pause();
-          index = Math.max(0, index - 1);
-          render();
-        });
-        $("reset").addEventListener("click", () => {
-          pause();
-          index = 0;
-          render();
-        });
-        $("position").addEventListener("input", () => {
-          pause();
-          index = Number($("position").value);
-          render();
-        });
-        $("speed").addEventListener("change", () => {
-          if (timer !== null) {
-            clearTimeout(timer);
-            timer = setTimeout(tick, Number($("speed").value));
-          }
-        });
-        $("setup").addEventListener("submit", (e) => e.preventDefault());
-        document.addEventListener("visibilitychange", () => {
-          if (document.hidden) pause();
-        });
+        $("crash").addEventListener("click", () => perform("crash"));
+        $("reset").addEventListener("click", reset);
+        $("provider-key").addEventListener("change", reset);
         $("revision-link").href = M.base;
-        for (const [key, [path, , description]] of Object.entries(M.sources)) {
-          const li = document.createElement("li"),
-            a = document.createElement("a");
-          a.href = M.sourceUrl(key);
-          a.textContent = path;
-          li.append(a, document.createTextNode(" — " + description + "."));
-          $("sources").append(li);
+        for (const [id, [file, , description]] of Object.entries(M.sources)) {
+          const item = document.createElement("li"),
+            link = document.createElement("a");
+          link.href = M.sourceUrl(id);
+          link.textContent = description + " ↗";
+          item.append(link);
+          $("sources").append(item);
         }
-        options();
-        rebuild();
+        if (location.protocol === "file:") $("guide-link").hidden = true;
+        render();
       })();
     </script>
   </body>
