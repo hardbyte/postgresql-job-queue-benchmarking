@@ -80,4 +80,4 @@ npm run browser
 
 ## Review scope
 
-Only the root README and this simulation directory are part of the change. Rust adapters, Python harnesses, database settings and recorded benchmark results are untouched. The simulation has its own model and browser checks; no live benchmark run is required to validate these static additions.
+This simulation is also included in the comparison website under `website/`. Its build copies this directory's `index.html` to `lab/awa.html`; edit this canonical file rather than the generated copy. Awa's documentation embeds that hosted page, so changes require reviewing and publishing the website build. Rust adapters, Python harnesses, database settings and recorded benchmark results are untouched. The simulation has its own model and browser checks; no live benchmark run is required to validate these static additions.
