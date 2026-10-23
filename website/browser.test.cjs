@@ -160,6 +160,7 @@ const contentTypes = {
       await page.locator(`[data-compare="${id}"]`).click();
     assert.equal(await page.locator("[data-compare=oban]").isDisabled(), true);
     await page.locator("#tray-link").click();
+    await page.locator(".comparison-table").waitFor();
     assert.match(page.url(), /compare\//);
     assert.equal(await page.locator(".comparison-table thead th").count(), 5);
     assert.match(
