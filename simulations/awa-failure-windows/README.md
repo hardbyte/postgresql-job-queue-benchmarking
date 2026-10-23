@@ -2,7 +2,7 @@
 
 [Open the interactive lab](index.html)
 
-One order, one job, two possible workers. Step through a failure, change one setting, and replay it. The lab works offline as a single HTML file; it does not contact PostgreSQL or an email provider.
+One order, one job, two possible workers. Step through a failure, change one setting, and replay it. On phones the current event, compact state and controls stay together; settings and detailed state expand on demand. Links with `?experiment=handoff`, `replay`, `fence` or `wal` open a particular lesson. The lab works offline as a single HTML file; it does not contact PostgreSQL or an email provider.
 
 The four experiments explore different boundaries:
 

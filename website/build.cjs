@@ -43,15 +43,15 @@ const sourceLink = (system, id, label) => {
 const adapterCount = catalog.systems.filter((s) => s.hasAdapter).length;
 const logo =
   '<svg viewBox="0 0 28 28" aria-hidden="true"><ellipse cx="14" cy="6" rx="10" ry="4"/><path d="M4 6v8c0 5 20 5 20 0V6M4 14v8c0 5 20 5 20 0v-8"/></svg>';
-function layout(title, content, prefix = "", active = "systems", extra = "") {
+function layout(title, content, prefix = "", active = "start") {
   const links = [
-    ["systems", "Systems", ""],
+    ["start", "Start", ""],
+    ["systems", "Find a system", "systems/"],
     ["compare", "Compare", "compare/"],
-    ["benchmarks", "Benchmarking", "benchmarks/"],
-    ["lab", "Failure lab", "lab/"],
-    ["methodology", "Methodology", "methodology/"],
+    ["lab", "Understand failures", "lab/"],
+    ["benchmarks", "Evidence", "benchmarks/"],
   ];
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="A source-grounded field guide to PostgreSQL-backed job systems: documented semantics, benchmark methodology and an interactive failure lab."><title>${esc(title)} · Postgres Queue Field Guide</title><link rel="icon" href="${prefix}assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="${prefix}assets/style.css"><script src="${prefix}data/catalog.js" defer></script><script src="${prefix}assets/app.js" defer></script></head><body data-page="${active}" data-prefix="${prefix}"><a class="skip" href="#main">Skip to content</a><header class="site-header"><div class="header-inner"><a class="brand" href="${prefix || "./"}">${logo}<span>Postgres Queues<small>THE FIELD GUIDE</small></span></a><button id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation" aria-controls="primary-nav" aria-expanded="false">Menu <span aria-hidden="true">☰</span></button><nav id="primary-nav" aria-label="Main navigation">${links.map(([id, label, url]) => `<a href="${prefix}${url || "./"}" ${active === id ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav><a class="repo-link" href="https://github.com/hardbyte/postgresql-job-queue-benchmarking">Source <span aria-hidden="true">↗</span></a></div></header><main id="main" tabindex="-1">${content}</main><footer class="site-footer"><div class="container"><div class="footer-main"><a class="brand" href="${prefix || "./"}">${logo}<span>Postgres Queues<small>Different contracts. Visible evidence.</small></span></a><div><a href="${prefix}methodology/#coverage">Coverage & limitations</a><a href="${prefix}sources/">Sources & snapshots</a><a href="https://github.com/hardbyte/postgresql-job-queue-benchmarking">Repository ↗</a></div></div><div class="footer-note"><span>Maintained by Awa’s author. No scores, sponsored placements or universal winner.</span><span>Sources checked ${esc(catalog.checked)} · ${catalog.systems.length} selected systems</span></div></div></footer><div class="compare-tray" id="compare-tray" hidden><span id="tray-label"></span><a class="button small" id="tray-link" href="${prefix}compare/">Compare selection →</a><button id="tray-clear" class="text-button">Clear</button></div>${extra}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Choose a Postgres job queue by its application fit, recovery behavior and evidence."><title>${esc(title)} · Postgres Queue Field Guide</title><link rel="icon" href="${prefix}assets/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="${prefix}assets/style.css"><script src="${prefix}data/catalog.js" defer></script><script src="${prefix}assets/app.js" defer></script></head><body data-page="${active}" data-prefix="${prefix}"><a class="skip" href="#main">Skip to content</a><header class="site-header"><div class="header-inner"><a class="brand" href="${prefix || "./"}">${logo}<span>Postgres jobs<small>A practical field guide</small></span></a><button id="nav-toggle" class="nav-toggle" aria-controls="primary-nav" aria-expanded="false">Menu <span aria-hidden="true">＋</span></button><nav id="primary-nav" aria-label="Main navigation">${links.map(([id, label, url]) => `<a href="${prefix}${url || "./"}" ${active === id ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav></div></header><main id="main" tabindex="-1">${content}</main><footer class="site-footer"><div class="container"><p><strong>A field guide, not a league table.</strong> Maintained by Awa’s author. No universal ranking or new benchmark results.</p><div class="footer-links"><a href="${prefix}methodology/">Method & coverage</a><a href="${prefix}sources/">Primary sources</a><a href="https://github.com/hardbyte/postgresql-job-queue-benchmarking">Source repository ↗</a></div><small>${catalog.systems.length} selected systems · Sources checked ${esc(catalog.checked)}</small></div></footer><div class="compare-tray" id="compare-tray" hidden><span id="tray-label"></span><a class="button small" id="tray-link" href="${prefix}compare/">Compare →</a><button id="tray-clear" class="text-button">Clear</button></div></body></html>`;
 }
 const eyebrow = (text) => `<p class="eyebrow">${text}</p>`;
 const sectionHead = (label, title, body = "") =>
@@ -60,55 +60,124 @@ const badge = (text, kind = "") =>
   `<span class="badge ${kind}">${esc(text)}</span>`;
 const evidenceBadge = (s) =>
   badge(
-    s.hasAdapter ? "Adapter in this repo" : "Documentation only",
+    s.hasAdapter ? "Repository adapter" : "Docs only",
     s.hasAdapter ? "measured" : "documented",
   );
-function card(s) {
-  return `<article class="system-card" data-system="${s.id}" data-contract="${s.contract}" data-languages="${esc(s.languages.join("|"))}" data-evidence="${s.hasAdapter ? "adapter" : "docs"}"><div class="card-top"><span class="system-monogram" style="--system-color:${esc(s.color)}" aria-hidden="true">${esc(s.mark)}</span><span>${badge(contractNames[s.contract])}</span></div><div class="card-title"><h3><a href="systems/${s.id}/">${esc(s.name)}</a></h3><span class="card-language">${esc(s.languages.join(" · "))}</span></div><p class="card-summary">${esc(s.tagline)}</p><div class="card-evidence">${evidenceBadge(s)}${s.stage ? badge(s.stage, "quiet") : ""}</div><div class="card-bottom"><a class="profile-link" href="systems/${s.id}/">Read profile <span aria-hidden="true">↗</span></a><button class="compare-toggle" data-compare="${s.id}" aria-pressed="false" aria-label="Add ${esc(s.name)} to comparison">＋ Compare</button></div></article>`;
-}
+const questions = {
+  transaction: [
+    "Can the business write and job commit together?",
+    "Check the same-transaction API, database and connection. An after-commit hook can still leave a handoff gap.",
+  ],
+  recovery: [
+    "What happens when a worker disappears?",
+    "Look for the recovery mechanism, its delay and whether abandoned work is retried automatically.",
+  ],
+  concurrency: [
+    "How is running work claimed and coordinated?",
+    "Locks, leases and receipts protect different boundaries. Read what happens when an old worker returns.",
+  ],
+  scheduling: [
+    "Where does delayed and recurring work live?",
+    "Separate a delayed job from a persistent recurring schedule; inspect restart behavior and optional editions.",
+  ],
+  uniqueness: [
+    "What does deduplication actually protect?",
+    "An enqueue uniqueness key is different from preventing a repeated email or payment.",
+  ],
+  extension: [
+    "What must I install in PostgreSQL?",
+    "Verify the selected database path, optional extensions and the permissions your hosting provider allows.",
+  ],
+  ui: [
+    "How will I inspect and operate the queue?",
+    "Check the scope and licensing of dashboards, failed-job inspection and operational controls.",
+  ],
+};
 function home() {
+  return layout(
+    "Choose a Postgres job queue",
+    `
+<section class="container home-intro">${eyebrow("PostgreSQL-backed job systems")}<h1>Choose a Postgres<br>job queue.</h1><p class="lede">Start with your application. Compare the recovery behavior. Follow the evidence.</p><p class="intro-note">The shared database is the starting point. What matters is the contract around the work.</p></section>
+<section class="container journey-grid" aria-label="Where to start"><a class="journey primary" href="systems/"><span class="step-number">01 / CHOOSE</span><h2>Find a shortlist.</h2><p>Narrow by your language and the kind of work you need. See the fit and the caveats before the feature detail.</p><span class="journey-action">Find systems for your application <b aria-hidden="true">→</b></span></a><a class="journey" href="lab/"><span class="step-number">02 / UNDERSTAND</span><h2>Ask what can fail.</h2><p>Enqueue, worker recovery and external effects have different boundaries. Explore the one you need to protect.</p><span class="journey-action">Understand the guarantees <b aria-hidden="true">→</b></span></a><a class="journey" href="benchmarks/"><span class="step-number">03 / VERIFY</span><h2>Check the evidence.</h2><p>Separate a documented promise from a measured result. Build a fair test around your actual workload.</p><span class="journey-action">Plan a useful comparison <b aria-hidden="true">→</b></span></a></section>
+<section class="container starting-points"><div><h2>A good comparison starts with a question.</h2><p>Have two candidates already? Compare one operating decision at a time, with the qualifications and primary sources alongside it.</p><a class="button secondary" href="compare/">Compare two systems →</a></div><div class="question-list">${Object.entries(
+      questions,
+    )
+      .slice(0, 3)
+      .map(
+        ([id, [title]]) =>
+          `<a href="compare/?topic=${id}">${title}<span aria-hidden="true">↗</span></a>`,
+      )
+      .join("")}</div></section>
+<section class="container scope-note"><h2>What’s in this guide?</h2><p>${catalog.systems.length} selected systems, from application job frameworks to durable workflows and lower-level queues. ${adapterCount} have adapters in the benchmark repository. Adapter presence is not a current performance result.</p><a href="methodology/#coverage">See the coverage and limits →</a></section>`,
+  );
+}
+function card(s) {
+  return `<article class="system-card" data-system="${s.id}" data-evidence="${s.hasAdapter ? "adapter" : "docs"}"><div class="system-main"><div class="system-heading"><h3><a href="${s.id}/">${esc(s.name)}</a></h3>${s.stage ? badge(s.stage) : ""}</div><p class="system-kind">${esc(s.languages.join(" · "))} <span aria-hidden="true">/</span> ${contractNames[s.contract]}</p><p>${esc(s.tagline)}</p><details class="fit-disclosure"><summary>When to consider it</summary><p>${esc(s.fit)}</p><small>Editorial fit, based on the cited design. Verify against your workload.</small></details></div><div class="system-actions"><a class="profile-link" href="${s.id}/">Read profile →</a><button class="compare-toggle" data-compare="${s.id}" aria-pressed="false" aria-label="Add ${esc(s.name)} to comparison">＋ Shortlist</button></div></article>`;
+}
+function directory() {
   const languages = [
     ...new Set(catalog.systems.flatMap((s) => s.languages)),
   ].sort();
   return layout(
-    "Systems",
-    `<section class="container hero"><div>${eyebrow("A practical guide to Postgres-backed jobs")}<h1>Same database.<br><em>Different promises.</em></h1><p class="hero-copy">Choose a queue by the work it must protect. Explore job frameworks, durable workflows, visibility queues and event queues—with the evidence kept in view.</p><div class="hero-actions"><a class="button" href="#directory">Explore the systems <span aria-hidden="true">↓</span></a><a class="text-link" href="compare/">Compare semantics →</a></div></div><aside class="hero-aside"><div class="diagram-title"><span class="status-dot"></span> THE CONTRACT COMES FIRST</div><div class="contract-flow"><span>Application transaction</span><b aria-hidden="true">↓</b><div class="database-drawing">${logo}<span>PostgreSQL</span></div><div class="flow-split" aria-hidden="true"><span>↙</span><span>↘</span></div><div class="contract-pair"><span>Job execution<small>retry · recovery · completion</small></span><span>Event delivery<small>visibility · batch · cursor</small></span></div></div><p>A shared store does not make these the same abstraction.</p></aside></section><section class="container facts" aria-label="Coverage summary"><div><b>${catalog.systems.length}</b><span>systems in this guide</span></div><div><b>${adapterCount}</b><span>benchmark adapters</span></div><div><b>4</b><span>different system contracts</span></div><div class="fact-text"><b>No universal ranking.</b><span>Documentation, benchmark methods and simulations stay separate.</span></div></section><section class="container directory" id="directory"><div class="directory-heading"><div>${eyebrow("The directory")}<h2>Start with your constraints.</h2></div><a class="text-link" href="methodology/#coverage">What’s covered, and what isn’t ↗</a></div><form id="filters" class="filter-bar" role="search" aria-label="Filter systems"><div class="search-field"><label for="search">Search systems</label><input id="search" name="q" type="search" placeholder="Name, language or use case…" autocomplete="off"></div><div><label for="language">Language / SDK</label><select id="language"><option value="">All languages</option>${languages.map((l) => `<option>${esc(l)}</option>`).join("")}</select></div><div><label for="contract">Contract</label><select id="contract"><option value="">All contracts</option>${Object.entries(
+    "Find a system",
+    `
+<section class="container">${sectionHead("01 / Choose", "Find a shortlist.", "Start with the application you have and the work you need. These filters describe documented scope; they do not score or rank systems.")}
+<form id="filters" class="finder" role="search" aria-label="Find systems"><div class="finder-primary"><div><label for="language"><span>1</span> What language do you use?</label><select id="language"><option value="">Explore all languages</option>${languages.map((l) => `<option>${esc(l)}</option>`).join("")}</select></div><div><label for="contract"><span>2</span> What kind of work?</label><select id="contract"><option value="">Explore all kinds of work</option>${Object.entries(
       contractNames,
     )
       .map(([id, name]) => `<option value="${id}">${name}</option>`)
       .join(
         "",
-      )}</select></div><div><label for="evidence">Evidence</label><select id="evidence"><option value="">All evidence</option><option value="adapter">Adapter in this repo</option><option value="docs">Documentation only</option></select></div><button class="filter-reset" type="reset">Reset</button></form><div class="directory-count"><p id="result-count" role="status">${catalog.systems.length} systems · alphabetical order</p><span>Choose up to 4 to compare</span></div><div class="system-grid" id="system-grid">${catalog.systems.map(card).join("")}</div><div class="empty-state" id="empty-state" hidden><h3>No systems match those filters.</h3><p>Try another language or reset your filters. Documentation-only does not mean unsupported.</p><button class="button secondary" id="empty-reset">Reset filters</button></div><p class="fine-print">Language labels describe the inspected API/SDK surface, not equal maturity or feature parity across bindings. Read each profile’s scope and snapshot.</p></section><section class="evidence-band"><div class="container"><div>${eyebrow("Three kinds of evidence")}<h2>Know what you’re looking at.</h2><p>Each answers a different question. None replaces the others.</p></div><div class="evidence-grid"><a href="compare/">${badge("01 · Documented semantics", "documented")}<h3>What does the system promise?</h3><p>Primary docs and pinned source, with qualifiers and unknowns visible.</p><span>Compare contracts →</span></a><a href="benchmarks/">${badge("02 · Benchmark methodology", "measured")}<h3>How should we measure it?</h3><p>A reproducible harness, clear workload contracts and explicit operating limits. No stale leaderboard.</p><span>Inspect the evidence →</span></a><a href="lab/">${badge("03 · Teaching simulation", "simulation")}<h3>How can a failure unfold?</h3><p>Step through crash windows. These event models are not benchmark traces.</p><span>Open the failure lab →</span></a></div></div></section>`,
+      )}</select></div></div><details class="more-filters"><summary>Search by name or check adapter coverage</summary><div class="filter-extra"><div><label for="search">Name or keyword</label><input id="search" type="search" placeholder="e.g. PotatoQ" autocomplete="off"></div><div><label for="evidence">Repository coverage</label><select id="evidence"><option value="">All systems</option><option value="adapter">Has an adapter</option><option value="docs">Documentation only</option></select></div></div></details><button class="text-button" type="reset">Reset filters</button></form>
+<details class="contract-help"><summary>What’s the difference between these kinds of work?</summary><dl><dt>Job framework</dt><dd>Application handlers, scheduling and job lifecycle management.</dd><dt>Durable workflow</dt><dd>Multi-step work with persisted progress and replay/checkpoint boundaries.</dd><dt>Visibility queue</dt><dd>Messages hidden for a window, then acknowledged or made available again.</dd><dt>Event queue</dt><dd>Consumer cursors or batch acknowledgements around an event stream.</dd></dl><p>These are different contracts, rather than interchangeable implementations of one benchmark.</p></details>
+<div class="directory-heading"><h2>Your candidates</h2><p id="result-count" role="status">${catalog.systems.length} systems · alphabetical order</p></div><div id="system-grid" class="system-grid">${catalog.systems.map(card).join("")}</div><div class="empty-state" id="empty-state" hidden><h2>No systems match.</h2><p>Try another language or kind of work. A missing match is not evidence that a project cannot support your application.</p><button id="empty-reset" class="button">Reset filters</button></div><p class="fine-print">Choose up to two systems to compare. SDK labels describe the inspected surface, not equal maturity or feature parity. <a href="../methodology/#coverage">Read the scope.</a></p></section>`,
+    "../",
+    "systems",
   );
 }
 function profile(s) {
-  const sources = s.sources
-    .map(
-      (src) =>
-        `<li id="source-${esc(src.id)}"><span class="source-kind">${esc(src.kind || "Primary source")}</span><a href="${esc(src.url)}" target="_blank" rel="noopener noreferrer">${esc(src.label)} ↗</a></li>`,
-    )
-    .join("");
   const rows = Object.entries(features)
     .map(([id, label]) => {
       const f = s.features[id];
-      return `<div class="feature-row"><div><h3>${label}</h3><span class="feature-status ${f.status}">${f.badge || statusNames[f.status]}</span></div><div><p>${esc(f.text)}</p><div class="inline-sources">${f.sources.map((id) => sourceLink(s, id)).join(" ")}</div></div></div>`;
+      return `<details class="feature-detail" id="${id}"><summary><span>${questions[id][0]}</span><span class="feature-status ${f.status}">${esc(f.badge || statusNames[f.status])}</span></summary><div class="detail-body"><h3>${label}</h3><p>${esc(f.text)}</p><div class="inline-sources">${f.sources.map((id) => sourceLink(s, id)).join(" ")}</div></div></details>`;
     })
     .join("");
   return layout(
     s.name,
-    `<section class="container profile-hero"><a class="back-link" href="../../">← All systems</a><div class="profile-top"><div><div class="profile-badges">${badge(contractNames[s.contract])}${evidenceBadge(s)}${s.stage ? badge(s.stage, "quiet") : ""}</div><h1>${esc(s.name)}</h1><p class="lede">${esc(s.tagline)}</p></div><span class="system-monogram large" style="--system-color:${esc(s.color)}" aria-hidden="true">${esc(s.mark)}</span></div><div class="profile-actions"><a class="button" href="${esc(s.upstream)}">Canonical upstream ↗</a><button class="button secondary compare-toggle" data-compare="${s.id}" aria-pressed="false" aria-label="Add ${esc(s.name)} to comparison">＋ Compare</button></div><div class="profile-meta"><div><span>API / SDK surface</span><b>${esc(s.languages.join(" · "))}</b></div><div><span>Inspected snapshot</span><b>${esc(s.snapshot.label)}</b></div><div><span>Sources checked</span><b>${esc(catalog.checked)}</b></div><div><span>License at snapshot</span><b>${esc(s.license || "Not verified")}</b></div></div><p class="snapshot-note">${sourceLink(s, s.snapshot.source, "View pinned source / version")} ${s.snapshot.commit ? `<code>${esc(s.snapshot.commit.slice(0, 12))}</code>` : ""} · ${esc(s.snapshot.note || "Documentation describes the cited snapshot; it is not a claim about every release.")}</p></section><div class="container profile-layout"><div><section class="profile-section"><h2>What this system is built around</h2><p>${esc(s.summary)}</p><div class="fit-note"><span class="eyebrow">A useful starting point</span><p>${esc(s.fit)}</p><small>Editorial fit, based on the cited design. Verify against your workload.</small></div></section><section class="profile-section"><h2>Semantics & operating model</h2><p class="section-intro">Concise claims with their scope intact. “Not verified” means this review did not establish the answer.</p>${rows}</section><section class="profile-section"><h2>Tradeoffs to carry into a test</h2><ul class="tradeoffs">${s.caveats.map((c) => `<li><p>${esc(c.text)}</p>${(c.sources || []).map((id) => sourceLink(s, id)).join(" ")}</li>`).join("")}</ul></section></div><aside class="profile-sidebar"><section class="side-panel"><h3>Evidence in this repository</h3>${s.hasAdapter ? `<p>This repository has an adapter for ${esc(s.name)}. No current comparative measurements are published on this site; adapter versions and configuration must be checked before a new run.</p><a href="${repoSource((s.id === "pg-boss" ? "pgboss" : s.id) + "-bench/adapter.json")}">Inspect the adapter source ↗</a>` : `<p>Documentation-only coverage. No adapter or benchmark measurement for ${esc(s.name)} is presented here. Upstream performance claims are not imported as measurements.</p>`}</section><section class="side-panel"><h3>External effects still need a boundary</h3><p>${esc(s.effectBoundary || "Enqueue atomicity and claim ownership do not by themselves make an external email, payment or API request exactly once. Design those effects for recovery and duplicate execution.")}</p><div class="inline-sources">${(s.effectSources || []).map((id) => sourceLink(s, id)).join(" ")}</div><a href="../../lab/">Explore a failure window →</a></section><section class="side-panel"><h3>Open source & editions</h3><p>${esc(s.commercial || "Only the cited upstream scope is reviewed.")}</p><div class="inline-sources">${(s.commercialSources || []).map((id) => sourceLink(s, id)).join(" ")}</div></section><section class="side-panel source-panel"><h3>Primary sources</h3><ol>${sources}</ol></section></aside></div>`,
+    `<section class="container profile-hero"><a class="back-link" href="../">← Find a system</a><p class="eyebrow">${esc(s.languages.join(" · "))} / ${contractNames[s.contract]}</p><h1>${esc(s.name)}</h1><p class="lede">${esc(s.tagline)}</p><div class="profile-actions"><button class="button compare-toggle" data-compare="${s.id}" aria-pressed="false" aria-label="Add ${esc(s.name)} to comparison">＋ Shortlist</button><a class="text-link" href="${esc(s.upstream)}">Project upstream ↗</a>${s.stage ? badge(s.stage) : ""}</div></section>
+<div class="container profile-layout"><div><section class="profile-section"><h2>Is it a fit?</h2><p>${esc(s.summary)}</p><div class="fit-note"><h3>Consider it when…</h3><p>${esc(s.fit)}</p><small>Editorial fit, based on the cited design. Verify against your workload.</small></div></section><section class="profile-section"><h2>Carry these tradeoffs into a test.</h2><ul class="tradeoffs">${s.caveats.map((c) => `<li><p>${esc(c.text)}</p><details class="evidence-detail"><summary>Evidence</summary>${c.sources.map((id) => sourceLink(s, id)).join(" ")}</details></li>`).join("")}</ul></section><section class="profile-section"><h2>Then check the operating contract.</h2><p>Open the questions that matter to your application. A qualified answer retains its limits; an unknown is an evidence gap.</p>${rows}</section></div><aside class="profile-sidebar"><section class="side-panel"><h2>External effects</h2><p>${esc(s.effectBoundary)}</p><details class="evidence-detail"><summary>Follow the sources</summary>${s.effectSources.map((id) => sourceLink(s, id)).join(" ")}</details><a href="../../lab/#effects">Understand this boundary →</a></section><section class="side-panel"><h2>What evidence is here?</h2>${s.hasAdapter ? `<p>An adapter exists in the repository. This site presents no current comparative measurements for ${esc(s.name)}.</p><a href="${repoSource((s.id === "pg-boss" ? "pgboss" : s.id) + "-bench/adapter.json")}">Inspect the adapter ↗</a>` : `<p>Documentation-only coverage. No adapter or benchmark measurement for ${esc(s.name)} is presented here.</p>`}</section><section class="side-panel"><h2>Open source & editions</h2><p>${esc(s.commercial)}</p><details class="evidence-detail"><summary>Follow the sources</summary>${s.commercialSources.map((id) => sourceLink(s, id)).join(" ")}</details></section></aside></div>
+<section class="container provenance"><details><summary>Source revision, release scope and primary references</summary><p><strong>${esc(s.snapshot.label)}</strong> · ${esc(s.license)} · Checked ${esc(catalog.checked)}</p><p>${sourceLink(s, s.snapshot.source, "Pinned source")} <code>${esc(s.snapshot.commit.slice(0, 12))}</code></p><p>${esc(s.snapshot.note)}</p><ol class="source-list">${s.sources.map((src) => `<li id="source-${esc(src.id)}"><span class="source-kind">${esc(src.kind)}</span><a href="${esc(src.url)}" target="_blank" rel="noopener noreferrer">${esc(src.label)} ↗</a></li>`).join("")}</ol></details></section>`,
     "../../",
     "systems",
   );
 }
 function compare() {
   return layout(
-    "Compare semantics",
-    `<section class="container">${sectionHead("Documentation comparison", "Compare the promises.", "Pick up to four systems. Read the qualification before treating any capability as equivalent. These are documentation/source claims, not benchmark results.")}<div class="notice neutral"><b>Compare mechanisms, not checkmarks.</b><p>Uniqueness at enqueue, protection of a running attempt and provider idempotency solve different problems. “Qualified” retains limits; “Not verified” is an evidence gap.</p></div><fieldset class="system-picker"><legend>Choose systems <span id="selection-count"></span></legend><div id="compare-options">${catalog.systems.map((s) => `<label><input type="checkbox" name="compare-system" value="${s.id}"><span>${esc(s.name)}</span></label>`).join("")}</div><div class="picker-actions"><button id="clear-comparison" class="text-button">Clear selection</button><button id="copy-comparison" class="text-button">Copy comparison link</button><span id="compare-status" role="status"></span></div></fieldset><div id="comparison-table" class="comparison-shell" role="region" aria-label="System comparison" tabindex="0"></div><p class="fine-print">The extension row describes the selected PostgreSQL path. Optional extensions, other databases and proprietary additions are noted in the cells. Sources checked ${catalog.checked}.</p></section>`,
+    "Compare two systems",
+    `<section class="container">${sectionHead("One question at a time", "Compare the operating contract.", "Choose two candidates, then explore a decision. These are documented semantics with sources, not measured rankings.")}
+<form class="pair-picker" aria-label="Choose comparison systems"><div><label for="system-a">First system</label><select id="system-a"><option value="">Choose a candidate…</option>${catalog.systems.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select></div><div><label for="system-b">Second system</label><select id="system-b"><option value="">Choose a candidate…</option>${catalog.systems.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select></div></form>
+<div class="comparison-question"><label for="compare-topic">What do you need to understand?</label><select id="compare-topic">${Object.keys(
+      questions,
+    )
+      .map((id) => `<option value="${id}">${features[id]}</option>`)
+      .join(
+        "",
+      )}</select><h2 id="topic-question"></h2><p id="topic-context"></p></div><div id="comparison-table" class="comparison-shell" aria-live="polite"></div><div class="picker-actions"><button id="clear-comparison" class="text-button">Clear choices</button><button id="copy-comparison" class="text-button">Copy comparison link</button><span id="compare-status" role="status"></span></div><div class="reading-next"><h2>What would change your decision?</h2><p>Read the qualifications, check the SDK you will use, then test the recovery and workload you expect to operate.</p><a href="../benchmarks/">Plan a fair measurement →</a></div></section>`,
     "../",
     "compare",
   );
 }
+function lab() {
+  return layout(
+    "Understand failures",
+    `<section class="container">${sectionHead("02 / Understand", "Where does the guarantee end?", "Three boundaries are easy to conflate. Start with the failure you need to reason about, then inspect a concrete example.")}
+<div class="boundary-list"><article id="enqueue"><span class="step-number">01 / HANDOFF</span><h2>Can an order commit without its job?</h2><p>A shared database transaction can join the business write and enqueue. Separate commits leave a crash window between them. Check the API and connection you actually use.</p><div class="boundary-actions"><a class="button" href="awa.html?experiment=handoff">Explore the handoff in Awa →</a><a href="../compare/?topic=transaction">Compare transaction support</a></div></article><article id="recovery"><span class="step-number">02 / RECOVERY</span><h2>What happens after a worker disappears?</h2><p>Claiming work is only part of the contract. Recovery might wait for a timeout, need maintenance, or record abandoned work as failed. A returning old worker can overlap a new attempt.</p><div class="boundary-actions"><a class="button" href="awa.html?experiment=fence">Explore a late worker in Awa →</a><a href="../compare/?topic=recovery">Compare recovery mechanisms</a></div></article><article id="effects"><span class="step-number">03 / EXTERNAL EFFECT</span><h2>Could one job send two emails?</h2><p>An email can succeed before job completion is recorded. Recovery can repeat the request. Enqueue uniqueness and claim ownership do not themselves provide provider idempotency.</p><div class="boundary-actions"><a class="button" href="awa.html?experiment=replay">Explore replay in Awa →</a><a href="../compare/?topic=uniqueness">Compare what deduplication covers</a></div></article></div>
+<details class="reading-notes"><summary>A fourth example: an acknowledged claim that is not durable yet</summary><p>Awa’s inspected development implementation uses asynchronous commits for queue-storage claims. Its acknowledged claim can be lost in a local PostgreSQL crash before its WAL flush. This is a specific durability boundary, not a general claim about other queues.</p><a href="awa.html?experiment=wal">Explore the lost-claim model →</a></details><div class="scope-note"><h2>What these lessons establish</h2><p>The Awa examples are deterministic teaching models grounded in <a href="https://github.com/hardbyte/awa/tree/b9341ae5718f06aa6c176d7107c3642015aa4133">development source b9341ae5</a>. They compress waits and omit production interleavings. They do not measure recovery time or establish another system’s behavior.</p><p>Inspired by <a href="https://brooker.co.za/blog/2026/10/23/animations.html">Marc Brooker’s systems animations</a>. Original diagrams, prose and code; no article assets are reused.</p></div></section>`,
+    "../",
+    "lab",
+  );
+}
+
 function benchmarks() {
   return layout(
     "Benchmarking",
@@ -144,14 +213,6 @@ function sources() {
     "sources",
   );
 }
-function lab() {
-  return layout(
-    "Failure lab",
-    `<section class="container">${sectionHead("Pedagogical simulation · Awa-specific", "Make the failure window visible.", "Change one assumption, inject a crash and step through what follows. This is an original deterministic teaching model, grounded in Awa source; it is not a measured benchmark or a claim about another system.")}<div class="lab-intro"><div><h2>One order. Four boundaries.</h2><p>Transactional enqueue, replayed external effects, a stale worker returning late, and an acknowledged claim lost before its WAL flush.</p></div><a class="button" href="awa.html">Open full lab ↗</a></div><div class="notice neutral"><b>Model snapshot: Awa @ b9341ae5.</b><p>Assumptions and source links are inside the lab. Playback time is event order, not production latency. Repository adapter pins must be checked separately.</p></div><iframe class="lab-frame" src="awa.html" title="Interactive Awa failure windows simulation" loading="lazy"></iframe><p class="fine-print">Inspired by <a href="https://brooker.co.za/blog/2026/10/23/animations.html">Marc Brooker’s systems animations</a>. The diagrams, prose and code are original; no article assets are reused.</p></section>`,
-    "../",
-    "lab",
-  );
-}
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
 function write(file, content) {
@@ -160,6 +221,7 @@ function write(file, content) {
   fs.writeFileSync(target, content);
 }
 write("index.html", home());
+write("systems/index.html", directory());
 write("compare/index.html", compare());
 write("benchmarks/index.html", benchmarks());
 write("methodology/index.html", methodology());
@@ -173,10 +235,13 @@ fs.cpSync(path.join(__dirname, "assets"), path.join(out, "assets"), {
 write(
   "data/catalog.js",
   "window.QUEUE_GUIDE=" +
-    JSON.stringify({ catalog, features, contractNames, statusNames }).replace(
-      /</g,
-      "\\u003c",
-    ) +
+    JSON.stringify({
+      catalog,
+      features,
+      contractNames,
+      statusNames,
+      questions,
+    }).replace(/</g, "\\u003c") +
     ";\n",
 );
 write("data/catalog.json", JSON.stringify(catalog, null, 2) + "\n");
@@ -193,5 +258,5 @@ write(
   ),
 );
 console.log(
-  `Built ${catalog.systems.length + 8} static HTML pages; ${catalog.systems.length} profiles`,
+  `Built ${catalog.systems.length + 9} static HTML pages; ${catalog.systems.length} profiles`,
 );

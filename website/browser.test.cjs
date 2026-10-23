@@ -4,52 +4,53 @@ const path = require("node:path");
 const http = require("node:http");
 const { chromium } = require("playwright");
 const { AxeBuilder } = require("@axe-core/playwright");
-const out = path.join(__dirname, "dist"),
-  artifacts = path.join(__dirname, "artifacts");
-const basePath = "/postgresql-job-queue-benchmarking/";
 const catalog = JSON.parse(
   fs.readFileSync(path.join(__dirname, "data/catalog.json")),
 );
-const externalRequests = [],
-  errors = [],
-  badResponses = [],
-  a11y = [];
-const contentTypes = {
-  ".html": "text/html",
-  ".css": "text/css",
-  ".js": "text/javascript",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-};
+const artifacts = path.join(__dirname, "artifacts");
+const project = "/postgresql-job-queue-benchmarking/";
 (async () => {
   fs.mkdirSync(artifacts, { recursive: true });
+  const errors = [],
+    badResponses = [],
+    externalRequests = [],
+    axe = [],
+    journeys = [];
   const server = http.createServer((req, res) => {
-    const pathname = new URL(req.url, "http://localhost").pathname;
-    if (!pathname.startsWith(basePath)) {
-      res.writeHead(404);
-      res.end();
+    const url = new URL(req.url, "http://local.invalid");
+    if (!url.pathname.startsWith(project)) {
+      res.writeHead(404).end();
       return;
     }
-    let file = path.join(
-      out,
-      decodeURIComponent(pathname.slice(basePath.length)),
-    );
+    const relative = decodeURIComponent(url.pathname.slice(project.length));
+    const root = path.join(__dirname, "dist");
+    let file = path.resolve(root, relative || ".");
+    if (!file.startsWith(root + path.sep) && file !== root) {
+      res.writeHead(404).end();
+      return;
+    }
     if (fs.existsSync(file) && fs.statSync(file).isDirectory())
       file = path.join(file, "index.html");
-    if (!file.startsWith(out) || !fs.existsSync(file)) {
-      res.writeHead(404);
-      res.end();
+    if (!fs.existsSync(file)) {
+      res.writeHead(404).end();
       return;
     }
-    res.writeHead(200, {
-      "Content-Type":
-        contentTypes[path.extname(file)] || "application/octet-stream",
-    });
-    fs.createReadStream(file).pipe(res);
+    res.setHeader(
+      "Content-Type",
+      {
+        ".html": "text/html",
+        ".js": "text/javascript",
+        ".css": "text/css",
+        ".json": "application/json",
+        ".svg": "image/svg+xml",
+      }[path.extname(file)] || "application/octet-stream",
+    );
+    res.end(fs.readFileSync(file));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const localBase = `http://127.0.0.1:${server.address().port}${basePath}`;
-  const base = process.env.SITE_URL || localBase;
+  const base =
+    process.env.SITE_URL ||
+    `http://127.0.0.1:${server.address().port}${project}`;
   const browser = await chromium.launch({
     headless: true,
     ...(process.env.BROWSER_EXECUTABLE
@@ -59,256 +60,331 @@ const contentTypes = {
   try {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 1000 },
-      reducedMotion: "reduce",
     });
     const page = await context.newPage();
-    page.on("pageerror", (e) => errors.push(e.message));
-    page.on("console", (m) => {
-      if (m.type() === "error") errors.push(m.text());
-    });
-    page.on("response", (r) => {
-      if (r.status() >= 400) badResponses.push(`${r.status()} ${r.url()}`);
-    });
-    await context.route("**/*", (route) => {
-      const request = new URL(route.request().url());
-      if (request.origin === new URL(base).origin) return route.continue();
-      externalRequests.push(request.href);
-      return route.abort();
-    });
-    async function go(relative = "") {
-      const response = await page.goto(new URL(relative, base).href);
-      assert.equal(response.status(), 200);
-      await page.locator("h1").first().waitFor();
-    }
-    async function noOverflow(label) {
-      assert.equal(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth > innerWidth,
-        ),
-        false,
-        label + " overflows",
+    const observe = (p) => {
+      p.on("pageerror", (e) => errors.push(e.message));
+      p.on("response", (r) => {
+        if (r.url().startsWith(base) && r.status() >= 400)
+          badResponses.push({ url: r.url(), status: r.status() });
+      });
+      p.on("request", (r) => {
+        if (/^https?:/.test(r.url()) && !r.url().startsWith(base))
+          externalRequests.push(r.url());
+      });
+    };
+    observe(page);
+    async function noOverflow(p, label) {
+      const dimensions = await p.evaluate(() => ({
+        scroll: document.documentElement.scrollWidth,
+        width: document.documentElement.clientWidth,
+      }));
+      assert.ok(
+        dimensions.scroll <= dimensions.width + 1,
+        `${label}: ${JSON.stringify(dimensions)}`,
       );
     }
-    async function axe(label) {
-      const result = await new AxeBuilder({ page })
+    async function scan(p, label) {
+      const result = await new AxeBuilder({ page: p })
         .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
         .analyze();
-      a11y.push({
-        page: label,
-        violations: result.violations.map((x) => ({
-          id: x.id,
-          impact: x.impact,
-          description: x.description,
-          nodes: x.nodes.map((n) => n.target),
+      axe.push({ page: label, violations: result.violations });
+      assert.deepEqual(
+        result.violations.map((v) => ({
+          id: v.id,
+          nodes: v.nodes.map((n) => n.target),
         })),
-      });
+        [],
+        label,
+      );
     }
-    await go();
-    assert.equal(await page.locator(".system-card:visible").count(), 14);
+    await page.goto(base);
+    await page.locator(".journey").first().waitFor();
+    assert.equal(await page.locator(".journey").count(), 3);
+    assert.equal(await page.locator(".system-card").count(), 0);
+    await scan(page, "start desktop");
     await page.screenshot({
-      path: path.join(artifacts, "desktop-directory.png"),
+      path: path.join(artifacts, "desktop-start.png"),
       fullPage: true,
     });
-    await axe("directory");
-    await page.getByLabel("Search systems", { exact: true }).fill("potato");
-    assert.equal(await page.locator(".system-card:visible").count(), 1);
-    assert.match(await page.locator("#result-count").textContent(), /1 system/);
-    await page.locator("#search").fill("<script>missing");
-    assert.equal(await page.locator(".system-card:visible").count(), 0);
-    assert.equal(await page.locator("#empty-state").isVisible(), true);
-    await page.locator("#empty-reset").click();
-    await page.waitForFunction(
-      () =>
-        [...document.querySelectorAll(".system-card")].filter((x) => !x.hidden)
-          .length === 14,
-    );
-    assert.equal(await page.locator(".system-card:visible").count(), 14);
-    await page.locator("#evidence").selectOption("adapter");
-    assert.equal(await page.locator(".system-card:visible").count(), 8);
-    await page.locator("#evidence").selectOption("docs");
-    assert.equal(await page.locator(".system-card:visible").count(), 6);
-    await page.getByRole("button", { name: "Reset", exact: true }).click();
-    await page.waitForFunction(
-      () =>
-        [...document.querySelectorAll(".system-card")].filter((x) => !x.hidden)
-          .length === 14,
-    );
-    await page.locator("#contract").selectOption("event");
-    assert.equal(await page.locator(".system-card:visible").count(), 2);
-    await page.getByRole("button", { name: "Reset", exact: true }).click();
-    await page.waitForFunction(
-      () =>
-        [...document.querySelectorAll(".system-card")].filter((x) => !x.hidden)
-          .length === 14,
-    );
+    await page.keyboard.press("Tab");
+    assert.equal(await page.locator(":focus").textContent(), "Skip to content");
+    await page.keyboard.press("Enter");
+    assert.equal(await page.locator(":focus").getAttribute("id"), "main");
+    await page.locator(".journey.primary").click();
     await page.locator("#language").selectOption("Python");
-    assert.equal(
-      await page.locator(".system-card[data-system=potatoq]").isVisible(),
-      true,
-    );
-    assert.equal(
-      await page.locator(".system-card[data-system=oban]").isVisible(),
-      false,
-    );
-    await page.getByRole("button", { name: "Reset", exact: true }).click();
-    await page.waitForFunction(
-      () =>
-        [...document.querySelectorAll(".system-card")].filter((x) => !x.hidden)
-          .length === 14,
-    );
-    for (const id of ["awa", "pg-boss", "potatoq", "river"])
-      await page.locator(`[data-compare="${id}"]`).click();
-    assert.equal(await page.locator("[data-compare=oban]").isDisabled(), true);
+    assert.ok((await page.locator(".system-card:visible").count()) > 0);
+    await page.locator("#contract").selectOption("job");
+    await page.locator(".more-filters summary").click();
+    await page.locator("#search").fill("potatoq");
+    assert.equal(await page.locator(".system-card:visible").count(), 1);
+    await page
+      .locator(".fit-disclosure summary")
+      .filter({ visible: true })
+      .first()
+      .click();
+    await page.locator(".system-card:visible .profile-link").click();
+    await page.locator("h1").filter({ hasText: "PotatoQ" }).waitFor();
+    assert.equal(await page.locator(".feature-detail").count(), 7);
+    assert.equal(await page.locator(".feature-detail[open]").count(), 0);
+    await page.locator(".profile-actions [data-compare]").click();
     await page.locator("#tray-link").click();
-    await page.locator(".comparison-table").waitFor();
-    assert.match(page.url(), /compare\//);
-    assert.equal(await page.locator(".comparison-table thead th").count(), 5);
+    await page.locator("#system-a").waitFor();
+    assert.equal(await page.locator("#system-a").inputValue(), "potatoq");
+    await page.locator("#system-b").selectOption("solid-queue");
+    await page.locator("#compare-topic").selectOption("recovery");
+    await page.locator(".comparison-card").nth(1).waitFor();
+    assert.equal(await page.locator(".comparison-card").count(), 2);
     assert.match(
-      await page.locator(".comparison-table").textContent(),
-      /not implemented|not.*implement|wishlist/i,
+      await page.locator(".comparison-card").nth(1).textContent(),
+      /not automatically retried/,
     );
+    await page.locator(".evidence-detail summary").first().click();
+    assert.ok(
+      (await page
+        .locator(".comparison-card")
+        .first()
+        .locator('a[href^="https:"]')
+        .count()) > 0,
+    );
+    await scan(page, "comparison recovery evidence");
     await page.screenshot({
       path: path.join(artifacts, "desktop-comparison.png"),
       fullPage: true,
     });
-    await axe("comparison");
-    await page.locator("#clear-comparison").click();
-    assert.match(
-      await page.locator("#comparison-table").textContent(),
-      /Choose a system/,
-    );
-    await page.getByLabel("PotatoQ", { exact: true }).check();
-    await page.getByLabel("Solid Queue", { exact: true }).check();
-    assert.equal(await page.locator(".comparison-table thead th").count(), 3);
-    await page.screenshot({
-      path: path.join(artifacts, "desktop-potatoq-solid-queue.png"),
-      fullPage: true,
-    });
-    for (const s of catalog.systems) {
-      await go(`systems/${s.id}/`);
-      assert.equal(await page.locator("h1").textContent(), s.name);
-      assert.equal(await page.locator(".feature-row").count(), 7);
-      await noOverflow(s.id);
-      await axe(s.id);
+    for (const topic of Object.keys(catalog.systems[0].features)) {
+      await page.locator("#compare-topic").selectOption(topic);
+      assert.equal(await page.locator(".comparison-card").count(), 2);
+      assert.ok(new URL(page.url()).searchParams.get("topic") === topic);
     }
-    await go("systems/potatoq/");
-    assert.match(await page.locator(".profile-badges").textContent(), /Alpha/);
-    await page.screenshot({
-      path: path.join(artifacts, "desktop-potatoq.png"),
-      fullPage: true,
-    });
-    await go("benchmarks/");
-    assert.equal(await page.locator(".adapter-grid article").count(), 8);
+    await page.reload();
+    assert.equal(await page.locator("#system-b").inputValue(), "solid-queue");
+    await page.evaluate(() =>
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (value) => {
+            window.copiedComparison = value;
+          },
+        },
+      }),
+    );
+    await page.locator("#copy-comparison").click();
+    await page.waitForFunction(() =>
+      /copied|address/.test(
+        document.getElementById("compare-status").textContent,
+      ),
+    );
     assert.match(
-      await page.locator(".notice.warning").textContent(),
-      /No new benchmark/,
+      await page.locator("#compare-status").textContent(),
+      /copied|address/,
     );
-    await axe("benchmarking");
-    await go("methodology/");
-    await page.getByRole("link", { name: "Coverage", exact: true }).click();
-    assert.match(page.url(), /#coverage$/);
-    await axe("methodology");
-    await go("sources/");
-    assert.equal(await page.locator(".sources-index>section").count(), 14);
-    await axe("sources");
-    await go("lab/");
-    const frame = page.frameLocator("iframe");
-    await frame.locator("[data-chapter=replay]").click();
-    await frame.locator("#position").focus();
-    await frame.locator("#position").press("End");
-    assert.equal(await frame.locator("#stat-effects").textContent(), "2");
-    await axe("lab");
+    await page.locator("#clear-comparison").click();
+    assert.equal(await page.locator(".comparison-card").count(), 0);
+    assert.equal(new URL(page.url()).searchParams.get("systems"), null);
+    await page.goto(base + "systems/");
+    await page.locator(".more-filters summary").click();
+    await page.locator("#search").fill("nothing-exists-327");
+    await page.locator("#empty-state").waitFor({ state: "visible" });
+    await page.locator("#empty-reset").click();
+    await page.locator(".system-card").last().waitFor({ state: "visible" });
+    assert.equal(await page.locator(".system-card:visible").count(), 14);
+    await page.locator('[data-compare="potatoq"]').click();
+    await page.locator('[data-compare="que"]').click();
+    assert.equal(await page.locator('[data-compare="awa"]').isDisabled(), true);
+    await page.locator('[data-compare="que"]').click();
+    await page.locator('[data-compare="awa"]').click();
+    await page.locator("#tray-clear").click();
+    await scan(page, "finder desktop");
     await page.screenshot({
-      path: path.join(artifacts, "desktop-failure-lab.png"),
+      path: path.join(artifacts, "desktop-finder.png"),
       fullPage: true,
     });
-    await go();
-    await page.keyboard.press("Tab");
-    assert.equal(
-      await page.evaluate(() => document.activeElement.className),
-      "skip",
+    journeys.push(
+      "home → language/work filters → PotatoQ fit/profile → pair → recovery evidence → seven questions → reload/share/clear",
     );
-    await page.keyboard.press("Enter");
-    assert.equal(await page.evaluate(() => document.activeElement.id), "main");
-    for (const width of [390, 768]) {
-      await page.setViewportSize({ width, height: 844 });
-      await go();
-      await noOverflow("directory " + width);
-      await page.screenshot({
-        path: path.join(artifacts, `directory-${width}.png`),
-        fullPage: true,
-      });
-      if (width === 390) {
-        await page.locator("#nav-toggle").click();
+    for (const system of catalog.systems) {
+      await page.goto(base + "systems/" + system.id + "/");
+      assert.equal(await page.locator("h1").textContent(), system.name);
+      await page.locator("#recovery summary").click();
+      assert.ok(
+        (await page.locator("#recovery .detail-body").textContent()).includes(
+          system.features.recovery.text,
+        ),
+      );
+      await scan(page, "profile " + system.id);
+      await noOverflow(page, system.id);
+    }
+    for (const slug of ["benchmarks", "methodology", "sources", "lab"]) {
+      await page.goto(base + slug + "/");
+      await scan(page, slug);
+      await noOverflow(page, slug);
+    }
+    await page.goto(base + "compare/?systems=awa,pgmq&topic=concurrency");
+    await page.locator(".contract-warning").waitFor();
+    await scan(page, "different contracts");
+    const phone = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const mobile = await phone.newPage();
+    observe(mobile);
+    for (const [width, height] of [
+      [360, 800],
+      [390, 844],
+      [412, 915],
+      [844, 390],
+    ]) {
+      await mobile.setViewportSize({ width, height });
+      await mobile.goto(base);
+      await noOverflow(mobile, `start ${width}x${height}`);
+      if (await mobile.locator("#nav-toggle").isVisible()) {
+        await mobile.locator("#nav-toggle").click();
         assert.equal(
-          await page.locator("#nav-toggle").getAttribute("aria-expanded"),
+          await mobile.locator("#nav-toggle").getAttribute("aria-expanded"),
           "true",
         );
-        await page
-          .getByRole("navigation", { name: "Main navigation" })
-          .getByRole("link", { name: "Compare", exact: true })
-          .click();
-        assert.match(page.url(), /compare/);
-        await noOverflow("comparison mobile");
-        await axe("comparison mobile");
-        await page.screenshot({
+        await mobile.keyboard.press("Escape");
+        assert.equal(
+          await mobile.locator("#nav-toggle").getAttribute("aria-expanded"),
+          "false",
+        );
+      }
+      await mobile.locator(".journey.primary").click();
+      await mobile.locator("#language").selectOption("Ruby");
+      await mobile.locator("#language").selectOption("");
+      await mobile.locator('[data-compare="potatoq"]').click();
+      await mobile.locator('[data-compare="solid-queue"]').click();
+      await mobile.locator("#tray-link").click();
+      await mobile.locator("#compare-topic").selectOption("recovery");
+      await mobile.locator(".comparison-card").nth(1).waitFor();
+      await noOverflow(mobile, `compare ${width}x${height}`);
+      await mobile.locator(".evidence-detail summary").nth(1).click();
+      await mobile.locator(".evidence-detail summary").nth(1).click();
+      await mobile.locator("#compare-topic").selectOption("transaction");
+      await mobile.locator("#compare-topic").selectOption("recovery");
+      if (width === 390) {
+        await scan(mobile, "comparison 390");
+        await mobile.screenshot({
           path: path.join(artifacts, "mobile-comparison.png"),
           fullPage: true,
         });
       }
-      await go("systems/potatoq/");
-      await noOverflow("potatoq " + width);
-      await page.screenshot({
-        path: path.join(artifacts, `potatoq-${width}.png`),
-        fullPage: true,
-      });
-      await axe("potatoq " + width);
+      await mobile.goto(base + "lab/");
+      await mobile.locator('a[href="awa.html?experiment=replay"]').click();
+      await mobile
+        .locator('[data-chapter="replay"][aria-pressed="true"]')
+        .waitFor();
+      assert.equal(
+        await mobile.locator(".state-details").getAttribute("open"),
+        null,
+      );
+      async function finish() {
+        for (
+          let n = 0;
+          n < 30 && !(await mobile.locator("#next").isDisabled());
+          n++
+        )
+          await mobile.locator("#next").click();
+      }
+      await finish();
+      assert.equal(await mobile.locator("#mobile-effects").textContent(), "2");
+      await mobile.locator("#reset").click();
+      assert.equal(await mobile.locator("#mobile-effects").textContent(), "0");
+      await mobile.locator(".setup-panel summary").click();
+      await mobile.locator("#option-provider").selectOption("key");
+      await mobile.locator(".setup-panel summary").click();
+      await finish();
+      assert.equal(await mobile.locator("#mobile-effects").textContent(), "1");
+      assert.equal(await mobile.locator("#stat-calls").textContent(), "2");
+      await mobile.locator(".state-details summary").click();
+      await mobile.locator("#effect-node").waitFor({ state: "visible" });
+      await mobile.locator(".state-details summary").click();
+      await noOverflow(mobile, `lesson ${width}x${height}`);
+      if (width === 390) {
+        await scan(mobile, "lesson phone");
+        await mobile.screenshot({
+          path: path.join(artifacts, "mobile-lesson.png"),
+          fullPage: true,
+        });
+      }
+      await mobile.goto(
+        base + "compare/?systems=potatoq,solid-queue&topic=recovery",
+      );
+      await mobile.locator("#clear-comparison").click();
+      journeys.push(
+        `phone/landscape ${width}x${height}: menu, repeated filters, shortlist, comparison questions/evidence, replay/provider key/reset/state inspection`,
+      );
     }
+    await mobile.setViewportSize({ width: 390, height: 844 });
+    for (const slug of [
+      "",
+      "systems/",
+      "compare/?systems=potatoq,solid-queue&topic=recovery",
+      "lab/awa.html?experiment=replay",
+    ]) {
+      await mobile.goto(base + slug);
+      await mobile.evaluate(
+        () => (document.documentElement.style.fontSize = "200%"),
+      );
+      await noOverflow(mobile, "200% text " + slug);
+    }
+    const cdp = await phone.newCDPSession(mobile);
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 2 });
+    await mobile.locator("#next").focus();
+    await mobile.keyboard.press("Space");
+    assert.notEqual(
+      await mobile.locator("#step-count").textContent(),
+      "EVENT 00 / 09",
+    );
+    await mobile.screenshot({ path: path.join(artifacts, "mobile-zoom.png") });
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+    journeys.push(
+      "200% text reflow on home/finder/comparison/lesson; 2× page scale and keyboard step interaction",
+    );
+    await mobile.goto(base);
+    await scan(mobile, "start 390");
+    await mobile.screenshot({ path: path.join(artifacts, "mobile-start.png") });
+    await mobile.locator(".journey.primary").click();
+    await scan(mobile, "finder 390");
+    await mobile.screenshot({
+      path: path.join(artifacts, "mobile-finder.png"),
+      fullPage: true,
+    });
+    await mobile.goto(base + "compare/");
+    await mobile.evaluate(() => localStorage.clear());
+    await mobile.goto(base + "compare/");
+    assert.equal(await mobile.locator(".comparison-card").count(), 0);
+    await mobile.locator("#system-a").selectOption("potatoq");
+    await mobile.locator("#system-b").selectOption("solid-queue");
+    await mobile.locator("#compare-topic").selectOption("recovery");
+    await scan(mobile, "comparison fresh 390");
     assert.deepEqual(errors, []);
     assert.deepEqual(badResponses, []);
     assert.deepEqual(externalRequests, []);
-    const violations = a11y.filter((x) => x.violations.length);
     const report = {
       base,
       browser: browser.version(),
-      profiles: catalog.systems.length,
-      axe: a11y,
+      profiles: 14,
+      axe,
+      journeys,
       errors,
       badResponses,
       externalRequests,
-      checks: [
-        "14 profiles",
-        "7 sourced comparison fields",
-        "search/language/contract/coverage filters",
-        "4-system selection cap",
-        "query navigation",
-        "empty states",
-        "source/provenance",
-        "lab frame controls",
-        "desktop/390/768",
-        "skip link keyboard",
-        "WCAG2.1AA axe",
-        "project-site base paths",
-        "no runtime external requests",
-      ],
     };
     fs.writeFileSync(
       path.join(artifacts, "browser-report.json"),
       JSON.stringify(report, null, 2) + "\n",
     );
-    assert.deepEqual(
-      violations,
-      [],
-      "Accessibility violations saved in browser-report.json",
-    );
     console.log(
-      `Browser QA passed: ${catalog.systems.length} profiles, ${a11y.length} axe scans, interactions, mobile and base paths. Browser ${browser.version()}`,
+      `Browser QA passed: 14 profiles, ${axe.length} axe scans; complete mobile journeys, 360/390/412 portrait, 844×390 landscape and 200% text/2× page scale. Browser ${browser.version()}`,
     );
   } finally {
     await browser.close();
     await new Promise((resolve) => server.close(resolve));
   }
-})().catch((e) => {
-  console.error(e);
+})().catch((error) => {
+  console.error(error);
   process.exitCode = 1;
 });

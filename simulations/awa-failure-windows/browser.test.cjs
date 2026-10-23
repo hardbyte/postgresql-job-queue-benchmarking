@@ -38,6 +38,12 @@ const failures = [],
     });
     await page.goto(url);
     await page.getByRole("heading", { level: 1 }).waitFor();
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    );
     await page.screenshot({
       path: join(output, "desktop-start.png"),
       fullPage: true,

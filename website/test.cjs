@@ -75,7 +75,7 @@ test("contract distinctions and important unknown/conditional claims remain expl
 test("static build includes every profile, relative navigation and the canonical lab", () => {
   build();
   const out = path.join(__dirname, "dist");
-  assert.equal(walk(out).filter((f) => f.endsWith(".html")).length, 22);
+  assert.equal(walk(out).filter((f) => f.endsWith(".html")).length, 23);
   for (const s of catalog.systems) {
     const html = fs.readFileSync(
       path.join(out, "systems", s.id, "index.html"),

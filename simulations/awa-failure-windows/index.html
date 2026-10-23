@@ -761,6 +761,328 @@
           transition: none !important;
         }
       }
+
+      .event {
+        margin: 0;
+        border-radius: 0;
+        background: #eef3e8;
+        border-bottom: 1px solid var(--line);
+      }
+      .state-details > summary {
+        display: none;
+      }
+      .mobile-state {
+        display: none;
+      }
+      .setup-panel {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #eef1e7;
+        overflow: hidden;
+      }
+      .setup-panel > summary {
+        padding: 14px 18px;
+        min-height: 48px;
+        font-size: 0.9rem;
+        font-weight: 650;
+      }
+      .setup-panel .setup {
+        border: 0;
+        padding-top: 5px;
+      }
+      .setup-panel .setup > .eyebrow {
+        display: none;
+      }
+      .transport {
+        border-top: 0;
+      }
+      .control,
+      .transport select {
+        min-height: 44px;
+      }
+      @media (max-width: 760px), (max-height: 500px) and (max-width: 1000px) {
+        :root {
+          font-size: 16px;
+        }
+        .wrap {
+          padding: 16px;
+        }
+        .masthead {
+          margin-bottom: 20px;
+        }
+        .masthead .pill {
+          font-size: 0.58rem;
+          max-width: 190px;
+          white-space: normal;
+          text-align: right;
+          border: 0;
+          padding: 0;
+        }
+        .brand {
+          font-size: 1.1rem;
+        }
+        .brand svg {
+          width: 25px;
+        }
+        .intro {
+          margin-bottom: 20px;
+          display: block;
+        }
+        .intro h1 {
+          font-size: 2.2rem;
+          max-width: 16ch;
+        }
+        .intro p:not(.eyebrow) {
+          font-size: 0.9rem;
+          margin-top: 12px;
+          max-width: 45ch;
+        }
+        .intro p br {
+          display: none;
+        }
+        .chapters {
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+          margin-bottom: 14px;
+        }
+        .chapter {
+          min-height: 46px;
+          font-size: 0.81rem;
+          padding: 10px;
+        }
+        .experiment {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 14px;
+        }
+        .sidebar {
+          display: contents;
+        }
+        .setup-panel {
+          grid-row: 1;
+        }
+        .setup-panel summary {
+          padding: 12px 15px;
+          font-size: 0.86rem;
+        }
+        .setup {
+          display: block;
+          padding: 5px 15px 16px;
+        }
+        .setup label {
+          margin-top: 10px;
+          font-size: 0.86rem;
+        }
+        .setup select {
+          min-height: 48px;
+          font-size: 1rem;
+          padding: 10px;
+        }
+        .setup small {
+          font-size: 0.77rem;
+        }
+        .stage {
+          grid-row: 2;
+        }
+        .insight {
+          grid-row: 3;
+          margin-top: 0;
+          padding: 18px;
+        }
+        .insight p {
+          font-size: 0.92rem;
+        }
+        .stage-head {
+          padding: 17px 16px 14px;
+          display: block;
+        }
+        .stage-head h2 {
+          font-size: 1.2rem;
+        }
+        .stage-head p {
+          font-size: 0.85rem;
+        }
+        .step-label {
+          display: block;
+          margin-top: 10px;
+          font-size: 0.7rem;
+        }
+        .event {
+          padding: 16px;
+          grid-template-columns: 1fr;
+          gap: 5px;
+          min-height: 0;
+        }
+        .event .time {
+          display: none;
+        }
+        .event h3 {
+          font-size: 1rem;
+        }
+        .event p {
+          font-size: 0.92rem;
+          line-height: 1.55;
+        }
+        .event a {
+          display: inline-block;
+          padding: 10px 0 0;
+          font-size: 0.76rem;
+          overflow-wrap: anywhere;
+        }
+        .mobile-state {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          padding: 5px 16px;
+          gap: 0 20px;
+          background: #fff;
+        }
+        .mobile-state > div {
+          display: flex;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 10px 0;
+          border-bottom: 1px solid var(--line);
+          font-size: 0.78rem;
+        }
+        .mobile-state span {
+          color: var(--muted);
+        }
+        .mobile-state b {
+          font-size: 0.8rem;
+        }
+        .transport {
+          display: grid;
+          grid-template-columns: 1fr 44px 1fr 1fr;
+          gap: 7px;
+          padding: 15px 12px 7px;
+        }
+        .control {
+          padding: 9px 7px;
+          font-size: 0.85rem;
+          min-height: 46px;
+        }
+        .control.primary {
+          min-width: 0;
+        }
+        .transport label {
+          grid-column: 1/-1;
+          margin: 0;
+          justify-content: flex-end;
+          min-height: 44px;
+          font-size: 0.78rem;
+        }
+        .transport select {
+          min-width: 65px;
+          font-size: 0.9rem;
+        }
+        .scrubber {
+          padding: 0 16px 12px;
+        }
+        .scrubber input {
+          height: 36px;
+          margin: 0;
+        }
+        .scrub-labels {
+          font-size: 0.65rem;
+        }
+        .scrub-labels span:nth-child(2) {
+          display: none;
+        }
+        .state-details {
+          border-top: 1px solid var(--line);
+        }
+        .state-details > summary {
+          display: list-item;
+          margin-left: 30px;
+          padding: 14px 16px 14px 0;
+          min-height: 48px;
+          font-size: 0.82rem;
+        }
+        .scene {
+          padding: 16px;
+        }
+        .lanes {
+          grid-template-columns: 1fr;
+          gap: 14px;
+        }
+        .lane-title {
+          font-size: 0.72rem;
+          height: auto;
+          margin-bottom: 7px;
+        }
+        .node {
+          min-height: 0;
+          padding: 14px;
+        }
+        .node-name {
+          font-size: 0.92rem;
+        }
+        .node-state {
+          font-size: 0.86rem;
+          min-height: 0;
+        }
+        .node .eyebrow {
+          font-size: 0.65rem;
+        }
+        .mini,
+        .worker-row,
+        .db-row {
+          font-size: 0.8rem;
+        }
+        .stats {
+          display: none;
+        }
+        .flow {
+          display: none;
+        }
+        .trail {
+          margin-top: 6px;
+        }
+        .trail button {
+          min-height: 44px;
+          font-size: 0.74rem;
+        }
+        .notes {
+          display: block;
+          font-size: 0.86rem;
+        }
+        .notes details {
+          margin-bottom: 16px;
+        }
+        .notes summary {
+          padding: 10px 0;
+          min-height: 44px;
+        }
+      }
+      @media (max-width: 760px), (max-height: 500px) and (max-width: 1000px) {
+        .intro > p {
+          display: none;
+        }
+        .intro .eyebrow {
+          font-size: 0.65rem;
+          letter-spacing: 0.08em;
+          margin-bottom: 8px;
+        }
+        .intro h1 {
+          font-size: 2rem;
+        }
+        .intro {
+          margin-bottom: 17px;
+        }
+      }
+      @media (max-width: 760px), (max-height: 500px) and (max-width: 1000px) {
+        .transport {
+          display: flex;
+          flex-wrap: wrap;
+        }
+        .transport button {
+          flex: 1 0 auto;
+        }
+        .transport label {
+          width: 100%;
+          flex: none;
+        }
+      }
     </style>
   </head>
   <body>
@@ -814,68 +1136,20 @@
               </div>
               <span id="step-count" class="label step-label"></span>
             </div>
-            <div class="scene" id="scene">
-              <div class="lanes">
-                <div>
-                  <div class="lane-title"><span>01</span> Application</div>
-                  <div id="app-node" class="node">
-                    <div class="eyebrow">Order #42</div>
-                    <div class="node-name" id="app-name"></div>
-                    <div class="node-state" id="app-state"></div>
-                    <div class="mini" id="app-detail"></div>
-                  </div>
-                </div>
-                <div>
-                  <div class="lane-title"><span>02</span> PostgreSQL</div>
-                  <div id="db-node" class="node">
-                    <div class="eyebrow">Logical database view</div>
-                    <div class="db-row">
-                      <span>order</span><b id="order-state"></b>
-                    </div>
-                    <div class="db-row">
-                      <span>job J42</span><b id="job-state"></b>
-                    </div>
-                    <div class="mini" id="db-detail"></div>
-                  </div>
-                </div>
-                <div>
-                  <div class="lane-title"><span>03</span> Workers</div>
-                  <div id="worker-node" class="node">
-                    <div class="eyebrow">Execution can repeat</div>
-                    <div class="worker-row">
-                      <b>Worker A</b><span id="worker-a"></span>
-                    </div>
-                    <div class="worker-row">
-                      <b>Worker B</b><span id="worker-b"></span>
-                    </div>
-                    <div class="mini" id="worker-detail"></div>
-                  </div>
-                </div>
-                <div>
-                  <div class="lane-title"><span>04</span> External system</div>
-                  <div id="effect-node" class="node">
-                    <div class="eyebrow">Outside the DB transaction</div>
-                    <div class="node-name">Send order email</div>
-                    <div class="node-state" id="effect-state"></div>
-                    <div class="mini" id="effect-detail"></div>
-                  </div>
-                </div>
+            <section class="event" aria-live="polite" aria-atomic="true">
+              <div class="time" id="event-time"></div>
+              <div>
+                <h3 id="event-title"></h3>
+                <p id="event-body"></p>
+                <a id="event-source" href="#"></a>
               </div>
-              <div class="flow"><span id="flow-label"></span></div>
-              <div id="pulse" class="pulse" aria-hidden="true"></div>
-            </div>
-            <div class="stats" aria-label="Simulation counters">
-              <div class="stat">
-                <b id="stat-runs">0</b><span>handler starts, all time</span>
-              </div>
-              <div class="stat">
-                <b id="stat-calls">0</b><span>external requests</span>
-              </div>
-              <div class="stat" id="effects-stat">
-                <b id="stat-effects">0</b><span>emails actually sent</span>
-              </div>
-              <div class="stat">
-                <b id="stat-rejected">0</b><span>stale writes rejected</span>
+            </section>
+            <div class="mobile-state" aria-label="Current model state">
+              <div><span>Job</span><b id="mobile-job"></b></div>
+              <div><span>Handler starts</span><b id="mobile-runs"></b></div>
+              <div><span>Emails sent</span><b id="mobile-effects"></b></div>
+              <div>
+                <span>Rejected writes</span><b id="mobile-rejected"></b>
               </div>
             </div>
             <div class="transport">
@@ -902,16 +1176,88 @@
                 ><span>Outcome</span>
               </div>
             </div>
+            <details class="state-details" open>
+              <summary>Inspect the application, database and workers</summary>
+              <div class="scene" id="scene">
+                <div class="lanes">
+                  <div>
+                    <div class="lane-title"><span>01</span> Application</div>
+                    <div id="app-node" class="node">
+                      <div class="eyebrow">Order #42</div>
+                      <div class="node-name" id="app-name"></div>
+                      <div class="node-state" id="app-state"></div>
+                      <div class="mini" id="app-detail"></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div class="lane-title"><span>02</span> PostgreSQL</div>
+                    <div id="db-node" class="node">
+                      <div class="eyebrow">Logical database view</div>
+                      <div class="db-row">
+                        <span>order</span><b id="order-state"></b>
+                      </div>
+                      <div class="db-row">
+                        <span>job J42</span><b id="job-state"></b>
+                      </div>
+                      <div class="mini" id="db-detail"></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div class="lane-title"><span>03</span> Workers</div>
+                    <div id="worker-node" class="node">
+                      <div class="eyebrow">Execution can repeat</div>
+                      <div class="worker-row">
+                        <b>Worker A</b><span id="worker-a"></span>
+                      </div>
+                      <div class="worker-row">
+                        <b>Worker B</b><span id="worker-b"></span>
+                      </div>
+                      <div class="mini" id="worker-detail"></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div class="lane-title">
+                      <span>04</span> External system
+                    </div>
+                    <div id="effect-node" class="node">
+                      <div class="eyebrow">Outside the DB transaction</div>
+                      <div class="node-name">Send order email</div>
+                      <div class="node-state" id="effect-state"></div>
+                      <div class="mini" id="effect-detail"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="flow"><span id="flow-label"></span></div>
+                <div id="pulse" class="pulse" aria-hidden="true"></div>
+              </div>
+              <div class="stats" aria-label="Simulation counters">
+                <div class="stat">
+                  <b id="stat-runs">0</b><span>handler starts, all time</span>
+                </div>
+                <div class="stat">
+                  <b id="stat-calls">0</b><span>external requests</span>
+                </div>
+                <div class="stat" id="effects-stat">
+                  <b id="stat-effects">0</b><span>emails actually sent</span>
+                </div>
+                <div class="stat">
+                  <b id="stat-rejected">0</b><span>stale writes rejected</span>
+                </div>
+              </div>
+            </details>
           </section>
           <aside class="sidebar">
-            <form class="setup" id="setup">
-              <p class="eyebrow">Change the experiment</p>
-              <div id="options"></div>
-              <small
-                >Changing a setting rewinds the model. Nothing connects to a
-                database or sends an email.</small
-              >
-            </form>
+            <details class="setup-panel" open>
+              <summary>Change one assumption</summary>
+              <form class="setup" id="setup">
+                <p class="eyebrow">Change the experiment</p>
+                <div id="options"></div>
+                <small
+                  >Changing a setting rewinds the model. Nothing connects to a
+                  database or sends an email.</small
+                >
+              </form>
+            </details>
             <div class="insight">
               <p class="eyebrow">Watch for this</p>
               <p id="lesson"></p>
@@ -919,14 +1265,6 @@
             </div>
           </aside>
         </div>
-        <section class="event" aria-live="polite" aria-atomic="true">
-          <div class="time" id="event-time"></div>
-          <div>
-            <h3 id="event-title"></h3>
-            <p id="event-body"></p>
-            <a id="event-source" href="#"></a>
-          </div>
-        </section>
         <div
           id="trail"
           class="trail"
@@ -1606,8 +1944,13 @@
       (() => {
         const M = globalThis.AwaLab;
         const $ = (id) => document.getElementById(id);
-        let chapter = "handoff",
-          config = { ...M.defaults.handoff },
+        const requested = new URLSearchParams(location.search).get(
+          "experiment",
+        );
+        let chapter = Object.hasOwn(M.definitions, requested)
+            ? requested
+            : "handoff",
+          config = { ...M.defaults[chapter] },
           frames = [],
           index = 0,
           timer = null;
@@ -1673,6 +2016,12 @@
             config.provider === "key"
               ? "stable operation key:\norder:42:email"
               : "no provider deduplication";
+          $("mobile-job").textContent = s.pendingJob
+            ? "uncommitted"
+            : labels[s.job];
+          $("mobile-runs").textContent = s.runs;
+          $("mobile-effects").textContent = s.effects;
+          $("mobile-rejected").textContent = s.rejected;
           $("stat-runs").textContent = s.runs;
           $("stat-calls").textContent = s.calls;
           $("stat-effects").textContent = s.effects;
@@ -1847,6 +2196,19 @@
           a.textContent = path;
           li.append(a, document.createTextNode(" — " + description + "."));
           $("sources").append(li);
+        }
+        for (const button of document.querySelectorAll("[data-chapter]"))
+          button.setAttribute(
+            "aria-pressed",
+            String(button.dataset.chapter === chapter),
+          );
+        if (
+          matchMedia(
+            "(max-width: 760px), (max-height: 500px) and (max-width: 1000px)",
+          ).matches
+        ) {
+          document.querySelector(".state-details").open = false;
+          document.querySelector(".setup-panel").open = false;
         }
         options();
         rebuild();
