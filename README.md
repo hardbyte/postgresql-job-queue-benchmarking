@@ -16,6 +16,8 @@ Both share the same philosophy: **fair, reproducible, public-API-only**. Each sy
 
 ## The job-queue bench
 
+[Postgres Queue Field Guide](website/README.md) — a source-grounded comparison website covering 14 selected systems, including PotatoQ, with browsable profiles, semantics comparisons, methodology and an [interactive Awa failure lab](simulations/awa-failure-windows/README.md). The website keeps current documentation and teaching simulations separate from benchmark claims.
+
 A closed-loop harness: producers enqueue at a controlled rate, workers claim and complete, the harness measures the loop under steady state, sustained pressure, and chaos.
 
 ### What the latest run found

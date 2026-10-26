@@ -1,0 +1,59 @@
+name: Comparison website checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "website/**"
+      - "simulations/awa-failure-windows/**"
+      - ".github/workflows/website-pages.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: comparison-website-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Validate and package the static website
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install browser-check dependencies
+        run: npm --prefix website ci
+      - name: Lint
+        run: npm --prefix website run lint
+      - name: Test
+        run: node --test --test-isolation=none website/test.cjs
+      - name: Test the interactive model
+        run: node --test --test-isolation=none simulations/awa-failure-windows/model.test.cjs
+      - name: Build
+        run: node website/build.cjs
+      - name: Select runner Chrome
+        run: |
+          chrome_path="$(command -v google-chrome)"
+          test -x "$chrome_path"
+          "$chrome_path" --version
+          echo "BROWSER_EXECUTABLE=$chrome_path" >> "$GITHUB_ENV"
+      - name: Browser and accessibility checks
+        run: npm --prefix website run browser
+      - name: Direct-action model browser checks
+        env:
+          PLAYWRIGHT_MODULE: ${{ github.workspace }}/website/node_modules/playwright
+        run: node simulations/awa-failure-windows/browser.test.cjs
+      - name: Retain a downloadable build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: comparison-website-${{ github.sha }}
+          path: website/dist
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
