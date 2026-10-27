@@ -112,6 +112,67 @@ const output = join(__dirname, "artifacts"),
         label,
       );
     }
+    async function sourceLinks() {
+      const links = await page.locator('a[href^="https://"]').evaluateAll(
+        (anchors) =>
+          anchors.map((anchor) => ({
+            href: anchor.href,
+            target: anchor.target,
+            rel: anchor.rel.split(/\s+/),
+          })),
+      );
+      assert.ok(links.length > 3);
+      for (const link of links) {
+        assert.equal(link.target, "_blank", link.href);
+        assert.ok(link.rel.includes("noopener"), link.href);
+        assert.ok(link.rel.includes("noreferrer"), link.href);
+      }
+      const sourceRoute = "https://github.com/hardbyte/awa/**";
+      await context.route(sourceRoute, (route) => {
+        assert.equal(route.request().headers().referer, undefined);
+        return route.fulfill({
+          contentType: "text/html",
+          body: "<!doctype html><title>Source fixture</title><p>Source content</p>",
+        });
+      });
+      try {
+        for (const selector of [
+          "#action-source",
+          "#event-log a",
+          "#revision-link",
+          "#sources a",
+        ]) {
+          const link = page.locator(selector).first();
+          await link.evaluate((anchor) => {
+            const details = anchor.closest("details");
+            if (details) details.open = true;
+          });
+          const before = {
+            url: page.url(),
+            job: await page.locator("#job-status").textContent(),
+            deliveries: await page.locator("#delivery-count").textContent(),
+          };
+          const opening = context.waitForEvent("page");
+          await link.click();
+          const popup = await opening;
+          await popup.getByText("Source content", { exact: true }).waitFor();
+          assert.equal(popup.url(), await link.getAttribute("href"));
+          assert.equal(await popup.evaluate(() => window.opener), null);
+          assert.deepEqual(
+            {
+              url: page.url(),
+              job: await page.locator("#job-status").textContent(),
+              deliveries: await page.locator("#delivery-count").textContent(),
+            },
+            before,
+          );
+          await popup.close();
+        }
+      } finally {
+        await context.unroute(sourceRoute);
+      }
+      checks.push("external source links open without opener/referrer and preserve the lesson");
+    }
     await page.goto(url);
     await page.locator("#action").waitFor();
     await paint();
@@ -124,6 +185,7 @@ const output = join(__dirname, "artifacts"),
         await trial(key, where);
         checks.push(`${key ? "key" : "no key"} / stop ${where}`);
       }
+    await sourceLinks();
     assert.equal(await page.locator("#runs .run").count(), 4);
     await page.locator("#action").click();
     assert.equal(await page.locator("#provider-key").isChecked(), false);
@@ -178,6 +240,7 @@ const output = join(__dirname, "artifacts"),
         `${width}x${height}: direct failure/recovery, provider comparison, stable mailbox, touch targets`,
       );
       if (width === 390) {
+        await sourceLinks();
         await page.screenshot({
           path: join(output, "mobile-key.png"),
           fullPage: true,
