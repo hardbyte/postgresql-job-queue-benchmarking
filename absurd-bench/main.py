@@ -202,6 +202,8 @@ def build_app(
 
     @app.register_task(TASK_NAME)
     async def bench_job(params: dict, _ctx) -> None:
+        if controls is not None and controls.is_abandon(params):
+            await controls.hold_if_abandoning()
         if controls is not None and controls.is_tagged(params):
             run_at_ms = params.get("run_at_ms")
             if run_at_ms is not None:
@@ -217,7 +219,7 @@ def build_app(
             if work_ms > 0:
                 await asyncio.sleep(work_ms / 1000.0)
             controls.on_complete(params)
-            if run_at_ms is None:
+            if controls.counts_as_completion(params):
                 completed_counter[0] += 1
             return
         started_at_ms = int(time.time() * 1000)
@@ -245,7 +247,7 @@ async def installed_schema_version() -> str:
     return row[0]
 
 
-async def recreate_queue(queue_name: str) -> None:
+async def recreate_queue(queue_name: str, *, keep_existing: bool = False) -> None:
     loop = asyncio.get_running_loop()
     app = build_app(
         queue_name,
@@ -256,7 +258,8 @@ async def recreate_queue(queue_name: str) -> None:
         work_ms=0,
     )
     try:
-        await app.drop_queue()
+        if not keep_existing:
+            await app.drop_queue()
         await app.create_queue()
     finally:
         await app.close()
@@ -312,11 +315,12 @@ async def scenario_long_horizon() -> None:
 
     ensure_schema()
     schema_version = await installed_schema_version()
+    controls = ScenarioControls()
     for queue in queues:
-        await recreate_queue(queue)
+        # A replacement fleet must find the claims the killed fleet held.
+        await recreate_queue(queue, keep_existing=controls.abandon_enabled)
 
     db_name = database_url().rsplit("/", 1)[-1]
-    controls = ScenarioControls()
     spawn_options = (
         json.dumps({"max_attempts": controls.max_attempts})
         if controls.max_attempts is not None
@@ -330,6 +334,10 @@ async def scenario_long_horizon() -> None:
         "version": f"absurd-sdk {ABSURD_SDK_VERSION}",
         "schema_version": schema_version,
         "db_name": db_name,
+        "abandon_rescue": (
+            "claim timeout, expired claims failed and retried by the next "
+            "claim_task (CLAIM_TIMEOUT_SECS)"
+        ),
         "started_at": now_iso(),
     }
     if controls.schedule_enabled:
@@ -455,6 +463,7 @@ async def scenario_long_horizon() -> None:
                         "enqueued_at_ms": enqueued_at_ms,
                         "payload_padding": padding,
                         **controls.failure_tag(seq),
+                        **controls.abandon_tag(),
                     }
                 )
 
@@ -476,6 +485,7 @@ async def scenario_long_horizon() -> None:
             for _ in batch:
                 producer_latencies_ms.append((sample_ts, per_job_ms))
             enqueued += len(batch)
+            controls.record_abandon_tagged(sum("abandon" in item for item in batch))
 
             if producer_mode == "fixed":
                 next_t += len(batch) / max(target_rate, 1)
@@ -636,6 +646,7 @@ async def scenario_long_horizon() -> None:
     ]
 
     await shutdown.wait()
+    controls.exit_if_holding()
     for app in worker_apps:
         app.stop_worker()
     for task in tasks:

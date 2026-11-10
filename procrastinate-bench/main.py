@@ -184,7 +184,6 @@ def build_worker(queue: str, worker_count: int, *, wait: bool):
         concurrency=worker_count,
         wait=wait,
         fetch_job_polling_interval=0.05,
-        abort_job_polling_interval=0.05,
         listen_notify=True,
         delete_jobs="never",
         install_signal_handlers=False,
@@ -318,6 +317,12 @@ async def scenario_long_horizon() -> None:
     producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 1))
     producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
+    # Rescue for jobs left in `doing` by a SIGKILLed worker. Procrastinate
+    # retries them only through application code: this is the documented
+    # "retry stalled jobs" periodic task, enabled when the knob is set.
+    stalled_after_s = env_int("STALLED_AFTER_SECS", 0)
+    stalled_sweep_cron = "* * * * * */10"
+
     queue = "procrastinate_longhorizon_bench"
     # BENCH_QUEUE_COUNT queues (queue 0 keeps the legacy name). One worker
     # serves all of them, procrastinate's native multi-queue model.
@@ -347,6 +352,12 @@ async def scenario_long_horizon() -> None:
             "version": "0.1.0",
             "schema_version": os.environ.get("PROCRASTINATE_SCHEMA_VERSION", "current"),
             "db_name": db_name,
+            "abandon_rescue": (
+                "retry-stalled-jobs periodic task every 10 s: get_stalled_jobs + "
+                "retry_job, worker heartbeat 5 s (STALLED_AFTER_SECS)"
+                if stalled_after_s > 0
+                else "none"
+            ),
             "started_at": _now_iso(),
         }
     )
@@ -386,6 +397,7 @@ async def scenario_long_horizon() -> None:
         fail: str | None = None,
         fail_attempts: int = 1,
         run_at_ms: int | None = None,
+        abandon: int | None = None,
     ) -> None:
         nonlocal completed
         tags = {
@@ -394,10 +406,13 @@ async def scenario_long_horizon() -> None:
                 ("fail", fail),
                 ("fail_attempts", fail_attempts),
                 ("run_at_ms", run_at_ms),
+                ("abandon", abandon),
             )
             if value is not None
         }
-        tagged = fail is not None or run_at_ms is not None
+        tagged = fail is not None or run_at_ms is not None or abandon is not None
+        if abandon is not None:
+            await controls.hold_if_abandoning()
         if tagged:
             controls.on_start(tags)
             controls.check_failure(tags, attempt=context.job.attempts + 1)
@@ -411,23 +426,45 @@ async def scenario_long_horizon() -> None:
             latencies_ms.append((time.monotonic(), latency_ms))
         if work_ms:
             await asyncio.sleep(work_ms / 1000.0)
-        if run_at_ms is None:
+        if controls.counts_as_completion(tags):
             completed += 1
         if tagged:
             controls.on_complete(tags)
 
+    worker_queues = list(queues)
+    if stalled_after_s > 0:
+        maint_queue = f"{queue}_maint"
+        worker_queues.append(maint_queue)
+
+        # Documented recipe (howto/production/retry_stalled_jobs). The `lock`
+        # serialises sweeps so a slow sweep never overlaps the next one and
+        # re-retries a job that has since been picked up again.
+        @lh_app.periodic(cron=stalled_sweep_cron, periodic_id="retry_stalled_jobs")
+        @lh_app.task(
+            queue=maint_queue,
+            name="retry_stalled_jobs",
+            queueing_lock="retry_stalled_jobs",
+            lock="retry_stalled_jobs",
+            pass_context=True,
+        )
+        async def retry_stalled_jobs(context, timestamp: int) -> None:
+            stalled_jobs = await lh_app.job_manager.get_stalled_jobs(
+                seconds_since_heartbeat=stalled_after_s
+            )
+            for job in stalled_jobs:
+                await lh_app.job_manager.retry_job(job)
+
     async with lh_app.open_async():
         worker = lh_app._worker(
-            queues=queues,
+            queues=worker_queues,
             concurrency=worker_count,
             wait=True,
             fetch_job_polling_interval=0.05,
-            abort_job_polling_interval=0.05,
             listen_notify=True,
             delete_jobs="never",
             install_signal_handlers=False,
             update_heartbeat_interval=5,
-            stalled_worker_timeout=15,
+            stalled_worker_timeout=stalled_after_s if stalled_after_s > 0 else 15,
         )
         shutdown = asyncio.Event()
 
@@ -496,29 +533,28 @@ async def scenario_long_horizon() -> None:
                         rate_credit -= batch_count
                 deferrer = deferrers[batch_index % len(deferrers)]
                 batch_index += 1
+                kwargs_list = [
+                    {
+                        "seq": seq + i,
+                        "created_at_iso": _now_iso(),
+                        **extra,
+                        **controls.failure_tag(seq + i),
+                        **controls.abandon_tag(),
+                    }
+                    for i in range(batch_count)
+                ]
                 try:
                     if batch_count == 1:
-                        await deferrer.defer_async(
-                            seq=seq,
-                            created_at_iso=_now_iso(),
-                            **extra,
-                            **controls.failure_tag(seq),
-                        )
+                        await deferrer.defer_async(**kwargs_list[0])
                     else:
                         # Documented bulk path: `Task.batch_defer_async`
                         # (procrastinate.tasks.Task line 143). Issues a single
                         # multi-row INSERT via JobManager.batch_defer_jobs_async.
                         # Docs: https://procrastinate.readthedocs.io/en/stable/howto/advanced/batch.html
-                        kwargs_list = [
-                            {
-                                "seq": seq + i,
-                                "created_at_iso": _now_iso(),
-                                **extra,
-                                **controls.failure_tag(seq + i),
-                            }
-                            for i in range(batch_count)
-                        ]
                         await deferrer.batch_defer_async(*kwargs_list)
+                    controls.record_abandon_tagged(
+                        sum("abandon" in kwargs for kwargs in kwargs_list)
+                    )
                     enqueued += batch_count
                     seq += batch_count
                 except Exception as exc:
@@ -637,6 +673,7 @@ async def scenario_long_horizon() -> None:
             await shutdown.wait()
         finally:
             shutdown.set()
+            controls.exit_if_holding()
             for t in tasks:
                 t.cancel()
             if worker_started:

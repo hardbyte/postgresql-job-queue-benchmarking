@@ -328,6 +328,10 @@ async def scenario_long_horizon() -> None:
     # push this to 1000+ via the env var.
     producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 128))
     producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
+    # While holding abandoned claims, ask next_batch_custom for at least this
+    # many events so one open batch can carry the hold target (it merges
+    # ticks); unset keeps the one-tick batches.
+    hold_batch_min = env_int("SUBSCRIBER_BATCH_SIZE", 0)
 
     db_name = database_url().rsplit("/", 1)[-1]
     controls = ScenarioControls()
@@ -360,6 +364,10 @@ async def scenario_long_horizon() -> None:
         "version": os.environ.get("PGQUE_VERSION", "0.2.0"),
         "schema_version": os.environ.get("PGQUE_SCHEMA_VERSION", "v0.2.0"),
         "db_name": db_name,
+        "abandon_rescue": (
+            "open batch redelivered to the same consumer name on restart, "
+            "no timeout (BENCH_INSTANCE_ID)"
+        ),
         "started_at": _now_iso(),
     }
     if controls.schedule_enabled:
@@ -566,6 +574,7 @@ async def scenario_long_horizon() -> None:
                             "created_at": _now_iso(),
                             "padding": padding,
                             **controls.failure_tag(seq),
+                            **controls.abandon_tag(),
                         }
                     )
                 )
@@ -609,6 +618,9 @@ async def scenario_long_horizon() -> None:
                     producer_latencies_ms.append((sample_ts, per_msg_ms))
                 producer_call_latencies_ms.append((sample_ts, elapsed_ms))
                 enqueued += batch_count
+                controls.record_abandon_tagged(
+                    sum('"abandon"' in payload for payload in payloads)
+                )
             except Exception as exc:
                 print(f"[pgque] producer send failed: {exc}", file=sys.stderr)
                 # Connection is most likely dead (chaos:
@@ -693,7 +705,8 @@ async def scenario_long_horizon() -> None:
             if work_ms:
                 await asyncio.sleep(work_ms / 1000.0)
             controls.on_complete(msg)
-            completed += 1
+            if controls.counts_as_completion(msg):
+                completed += 1
 
     async def process_one(msg: dict) -> None:
         nonlocal completed
@@ -744,7 +757,14 @@ async def scenario_long_horizon() -> None:
             while not shutdown.is_set():
                 try:
                     async with consumer_conn.cursor() as cur:
-                        if subconsumer is not None:
+                        if subconsumer is not None and hold_batch_min > 0 and controls.holding:
+                            await cur.execute(
+                                "SELECT batch_id FROM pgque.next_batch_custom("
+                                "%s, %s, %s, '0 ms'::interval, %s, NULL::interval"
+                                ")",
+                                (queue_name, CONSUMER_NAME, subconsumer, hold_batch_min),
+                            )
+                        elif subconsumer is not None:
                             # next_batch_custom returns (batch_id,
                             # prev_tick_id, next_tick_id) — only
                             # batch_id is needed. min_lag/min_count/
@@ -799,7 +819,7 @@ async def scenario_long_horizon() -> None:
                     async with consumer_conn.cursor() as cur:
                         await cur.execute(
                             "SELECT ev_id, ev_data, ev_retry FROM pgque.get_batch_events(%s)"
-                            if controls.failure_enabled
+                            if controls.failure_enabled or controls.abandon_enabled
                             else "SELECT ev_id, ev_data FROM pgque.get_batch_events(%s)",
                             (batch_id,),
                         )
@@ -808,6 +828,12 @@ async def scenario_long_horizon() -> None:
                     print(f"[pgque] get_batch_events failed: {exc}", file=sys.stderr)
                     await consumer_conn.reconnect()
                     rows = []
+
+                if rows and controls.holding and any(
+                    controls.is_abandon(_message(r)) for r in rows
+                ):
+                    # The open batch is the claim: hold all of it.
+                    await controls.hold_if_abandoning(len(rows))
 
                 if rows:
                     if fail_mode == "nack-always":
@@ -850,14 +876,11 @@ async def scenario_long_horizon() -> None:
                                 file=sys.stderr,
                             )
                             await consumer_conn.reconnect()
-                    elif controls.failure_enabled:
+                    elif controls.failure_enabled or controls.abandon_enabled:
                         work = []
                         failed_ids = []
                         for r in rows:
-                            try:
-                                m = json.loads(r["ev_data"])
-                            except Exception:
-                                m = {"created_at": _now_iso()}
+                            m = _message(r)
                             if not controls.is_tagged(m):
                                 work.append(process_one(m))
                                 continue
@@ -905,6 +928,12 @@ async def scenario_long_horizon() -> None:
                     await consumer_conn.reconnect()
         finally:
             await listen_conn.close()
+
+    def _message(row: dict) -> dict:
+        try:
+            return json.loads(row["ev_data"])
+        except Exception:
+            return {"created_at": _now_iso()}
 
     async def _drain_notifies(listen_conn: psycopg.AsyncConnection) -> None:
         # AsyncConnection.notifies() yields forever; we read just one to
@@ -1038,6 +1067,7 @@ async def scenario_long_horizon() -> None:
         await shutdown.wait()
     finally:
         shutdown.set()
+        controls.exit_if_holding()
         for t in tasks:
             t.cancel()
         try:

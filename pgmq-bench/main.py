@@ -150,11 +150,15 @@ async def aconnect() -> psycopg.AsyncConnection:
     return conn
 
 
-async def setup_queue(conn: psycopg.AsyncConnection, queue: str = QUEUE_NAME) -> None:
+async def setup_queue(
+    conn: psycopg.AsyncConnection, queue: str = QUEUE_NAME, *, keep_existing: bool = False
+) -> None:
     async with conn.cursor() as cur:
         await cur.execute("SELECT to_regclass(%s) AS reg", (f"pgmq.q_{queue}",))
         row = await cur.fetchone()
         if row["reg"] is not None:
+            if keep_existing:
+                return
             await cur.execute("SELECT pgmq.drop_queue(%s)", (queue,))
         await cur.execute("SELECT pgmq.create(%s)", (queue,))
 
@@ -219,7 +223,8 @@ async def scenario_long_horizon() -> None:
     setup_conn = await aconnect()
     try:
         for queue in queues:
-            await setup_queue(setup_conn, queue)
+            # A replacement fleet must find the claims the killed fleet held.
+            await setup_queue(setup_conn, queue, keep_existing=controls.abandon_enabled)
         if controls.failure_enabled and _observer_enabled():
             await setup_queue(setup_conn, DLQ_NAME)
         extversion = await extension_version(setup_conn)
@@ -238,6 +243,7 @@ async def scenario_long_horizon() -> None:
             "version": f"pgmq extension via {PGMQ_PG_IMAGE}",
             "schema_version": extversion,
             "db_name": db_name,
+            "abandon_rescue": "visibility timeout (VISIBILITY_TIMEOUT_S)",
             "started_at": _now_iso(),
         }
     )
@@ -356,6 +362,7 @@ async def scenario_long_horizon() -> None:
                             "enqueued_at_ms": int(time.time() * 1000),
                             "payload_padding": padding,
                             **controls.failure_tag(seq),
+                            **controls.abandon_tag(),
                         }
                     )
                 )
@@ -378,6 +385,7 @@ async def scenario_long_horizon() -> None:
             for _ in batch:
                 producer_latencies_ms.append((sample_ts, per_msg_ms))
             enqueued += len(batch)
+            controls.record_abandon_tagged(sum("abandon" in msg.obj for msg in batch))
 
             if producer_mode == "fixed":
                 next_t += len(batch) / max(target_rate, 1)
@@ -417,6 +425,13 @@ async def scenario_long_horizon() -> None:
                         await asyncio.sleep(poll_interval_ms / 1000.0)
                     continue
                 empty_in_sweep = 0
+
+                if controls.holding and any(
+                    isinstance(row["message"], dict) and controls.is_abandon(row["message"])
+                    for row in rows
+                ):
+                    # One handler call per read batch: hold all of it.
+                    await controls.hold_if_abandoning(len(rows))
 
                 started_at_ms = int(time.time() * 1000)
                 dead_rows = []
@@ -488,18 +503,18 @@ async def scenario_long_horizon() -> None:
                 in_flight[worker_idx] = (queue, [])
 
                 completed_at_ms = int(time.time() * 1000)
-                herd_done = 0
+                not_counted = 0
                 for row in rows:
                     message = row["message"] or {}
                     if isinstance(message, dict) and controls.is_tagged(message):
                         controls.on_complete(message)
-                        herd_done += "run_at_ms" in message
+                        not_counted += not controls.counts_as_completion(message)
                         continue
                     if isinstance(message, dict) and "enqueued_at_ms" in message:
                         end_to_end_latencies_ms.append(
                             (loop.time(), float(completed_at_ms - int(message["enqueued_at_ms"])))
                         )
-                completed += len(rows) - herd_done
+                completed += len(rows) - not_counted
         finally:
             await conn.close()
 
@@ -620,6 +635,7 @@ async def scenario_long_horizon() -> None:
     )
 
     await shutdown.wait()
+    controls.exit_if_holding()
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)

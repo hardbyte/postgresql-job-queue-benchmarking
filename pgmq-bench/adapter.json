@@ -14,6 +14,7 @@
   "state_queries": {
     "scheduled": "SELECT count(*) FROM pgmq.q_long_horizon_bench WHERE read_ct = 0 AND vt > now()",
     "retryable": "SELECT count(*) FROM pgmq.q_long_horizon_bench WHERE read_ct > 0",
-    "dead": "SELECT count(*) FROM pgmq.q_long_horizon_bench_dlq"
+    "dead": "SELECT count(*) FROM pgmq.q_long_horizon_bench_dlq",
+    "running": "SELECT count(*) FROM pgmq.q_long_horizon_bench WHERE read_ct > 0 AND vt > now()"
   }
 }

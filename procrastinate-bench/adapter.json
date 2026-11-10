@@ -14,6 +14,7 @@
   "state_queries": {
     "scheduled": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'todo' AND attempts = 0 AND scheduled_at > now()",
     "retryable": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'todo' AND attempts > 0",
-    "dead": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'failed'"
+    "dead": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'failed'",
+    "running": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'doing'"
   }
 }

@@ -1,7 +1,7 @@
 """Scenario controls shared by the Python adapters.
 
-Two harness-driven, default-off workload controls (contract in
-CONTRIBUTING_ADAPTERS.md, "Scenario controls"):
+Harness-driven, default-off workload controls (contract in
+CONTRIBUTING_ADAPTERS.md, "Scenario controls" and "Mass abandonment"):
 
 * ``JOB_FAILURE_CONTROL_FILE`` — JSON failure plan. The producer tags each
   job it enqueues while a plan is active as ``transient`` (fails its first
@@ -11,9 +11,14 @@ CONTRIBUTING_ADAPTERS.md, "Scenario controls"):
 * ``SCHEDULE_CONTROL_FILE`` — JSON herd command. Instance 0 enqueues
   ``count`` jobs scheduled for ``run_at_ms`` (spread uniformly over
   ``spread_ms``); workers report how late each one started.
+* ``JOB_ABANDON_CONTROL_FILE`` — JSON ``{"tag": bool, "hold": bool}``. The
+  producer tags jobs ``abandon: 1`` while ``tag`` is set; workers hold tagged
+  jobs until the process dies while ``hold`` is set, otherwise complete them
+  as rescued jobs.
 
-Tagged payloads carry ``fail`` / ``fail_attempts`` / ``run_at_ms``; untagged
-payloads are byte-for-byte what the adapter produced before.
+Tagged payloads carry ``fail`` / ``fail_attempts`` / ``run_at_ms`` /
+``abandon``; untagged payloads are byte-for-byte what the adapter produced
+before.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from collections.abc import Awaitable, Callable, Iterator
 
 FAILURE_ENV = "JOB_FAILURE_CONTROL_FILE"
 SCHEDULE_ENV = "SCHEDULE_CONTROL_FILE"
+ABANDON_ENV = "JOB_ABANDON_CONTROL_FILE"
 HERD_BATCH_MAX = 500
 _REFRESH_S = 1.0
 
@@ -123,13 +129,30 @@ def silence_injected_failures(logger_name: str) -> None:
     logging.getLogger(logger_name).addFilter(_keep)
 
 
+async def hold_forever() -> None:
+    """Never return, and swallow cancellation: a held job must stay claimed
+    exactly as a handler stuck in a process that then dies would leave it."""
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            await loop.create_future()
+        except asyncio.CancelledError:
+            continue
+
+
 class ScenarioControls:
     def __init__(self) -> None:
         self.failure_path = os.environ.get(FAILURE_ENV) or None
         self.schedule_path = os.environ.get(SCHEDULE_ENV) or None
+        self.abandon_path = os.environ.get(ABANDON_ENV) or None
         self.max_attempts = max_attempts_from_env()
         self._plan: dict = {}
         self._plan_read_at = -math.inf
+        self._abandon_plan: dict = {}
+        self._abandon_read_at = -math.inf
+        # Read before any consumer starts so a fresh process never acts on a
+        # default plan.
+        self._refresh_abandon_plan()
         self._schedule_read_at = -math.inf
         self._last_schedule_id: str | None = None
 
@@ -144,6 +167,10 @@ class ScenarioControls:
         self._lateness_ms: list[float] = []
         self._last_rates: dict[str, int] = {}
 
+        self.abandon_held = 0
+        self.abandon_tagged_enqueued = 0
+        self.rescued_completions = 0
+
     @property
     def failure_enabled(self) -> bool:
         return self.failure_path is not None
@@ -151,6 +178,19 @@ class ScenarioControls:
     @property
     def schedule_enabled(self) -> bool:
         return self.schedule_path is not None
+
+    @property
+    def abandon_enabled(self) -> bool:
+        return self.abandon_path is not None
+
+    def _refresh_abandon_plan(self) -> dict:
+        if self.abandon_path is None:
+            return {}
+        now = time.monotonic()
+        if now - self._abandon_read_at >= _REFRESH_S:
+            self._abandon_plan = _read_json(self.abandon_path)
+            self._abandon_read_at = now
+        return self._abandon_plan
 
     # ── producer side ──────────────────────────────────────────────────
     def failure_tag(self, seq: int) -> dict:
@@ -161,6 +201,15 @@ class ScenarioControls:
             self._plan = _read_json(self.failure_path)
             self._plan_read_at = now
         return failure_tag(self._plan, seq)
+
+    def abandon_tag(self) -> dict:
+        """``{"abandon": 1}`` while the abandon plan says to tag jobs. Count
+        the enqueued ones with ``record_abandon_tagged`` once the insert
+        succeeds."""
+        return {"abandon": 1} if self._refresh_abandon_plan().get("tag") else {}
+
+    def record_abandon_tagged(self, count: int) -> None:
+        self.abandon_tagged_enqueued += count
 
     def poll_schedule(self) -> dict | None:
         """Return a herd command the first time its id is seen."""
@@ -181,7 +230,41 @@ class ScenarioControls:
     @staticmethod
     def is_tagged(payload: dict) -> bool:
         """Tagged jobs stay out of the immediate-job latency windows."""
-        return bool(payload.get("fail")) or "run_at_ms" in payload
+        return bool(payload.get("fail")) or "run_at_ms" in payload or "abandon" in payload
+
+    @staticmethod
+    def counts_as_completion(payload: dict) -> bool:
+        """Herd and abandon-tagged jobs stay out of ``completion_rate``."""
+        return "run_at_ms" not in payload and "abandon" not in payload
+
+    @staticmethod
+    def is_abandon(payload: dict) -> bool:
+        return "abandon" in payload
+
+    @property
+    def holding(self) -> bool:
+        return bool(self._refresh_abandon_plan().get("hold"))
+
+    async def hold_if_abandoning(self, jobs: int = 1) -> None:
+        """Hold ``jobs`` claimed jobs until the process dies when the plan
+        says ``hold``; otherwise return so the caller runs them normally.
+        Batch handlers pass the whole batch size."""
+        if not self.holding:
+            return
+        self.abandon_held += jobs
+        await hold_forever()
+
+    def exit_if_holding(self) -> None:
+        """Shutdown hook: a process holding claims leaves them claimed and
+        exits without running cleanup that could release or finish them."""
+        if self.abandon_held:
+            print(
+                f"[bench_controls] exiting while holding {self.abandon_held} claims",
+                file=sys.stderr,
+                flush=True,
+            )
+            sys.stdout.flush()
+            os._exit(0)
 
     def on_start(self, payload: dict) -> None:
         run_at_ms = payload.get("run_at_ms")
@@ -213,6 +296,8 @@ class ScenarioControls:
             self.retried_completions += 1
         if "run_at_ms" in payload:
             self.scheduled_completions += 1
+        if "abandon" in payload:
+            self.rescued_completions += 1
 
     # ── sampler ────────────────────────────────────────────────────────
     def _rate(self, name: str, value: int, dt: float) -> float:
@@ -223,6 +308,19 @@ class ScenarioControls:
     def metrics(self, dt: float, window_s: float) -> list[tuple[str, float, float]]:
         dt = max(dt, 0.001)
         out: list[tuple[str, float, float]] = []
+        if self.abandon_enabled:
+            out.extend(
+                [
+                    ("abandon_held_jobs", float(self.abandon_held), 0.0),
+                    ("abandon_tagged_enqueued_total", float(self.abandon_tagged_enqueued), 0.0),
+                    ("rescued_completed_total", float(self.rescued_completions), 0.0),
+                    (
+                        "rescued_completion_rate",
+                        self._rate("rescued_completion_rate", self.rescued_completions, dt),
+                        window_s,
+                    ),
+                ]
+            )
         if self.failure_enabled:
             for name, value in (
                 ("injected_failure_rate", self.failed_attempts),

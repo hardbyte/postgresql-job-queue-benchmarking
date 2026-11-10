@@ -11,6 +11,7 @@
   "state_queries": {
     "scheduled": "SELECT count(*) FROM absurd.t_long_horizon_bench WHERE state = 'sleeping'",
     "retryable": "SELECT count(*) FROM absurd.t_long_horizon_bench WHERE state IN ('pending', 'running') AND attempts > 1",
-    "dead": "SELECT count(*) FROM absurd.t_long_horizon_bench WHERE state = 'failed'"
+    "dead": "SELECT count(*) FROM absurd.t_long_horizon_bench WHERE state = 'failed'",
+    "running": "SELECT count(*) FROM absurd.t_long_horizon_bench WHERE state = 'running'"
   }
 }
