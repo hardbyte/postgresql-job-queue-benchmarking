@@ -167,7 +167,12 @@ function failureOutcome(data, attempt, maxAttempts) {
 }
 
 function isTagged(data) {
-  return Boolean(data.fail) || data.run_at_ms !== undefined;
+  return Boolean(data.fail) || data.run_at_ms !== undefined || Boolean(data.abandon);
+}
+
+// Herd and abandon-tagged jobs stay out of completion_rate and the latency windows.
+function isExcluded(data) {
+  return data.run_at_ms !== undefined || Boolean(data.abandon);
 }
 
 function* herdBatches(command, maxBatch = 500) {
@@ -187,6 +192,12 @@ class ScenarioControls {
   constructor() {
     this.failurePath = process.env.JOB_FAILURE_CONTROL_FILE || null;
     this.schedulePath = process.env.SCHEDULE_CONTROL_FILE || null;
+    this.abandonPath = process.env.JOB_ABANDON_CONTROL_FILE || null;
+    this.abandon = this.abandonPath ? readJson(this.abandonPath) : {};
+    this.abandonReadAt = nowMonoMs();
+    this.abandonHeld = 0;
+    this.abandonTaggedEnqueued = 0;
+    this.rescuedCompleted = 0;
     this.maxAttempts = maxAttemptsFromEnv();
     this.plan = {};
     this.planReadAt = -Infinity;
@@ -213,6 +224,42 @@ class ScenarioControls {
       this.planReadAt = now;
     }
     return failureTag(this.plan, seq);
+  }
+
+  abandonState() {
+    const now = nowMonoMs();
+    if (this.abandonPath && now - this.abandonReadAt >= 1000) {
+      this.abandon = readJson(this.abandonPath);
+      this.abandonReadAt = now;
+    }
+    return this.abandon;
+  }
+
+  abandonTag() {
+    return this.abandonPath && this.abandonState().tag === true ? { abandon: 1 } : {};
+  }
+
+  shouldHold(jobs) {
+    return this.abandonState().hold === true && jobs.some((job) => job.data && job.data.abandon);
+  }
+
+  // Never settles, so pg-boss keeps the whole batch `active` until the process dies.
+  // pg-boss aborts the batch's signal itself once expireInSeconds runs out in-process
+  // (and fails the jobs); that is reported, not obeyed.
+  hold(jobs) {
+    this.abandonHeld += jobs.length;
+    const signal = jobs[0].signal;
+    if (signal) {
+      signal.addEventListener(
+        "abort",
+        () => {
+          this.abandonHeld -= jobs.length;
+          console.error(`[pgboss] pg-boss released a held batch of ${jobs.length} (in-process expireInSeconds elapsed or shutdown)`);
+        },
+        { once: true }
+      );
+    }
+    return new Promise(() => {});
   }
 
   pollSchedule() {
@@ -247,6 +294,9 @@ class ScenarioControls {
   }
 
   onComplete(data) {
+    if (data.abandon) {
+      this.rescuedCompleted += 1;
+    }
     if (data.fail === "transient") {
       this.retriedCompletions += 1;
     }
@@ -285,6 +335,12 @@ class ScenarioControls {
       if (this.schedulePreloadS !== null) {
         out.push(["schedule_preload_s", this.schedulePreloadS, 0]);
       }
+    }
+    if (this.abandonPath) {
+      out.push(["abandon_held_jobs", this.abandonHeld, 0]);
+      out.push(["abandon_tagged_enqueued_total", this.abandonTaggedEnqueued, 0]);
+      out.push(["rescued_completed_total", this.rescuedCompleted, 0]);
+      out.push(["rescued_completion_rate", this.rate("rescued", this.rescuedCompleted, dt), windowS]);
     }
     return out;
   }
@@ -368,12 +424,15 @@ async function scenarioLongHorizon() {
     Math.max(1, Math.min(64, Math.ceil((producerRate * 1.25) / Math.max(workerCount * 2, 1))))
   );
   const dbName = databaseUrl().split("/").pop();
+  // Unset keeps pg-boss's defaults: expireInSeconds 900, supervise/monitor every 60 s.
+  const expireInSecs = envInt("EXPIRE_IN_SECS", null);
+  const superviseIntervalSecs = envInt("SUPERVISE_INTERVAL_SECS", null);
 
   const boss = new PgBoss({
     connectionString: databaseUrl(),
-    noSupervisor: true,
-    noScheduling: true,
-    noMonitoring: true,
+    ...(superviseIntervalSecs !== null
+      ? { superviseIntervalSeconds: superviseIntervalSecs, monitorIntervalSeconds: superviseIntervalSecs }
+      : {}),
   });
 
   boss.on("error", (err) => {
@@ -387,7 +446,6 @@ async function scenarioLongHorizon() {
     if (!(await boss.getQueue(name))) {
       await boss.createQueue(name, { partition: true });
     }
-    await boss.deleteAllJobs(name);
   }
 
   const schemaVersion = await boss.schemaVersion();
@@ -403,12 +461,21 @@ async function scenarioLongHorizon() {
     schema_version: schemaVersion === null ? null : String(schemaVersion),
     db_name: dbName,
     started_at: nowIso(),
+    abandon_rescue:
+      `supervisor expires active jobs past expireInSeconds into retry ` +
+      `(EXPIRE_IN_SECS=${expireInSecs ?? "900 default"}, swept every SUPERVISE_INTERVAL_SECS=${superviseIntervalSecs ?? "60 default"})`,
   });
 
   const padding = payloadPadding(payloadBytes - 96);
   const controls = new ScenarioControls();
   // JOB_MAX_ATTEMPTS counts total attempts; pg-boss retryLimit counts retries.
-  const retryOptions = controls.maxAttempts !== null ? { retryLimit: controls.maxAttempts - 1 } : {};
+  const jobOptions = {
+    ...(controls.maxAttempts !== null ? { retryLimit: controls.maxAttempts - 1 } : {}),
+    ...(expireInSecs !== null ? { expireInSeconds: expireInSecs } : {}),
+  };
+  if (controls.abandonPath && controls.maxAttempts === 1) {
+    console.error("[pgboss] JOB_MAX_ATTEMPTS=1: expired abandoned jobs go to failed, not retry");
+  }
   const producerLatencies = new TimedWindow();
   const subscriberLatencies = new TimedWindow();
   const endToEndLatencies = new TimedWindow();
@@ -465,7 +532,7 @@ async function scenarioLongHorizon() {
         results.push({ id: job.id, status: "completed" });
         if (isTagged(data)) {
           controls.onComplete(data);
-          if (data.run_at_ms !== undefined) {
+          if (isExcluded(data)) {
             continue;
           }
         } else if (typeof data.enqueued_at_ms === "number") {
@@ -476,12 +543,12 @@ async function scenarioLongHorizon() {
       return results;
     } : async (jobs) => {
       const startedAtMs = Date.now();
-      let herdJobs = 0;
+      let excludedJobs = 0;
       for (const job of jobs) {
         const data = job.data || {};
-        if (data.run_at_ms !== undefined) {
+        if (isExcluded(data)) {
           controls.onStart(data);
-          herdJobs += 1;
+          excludedJobs += 1;
         } else if (typeof data.enqueued_at_ms === "number") {
           subscriberLatencies.push(nowMonoMs(), startedAtMs - data.enqueued_at_ms);
         }
@@ -492,15 +559,18 @@ async function scenarioLongHorizon() {
       const completedAtMs = Date.now();
       for (const job of jobs) {
         const data = job.data || {};
-        if (data.run_at_ms !== undefined) {
+        if (isExcluded(data)) {
           controls.onComplete(data);
         } else if (typeof data.enqueued_at_ms === "number") {
           endToEndLatencies.push(nowMonoMs(), completedAtMs - data.enqueued_at_ms);
         }
       }
-      completed += jobs.length - herdJobs;
+      completed += jobs.length - excludedJobs;
     }
   );
+  const handler = controls.abandonPath
+    ? (jobs) => (controls.shouldHold(jobs) ? controls.hold(jobs) : handleJobs(jobs))
+    : handleJobs;
 
   // pg-boss workers are per queue; worker concurrency is split across them.
   const perQueueConcurrency = Math.max(1, Math.floor(workerCount / queues.length));
@@ -521,7 +591,7 @@ async function scenarioLongHorizon() {
         await boss.work(
           name,
           controls.failurePath ? { ...workOptions, perJobResults: true } : workOptions,
-          handleJobs
+          handler
         )
       );
     }
@@ -542,7 +612,7 @@ async function scenarioLongHorizon() {
       return true;
     }
     const msg = String(err.message || err);
-    return /connection|terminat|shutdown|ECONN/i.test(msg);
+    return /connect|terminat|shutdown|ECONN/i.test(msg);
   };
 
   const producerTask = (async () => {
@@ -578,6 +648,7 @@ async function scenarioLongHorizon() {
           batchCount = Math.min(producerBatchMax, Math.floor(credit));
         }
 
+        const abandonTag = controls.abandonTag();
         const jobs = [];
         for (let i = 0; i < batchCount; i += 1) {
           seq += 1;
@@ -587,8 +658,9 @@ async function scenarioLongHorizon() {
               enqueued_at_ms: Date.now(),
               payload_padding: padding,
               ...controls.tag(seq),
+              ...abandonTag,
             },
-            ...retryOptions,
+            ...jobOptions,
           });
         }
 
@@ -602,6 +674,9 @@ async function scenarioLongHorizon() {
           producerLatencies.push(sampleTs, perJobLatency);
         }
         enqueued += jobs.length;
+        if (abandonTag.abandon) {
+          controls.abandonTaggedEnqueued += jobs.length;
+        }
 
         if (producerMode === "fixed") {
           nextAt += Math.round((jobs.length * 1000) / Math.max(targetRate, 1));
@@ -646,7 +721,7 @@ async function scenarioLongHorizon() {
               run_at_ms: runAtMs,
             },
             startAfter: new Date(runAtMs),
-            ...retryOptions,
+            ...jobOptions,
           });
         }
         while (!shuttingDown) {
@@ -759,6 +834,12 @@ async function scenarioLongHorizon() {
   })();
 
   await shutdownPromise;
+  if (controls.abandonHeld > 0) {
+    // Held handlers never return, so a graceful stop would wait on them; leave the
+    // claims behind as a dead process would.
+    await Promise.allSettled([producerTask, depthTask, samplerTask, herdTask]);
+    process.exit(0);
+  }
   await startWorkers.catch(() => {});
   for (const [name, id] of workIds) {
     await boss.offWork(name, { id, wait: true }).catch(() => {});
