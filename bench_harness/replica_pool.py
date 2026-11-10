@@ -221,6 +221,23 @@ class ReplicaPool:
         slot.state = ReplicaState.KILLED
         self._terminate_slot(slot, signal_type=_signal.SIGKILL, timeout_s=timeout_s)
 
+    def kill_all(self, *, timeout_s: float = 30.0) -> list[int]:
+        """SIGKILL every RUNNING replica at once; returns their ids.
+
+        All signals go out before any wait, so the fleet dies within one
+        signalling pass rather than one replica after another."""
+        import time as _time
+
+        targets = [s for s in self._slots if s.state is ReplicaState.RUNNING]
+        for slot in targets:
+            slot.state = ReplicaState.KILLED
+        for slot in targets:
+            self._signal_slot(slot, _signal.SIGKILL)
+        deadline = _time.monotonic() + timeout_s
+        for slot in targets:
+            self._reap_slot(slot, deadline=deadline)
+        return [slot.instance_id for slot in targets]
+
     def restart_worker(
         self,
         instance_id: int,

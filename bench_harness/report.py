@@ -46,6 +46,10 @@ DEFAULT_TIMELINE_METRICS = [
     "neighbour_latency_p99_ms",
     "slot_confirmed_lag_bytes",
     "slot_retained_wal_bytes",
+    # Resources and mass abandonment.
+    "pg_memory_anon_mb",
+    "adapter_memory_anon_mb",
+    "rescued_completion_rate",
 ]
 
 # Non-adapter timeline metrics: which subject_kind carries them and how to
@@ -60,6 +64,8 @@ TIMELINE_SUBJECT_KINDS: dict[str, tuple[str, str]] = {
     "neighbour_latency_p99_ms": ("neighbour", "last"),
     "slot_confirmed_lag_bytes": ("replication_slot", "max"),
     "slot_retained_wal_bytes": ("replication_slot", "max"),
+    "pg_memory_anon_mb": ("cluster", "last"),
+    "adapter_memory_anon_mb": ("cluster", "sum"),
 }
 
 DEFAULT_PHASE_FILTER = "steady"
@@ -379,6 +385,92 @@ def _neighbour_table(
     )
 
 
+def _resource_table(
+    summary: dict,
+    systems: list[str],
+    phases: list[Phase],
+    system_meta: dict[str, dict[str, str]],
+) -> str | None:
+    """CPU, memory, database load and lock waits per phase."""
+    headers = [
+        "System", "Phase", "PG cores", "PG cores peak", "Worker cores",
+        "Host busy cores", "PG anon MB peak", "Worker MB peak", "AAS",
+        "AAS CPU", "AAS Lock", "AAS advisory", "AAS LWLock", "AAS IO", "Lock waiters",
+        "Lock waiters peak", "Max lock wait s", "Deadlocks",
+    ]
+    rows: list[str] = []
+    for system in systems:
+        phase_map = summary["systems"].get(system, {}).get("phases", {})
+        for phase in phases:
+            block = phase_map.get(phase.label)
+            if not block:
+                continue
+            load = block.get("db_load") or {}
+            cells = [
+                html.escape(system_meta[system]["display_name"]),
+                html.escape(phase.label),
+                _fmt(block.get("pg_cpu_cores"), 2),
+                _fmt(block.get("pg_cpu_cores_peak"), 2),
+                _fmt(block.get("adapter_cpu_cores"), 2),
+                _fmt(block.get("host_cpu_busy_cores"), 2),
+                _fmt(block.get("peak_pg_memory_anon_mb"), 0),
+                _fmt(block.get("peak_adapter_memory_anon_mb"), 0),
+                _fmt(load.get("aas"), 2),
+                _fmt(load.get("aas_cpu"), 2),
+                _fmt(load.get("aas_lock"), 2),
+                _fmt(load.get("aas_lock_advisory"), 2),
+                _fmt(load.get("aas_lwlock"), 2),
+                _fmt(load.get("aas_io"), 2),
+                _fmt(load.get("lock_waiters_mean"), 2),
+                _fmt(load.get("lock_waiters_peak"), 0),
+                _fmt(load.get("lock_wait_max_s"), 2),
+                _fmt(block.get("pg_deadlocks_delta"), 0),
+            ]
+            rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+    if not rows:
+        return None
+    head = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    return (
+        "<table id='resource-summary-table'>"
+        f"<thead><tr>{head}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
+def _abandon_table(
+    summary: dict, systems: list[str], system_meta: dict[str, dict[str, str]]
+) -> str | None:
+    headers = [
+        "System", "Tagged", "Claimed at kill (DB)", "Held at kill", "First rescue s",
+        "50% s", "99% s", "100% s", "Rescue/s 10–90%", "Missing", "Duplicates",
+        "DB claims cleared s",
+    ]
+    rows: list[str] = []
+    for system in systems:
+        block = summary["systems"].get(system, {}).get("abandon")
+        if not block:
+            continue
+        cells = [html.escape(system_meta[system]["display_name"])] + [
+            _fmt(block.get(key), 0)
+            for key in (
+                "tagged_enqueued", "running_before_kill", "held_at_kill",
+                "first_rescued_s", "rescued_50_s", "rescued_99_s", "rescued_all_s",
+                "rescue_rate_10_90_per_s", "missing", "excess", "running_cleared_s",
+            )
+        ]
+        rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+    if not rows:
+        return None
+    head = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    return (
+        "<table id='abandon-summary-table'>"
+        f"<thead><tr>{head}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
 def _replica_table(summary: dict, systems: list[str], phases: list[Phase], system_meta: dict[str, dict[str, str]]) -> str:
     headers = [
         "System",
@@ -478,6 +570,28 @@ def _build_html(
         "cluster-wide.</div>"
         f"{neighbour_table}</section>"
         if neighbour_table
+        else ""
+    )
+    resource_table = _resource_table(summary, systems, phases, system_meta)
+    resource_section = (
+        "<section class='panel' id='resource-summary'>"
+        "<h2>Resources and Database Load</h2>"
+        "<div class='card-sub'>CPU from cgroup/proc counters; memory is private "
+        "(anon) memory, Postgres shared buffers excluded. AAS is non-idle "
+        "backends per second by wait-event type; lock waiters are ungranted "
+        "pg_locks requests per second.</div>"
+        f"{resource_table}</section>"
+        if resource_table
+        else ""
+    )
+    abandon_table = _abandon_table(summary, systems, system_meta)
+    abandon_section = (
+        "<section class='panel' id='abandon-summary'>"
+        "<h2>Mass Abandonment</h2>"
+        "<div class='card-sub'>Times are from the fleet kill. Percentages are of "
+        "all tagged jobs.</div>"
+        f"{abandon_table}</section>"
+        if abandon_table
         else ""
     )
     summary_cards = []
@@ -927,6 +1041,8 @@ init();
       </section>
 
       {neighbour_section}
+      {abandon_section}
+      {resource_section}
       <section class="panel" id="replica-summary">
         <h2>Per-replica Summary</h2>
         <div class="card-sub">Replica-scoped adapter metrics for presented phases, excluding warmup. This is the primary view for multi-replica load distribution.</div>

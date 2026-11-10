@@ -41,7 +41,7 @@ from .adapters import (
 )
 from .hooks import write_control_json
 from .metrics import MetricsDaemon, PollTargets, parse_adapter_record
-from .hooks import CONSUMER_GATE_CLOSED, write_control_file
+from .hooks import ABANDON_HOLD, CONSUMER_GATE_CLOSED, write_control_file
 from .phases import (
     Phase,
     PhaseType,
@@ -544,30 +544,43 @@ def _cidfile_path(control_dir: Path, instance_id: int) -> Path:
 def _cpu_probe(
     pool: ReplicaPool, control_dir: Path, postgres_container_id: str | None
 ):
-    """Cumulative CPU seconds: "" → Postgres, "replica-<i>" → adapter i.
+    """Resource readings keyed by (subject, metric).
 
-    Docker-launched replicas are read through the container ID docker
-    writes to the per-replica cidfile; native replicas through their pid.
+    Subjects: "" → Postgres container, "replica-<i>" → adapter i, "host".
+    Metrics: cumulative `cpu_seconds`, and memory gauges `memory_<kind>_mb`
+    (current / anon / file / shmem). Docker-launched replicas are read
+    through the container ID docker writes to the per-replica cidfile;
+    native replicas through their pid.
     """
 
-    def _probe() -> dict[str, float]:
-        out: dict[str, float] = {}
+    def _probe() -> dict[tuple[str, str], float]:
+        out: dict[tuple[str, str], float] = {}
         if postgres_container_id:
             pg_seconds = cpu_mod.container_cpu_seconds(postgres_container_id)
             if pg_seconds is not None:
-                out[""] = pg_seconds
+                out[("", "cpu_seconds")] = pg_seconds
+            for kind, mb in (cpu_mod.container_memory_mb(postgres_container_id) or {}).items():
+                out[("", f"memory_{kind}_mb")] = mb
+        host = cpu_mod.host_cpu_busy_seconds()
+        if host is not None:
+            out[("host", "cpu_seconds")] = host
         for slot in pool.slots:
             if slot.process is None or slot.process.poll() is not None:
                 continue
+            subject = f"replica-{slot.instance_id}"
             container_id = cpu_mod.read_cidfile(
                 _cidfile_path(control_dir, slot.instance_id)
             )
             if container_id:
                 seconds = cpu_mod.container_cpu_seconds(container_id)
+                memory = cpu_mod.container_memory_mb(container_id)
             else:
                 seconds = cpu_mod.process_cpu_seconds(slot.process.pid)
+                memory = cpu_mod.process_memory_mb(slot.process.pid)
             if seconds is not None:
-                out[f"replica-{slot.instance_id}"] = seconds
+                out[(subject, "cpu_seconds")] = seconds
+            for kind, mb in (memory or {}).items():
+                out[(subject, f"memory_{kind}_mb")] = mb
         return out
 
     return _probe
@@ -726,25 +739,36 @@ def _emit_wait_event_snapshot(
                 window_s=float(phase.duration_s),
             )
         )
-    # Always emit the denominator — even if zero — so a zero-active phase
+    ticks, locks = sampler.snapshot_load(phase.label)
+
+    def put(subject_kind: str, subject: str, metric: str, value: float) -> None:
+        out_queue.put(
+            Sample(
+                run_id=run_id,
+                system=system,
+                instance_id=0,
+                elapsed_s=elapsed,
+                sampled_at=sampled_at,
+                phase_label=phase.label,
+                phase_type=phase.type.value,
+                subject_kind=subject_kind,
+                subject=subject,
+                metric=metric,
+                value=float(value),
+                window_s=float(phase.duration_s),
+            )
+        )
+
+    # Always emit the denominators — even if zero — so a zero-active phase
     # is recoverable from raw.csv (otherwise it would look identical to a
     # phase the sampler didn't observe at all).
-    out_queue.put(
-        Sample(
-            run_id=run_id,
-            system=system,
-            instance_id=0,
-            elapsed_s=elapsed,
-            sampled_at=sampled_at,
-            phase_label=phase.label,
-            phase_type=phase.type.value,
-            subject_kind="wait_event",
-            subject="__total__",
-            metric="total_active_samples",
-            value=float(total_active),
-            window_s=float(phase.duration_s),
-        )
-    )
+    put("wait_event", "__total__", "total_active_samples", total_active)
+    put("wait_event", "__total__", "sampler_ticks", ticks)
+    put("lock_wait", "__total__", "lock_waiter_samples", locks.waiter_samples)
+    put("lock_wait", "__total__", "lock_waiters_peak", locks.peak_waiters)
+    put("lock_wait", "__total__", "lock_wait_max_s", locks.max_wait_s)
+    for locktype, count in locks.by_locktype.most_common():
+        put("lock_wait", locktype, "lock_waiter_samples", count)
 
 
 def _emit_phase_start(
@@ -876,8 +900,15 @@ def run_one_system(
         schedule_control_file = control_dir / "schedule.json"
         write_control_json(schedule_control_file, {})
         overrides["SCHEDULE_CONTROL_FILE"] = str(schedule_control_file)
+    abandon_control_file: Path | None = None
+    if PhaseType.ABANDON_KILL in phase_types:
+        abandon_control_file = control_dir / "abandon.json"
+        write_control_json(abandon_control_file, ABANDON_HOLD)
+        overrides["JOB_ABANDON_CONTROL_FILE"] = str(abandon_control_file)
     poll_state_queries = (
-        job_failure_control_file is not None or schedule_control_file is not None
+        job_failure_control_file is not None
+        or schedule_control_file is not None
+        or abandon_control_file is not None
     )
 
     bench_start = time.time()
@@ -917,6 +948,7 @@ def run_one_system(
             event_tables=runtime_event_tables,
             event_indexes=runtime_event_indexes,
             state_queries=manifest.state_queries if poll_state_queries else {},
+            state_query_every_s=30.0 if abandon_control_file is not None else 0.0,
         ),
         output_queue=out_queue,
         bench_start=bench_start,
@@ -1013,6 +1045,10 @@ def run_one_system(
         "schedule_control_file": (
             str(schedule_control_file) if schedule_control_file else None
         ),
+        "abandon_control_file": (
+            str(abandon_control_file) if abandon_control_file else None
+        ),
+        "abandon_running_sql": manifest.state_queries.get("running"),
     }
     phase_rates = [
         producer_rate if rate is None else rate

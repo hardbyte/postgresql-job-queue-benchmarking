@@ -36,6 +36,7 @@ RATE_METRICS = {
     "injected_failure_rate",
     "retried_completion_rate",
     "poison_exhausted_rate",
+    "rescued_completion_rate",
 }
 
 # Cumulative per-replica gauges for the scheduled-herd workload; the
@@ -326,7 +327,7 @@ def compute_summary(
         ):
             # Defer to the per-timestamp aggregator below; skip raw bucket.
             continue
-        if row.get("subject_kind") == "wait_event":
+        if row.get("subject_kind") in ("wait_event", "lock_wait"):
             # Wait-event rows have their own dedicated aggregation pass
             # (top-N histogram per phase) and don't fit the generic
             # (median, peak, count) shape — skip them in the bucket pass.
@@ -651,6 +652,9 @@ def compute_summary(
             )
             if wait is not None:
                 phase_block["wait_events"] = wait
+            db_load = _db_load_block(rows, system=system, phase_label=phase_label)
+            if db_load is not None:
+                phase_block["db_load"] = db_load
 
     drain_labels = [p.label for p in ordered_phases if p.type is PhaseType.DRAIN]
     for system, system_block in out_systems.items():
@@ -666,6 +670,15 @@ def compute_summary(
             if drain is not None and label in system_block["phases"]:
                 system_block["phases"][label]["drain"] = drain
         run_block = _run_totals(rows, system=system, phases=phases)
+        abandon = _abandon_summary(rows, system=system, phases=phases)
+        if abandon is not None:
+            system_block["abandon"] = abandon
+            # Tagged jobs stay out of completion_rate; count them back in
+            # so completion_excess still means duplicate execution.
+            rescued = abandon.get("rescued_completed")
+            if rescued is not None and run_block.get("completion_excess") is not None:
+                run_block["rescued_completed_total"] = rescued
+                run_block["completion_excess"] += rescued
         if run_block:
             system_block["run"] = run_block
     _add_neighbour_baseline_ratios(out_systems, phases)
@@ -800,6 +813,32 @@ def _resource_phase_metrics(
         phase_label=phase_label,
         metric="adapter_cpu_seconds_total",
     )
+    out["host_cpu_busy_cores"] = _per_subject_counter_rate(
+        rows, system=system, phase_label=phase_label, metric="host_cpu_seconds_total"
+    )
+    for key, metric in (
+        ("pg_cpu_cores_peak", "pg_cpu_seconds_total"),
+        ("adapter_cpu_cores_peak", "adapter_cpu_seconds_total"),
+    ):
+        out[key] = _peak_counter_rate(
+            rows, system=system, phase_label=phase_label, metric=metric
+        )
+    # Memory gauges, summed over replicas per tick for the adapter side.
+    for key, metric in (
+        ("pg_memory_anon_mb", "pg_memory_anon_mb"),
+        ("pg_memory_shmem_mb", "pg_memory_shmem_mb"),
+        ("pg_memory_current_mb", "pg_memory_current_mb"),
+        ("adapter_memory_anon_mb", "adapter_memory_anon_mb"),
+        ("adapter_memory_current_mb", "adapter_memory_current_mb"),
+    ):
+        values = [v for _, v in _cluster_series(
+            rows, system=system, metric=metric, phase_labels=labels
+        )]
+        out[f"median_{key}"] = _median(values)
+        out[f"peak_{key}"] = _peak(values)
+    out["pg_deadlocks_delta"] = _cluster_counter_delta(
+        rows, system=system, phase_label=phase_label, metric="pg_db_deadlocks_total"
+    )
     for key, metric in (
         ("pg_backends", "pg_backends_total"),
         ("pg_backends_listening", "pg_backends_listening"),
@@ -843,6 +882,226 @@ def _resource_phase_metrics(
             out[f"{key}_start"] = series[0][1]
             out[f"{key}_end"] = series[-1][1]
             out[f"{key}_peak"] = _peak([v for _, v in series])
+    return out
+
+
+def _peak_counter_rate(
+    rows: list[dict], *, system: str, phase_label: str, metric: str
+) -> float | None:
+    """Highest tick-to-tick rate of a counter, summed over the subjects that
+    report it at the same tick (e.g. the peak cores of a whole fleet)."""
+    per_subject: dict[str, list[tuple[float, float]]] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row["phase_label"] != phase_label
+            or row["metric"] != metric
+            or row["subject_kind"] != "cluster"
+        ):
+            continue
+        try:
+            point = (float(row["elapsed_s"]), float(row["value"]))
+        except (TypeError, ValueError):
+            continue
+        per_subject.setdefault(row["subject"], []).append(point)
+    per_tick: dict[float, float] = {}
+    for points in per_subject.values():
+        points.sort()
+        for (t0, v0), (t1, v1) in zip(points, points[1:]):
+            if t1 > t0:
+                per_tick[t1] = per_tick.get(t1, 0.0) + max(0.0, v1 - v0) / (t1 - t0)
+    return max(per_tick.values()) if per_tick else None
+
+
+# Wait-event types folded into the DB-load breakdown; everything else lands
+# in `aas_other`.
+_DB_LOAD_TYPES = {
+    "CPU": "aas_cpu",
+    "Lock": "aas_lock",
+    "Lock:advisory": "aas_lock_advisory",
+    "LWLock": "aas_lwlock",
+    "IO": "aas_io",
+    "IPC": "aas_ipc",
+    "Client": "aas_client",
+}
+
+
+def _db_load_block(rows: list[dict], *, system: str, phase_label: str) -> dict | None:
+    """Database load for one phase, from the 1 s activity sampler.
+
+    `aas` (average active sessions) is non-idle backends per sampler tick,
+    split by wait-event type (`aas_cpu` = backends on CPU, `aas_lock` =
+    heavyweight lock waits other than advisory locks, `aas_lock_advisory`,
+    `aas_lwlock` = lightweight lock waits, ...).
+    `lock_waiters_mean` / `_peak` count ungranted `pg_locks` requests per
+    tick, `lock_wait_max_s` is the longest single wait seen, and
+    `lock_wait_by_type` splits waiter-ticks by lock type.
+    """
+    ticks = 0.0
+    by_type: dict[str, float] = {}
+    total_active = 0.0
+    lock: dict[str, float] = {}
+    lock_by_type: dict[str, float] = {}
+    for row in rows:
+        if row["system"] != system or row["phase_label"] != phase_label:
+            continue
+        kind = row.get("subject_kind")
+        if kind not in ("wait_event", "lock_wait"):
+            continue
+        try:
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+        metric = row["metric"]
+        subject = row["subject"]
+        if kind == "wait_event":
+            if metric == "sampler_ticks":
+                ticks = max(ticks, value)
+            elif metric == "total_active_samples":
+                total_active = max(total_active, value)
+            elif metric == "wait_event_count":
+                event_type = subject.split(":", 1)[0]
+                if subject == "Lock:advisory":
+                    # Advisory waits are application-chosen (often leader
+                    # election that blocks by design); keep them apart.
+                    event_type = "Lock:advisory"
+                by_type[event_type] = by_type.get(event_type, 0.0) + value
+        elif subject == "__total__":
+            lock[metric] = max(lock.get(metric, 0.0), value)
+        elif metric == "lock_waiter_samples":
+            lock_by_type[subject] = lock_by_type.get(subject, 0.0) + value
+    if ticks <= 0:
+        return None
+    out: dict = {"sampler_ticks": int(ticks), "aas": total_active / ticks}
+    for key in _DB_LOAD_TYPES.values():
+        out[key] = 0.0
+    out["aas_other"] = 0.0
+    for event_type, count in by_type.items():
+        key = _DB_LOAD_TYPES.get(event_type, "aas_other")
+        out[key] += count / ticks
+    out["lock_waiters_mean"] = lock.get("lock_waiter_samples", 0.0) / ticks
+    out["lock_waiters_peak"] = lock.get("lock_waiters_peak")
+    out["lock_wait_max_s"] = lock.get("lock_wait_max_s")
+    out["lock_wait_by_type"] = {
+        locktype: count / ticks
+        for locktype, count in sorted(lock_by_type.items(), key=lambda kv: -kv[1])
+    }
+    return out
+
+
+def _cumulative_after(
+    rows: list[dict], *, system: str, labels: list[str], metric: str
+) -> list[tuple[float, float]]:
+    """Fleet-wide cumulative adapter counter over consecutive phases. Each
+    phase is summed across replicas by sample ordinal, so a fleet that was
+    restarted at the first phase's start lines up."""
+    out: list[tuple[float, float]] = []
+    for label in labels:
+        out.extend(_adapter_series(rows, system=system, phase_label=label, metric=metric))
+    return out
+
+
+def _abandon_summary(
+    rows: list[dict], *, system: str, phases: list[Phase]
+) -> dict | None:
+    """Mass-abandonment outcome, timed from the abandon-kill phase start.
+
+    `held_at_kill` is what the killed fleet reported holding and
+    `running_before_kill` what the database counted as claimed (the
+    adapter's `state_queries.running`). `rescued_*_s` are the times until
+    that fraction of all tagged jobs had completed again; they carry one
+    sample period of resolution. `rescue_rate_10_90_per_s` is the rate
+    between the 10% and 90% marks, past detection and before the tail. `missing` = tagged jobs never completed
+    by the end of the run, `excess` = completions beyond the tagged count
+    (duplicate execution). `running_cleared_s` is when the database's
+    claimed count fell to 1% of its value at the kill.
+    """
+    kill_index = next(
+        (i for i, p in enumerate(phases) if p.type is PhaseType.ABANDON_KILL), None
+    )
+    if kill_index is None:
+        return None
+    kill = phases[kill_index]
+    kill_t = _phase_start_elapsed(rows, system=system, phase_label=kill.label)
+    if kill_t is None:
+        return None
+    before = [p.label for p in phases[:kill_index]]
+    after = [p.label for p in phases[kill_index:]]
+
+    def fleet_last_before(metric: str) -> float | None:
+        latest: dict[str, tuple[float, float]] = {}
+        for row in rows:
+            if (
+                row["system"] != system
+                or row["metric"] != metric
+                or row.get("subject_kind") != "adapter"
+                or row["phase_label"] not in before
+            ):
+                continue
+            try:
+                t = float(row["elapsed_s"])
+                v = float(row["value"])
+            except (TypeError, ValueError):
+                continue
+            iid = str(row.get("instance_id") or "0")
+            if t < kill_t and (iid not in latest or t >= latest[iid][0]):
+                latest[iid] = (t, v)
+        return sum(v for _, v in latest.values()) if latest else None
+
+    def cluster_value(metric: str) -> float | None:
+        values = [v for _, v in _cluster_series(rows, system=system, metric=metric)]
+        return values[-1] if values else None
+
+    tagged = fleet_last_before("abandon_tagged_enqueued_total")
+    held = fleet_last_before("abandon_held_jobs")
+    running_before = cluster_value("abandon_running_before_kill")
+    out: dict = {
+        "tagged_enqueued": tagged,
+        "held_at_kill": held,
+        "running_before_kill": running_before,
+        "running_after_kill": cluster_value("abandon_running_after_kill"),
+        "kill_s": cluster_value("abandon_kill_s"),
+    }
+    cumulative = _cumulative_after(
+        rows, system=system, labels=after, metric="rescued_completed_total"
+    )
+    rates = _cumulative_after(
+        rows, system=system, labels=after, metric="rescued_completion_rate"
+    )
+    rescued = max((v for _, v in cumulative), default=None)
+    out["rescued_completed"] = rescued
+    out["peak_rescue_rate_per_s"] = _peak([v for _, v in rates]) if rates else None
+    first = next((t for t, v in cumulative if v > 0), None)
+    out["first_rescued_s"] = first - kill_t if first is not None else None
+    target = tagged or None
+    for label, fraction in (
+        ("10", 0.10), ("50", 0.50), ("90", 0.90), ("99", 0.99), ("all", 1.0)
+    ):
+        reached = None
+        if target:
+            reached = next(
+                (t for t, v in cumulative if v >= fraction * target - 0.5), None
+            )
+        out[f"rescued_{label}_s"] = reached - kill_t if reached is not None else None
+    if tagged is not None and rescued is not None:
+        out["missing"] = max(0.0, tagged - rescued)
+        out["excess"] = max(0.0, rescued - tagged)
+    running_rows = [
+        (float(r["elapsed_s"]), float(r["value"]))
+        for r in rows
+        if r["system"] == system
+        and r.get("subject_kind") == "job_state"
+        and r["subject"] == "running"
+        and r["metric"] == "job_state_count"
+    ]
+    running = sorted((t, v) for t, v in running_rows if t >= kill_t)
+    if running_before and running:
+        floor = max(1.0, 0.01 * running_before)
+        cleared = next((t for t, v in running if v <= floor), None)
+        out["running_cleared_s"] = cleared - kill_t if cleared is not None else None
+    if out.get("rescued_10_s") is not None and out.get("rescued_90_s") is not None:
+        span = out["rescued_90_s"] - out["rescued_10_s"]
+        out["rescue_rate_10_90_per_s"] = 0.8 * target / span if span > 0 else None
     return out
 
 

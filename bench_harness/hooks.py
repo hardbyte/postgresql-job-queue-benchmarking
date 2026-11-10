@@ -1213,3 +1213,60 @@ def schedule_preload_command(
 def enter_schedule_preload(runtime: PhaseRuntime) -> None:
     path = _control_file(runtime, "schedule_control_file")
     write_control_json(path, schedule_preload_command(runtime))
+
+
+# ─── abandon-kill ────────────────────────────────────────────────────────
+#
+# The mass_abandon scenario. Until this phase the abandon control reads
+# {"tag": true, "hold": true}: producers tag their jobs and workers hold the
+# tagged jobs they claim. The hook counts the claims the database holds,
+# SIGKILLs every replica at once, flips the control so the next fleet runs
+# tagged jobs normally, and starts that fleet after `down` (default 0 s).
+
+ABANDON_HOLD = {"tag": True, "hold": True}
+ABANDON_RELEASE = {"tag": False, "hold": False}
+
+
+def _count_running(state: dict[str, object]) -> float | None:
+    sql = state.get("abandon_running_sql")
+    url = state.get("system_database_url")
+    if not sql or not url:
+        return None
+    try:
+        with psycopg.connect(
+            str(url), autocommit=True, application_name="bench-harness-abandon"
+        ) as conn:
+            row = conn.execute(str(sql)).fetchone()
+    except psycopg.Error as exc:
+        print(f"[abandon-kill] running count failed: {exc}", file=sys.stderr)
+        return None
+    return float(row[0]) if row and row[0] is not None else None
+
+
+def enter_abandon_kill(runtime: PhaseRuntime) -> None:
+    from .phases import parse_duration
+
+    pool = runtime.state.get("replica_pool")
+    if pool is None:
+        raise RuntimeError("abandon-kill requires state['replica_pool']")
+    path = _control_file(runtime, "abandon_control_file")
+    emit = _emit(runtime.state)
+    running = _count_running(runtime.state)
+    if running is not None:
+        emit("cluster", "", "abandon_running_before_kill", running)
+    started = time.monotonic()
+    killed = pool.kill_all()
+    emit("cluster", "", "abandon_kill_s", time.monotonic() - started)
+    write_control_json(path, ABANDON_RELEASE)
+    running = _count_running(runtime.state)
+    if running is not None:
+        emit("cluster", "", "abandon_running_after_kill", running)
+    down_s = parse_duration(runtime.phase.param("down", "0") or "0")
+    if down_s > 0:
+        time.sleep(down_s)
+    for instance_id in killed:
+        pool.start_worker(instance_id)
+    print(
+        f"[abandon-kill] killed replicas {killed}, restarted after {down_s}s",
+        file=sys.stderr,
+    )

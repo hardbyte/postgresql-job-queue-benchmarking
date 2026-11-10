@@ -48,6 +48,9 @@ pub struct LongHorizonJob {
     /// Intended run_at for scheduled-herd jobs, unix milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_at_ms: Option<i64>,
+    /// Mass-abandonment tag; see scenario_controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abandon: Option<u8>,
 }
 
 /// Shared, bounded-memory rolling window of sample events for percentiles.
@@ -150,6 +153,14 @@ impl Worker for LongHorizonWorker {
     async fn perform(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
         let args: LongHorizonJob = serde_json::from_value(ctx.job.args.clone())
             .map_err(|err| JobError::Terminal(format!("failed to deserialize args: {err}")))?;
+        if args.abandon.is_some() {
+            self.controls.hold_if_abandoning().await;
+            if self.work_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(self.work_ms)).await;
+            }
+            self.controls.on_rescued_complete();
+            return Ok(JobResult::Completed);
+        }
         if args.fail.is_some() || args.run_at_ms.is_some() {
             self.controls.on_start(args.run_at_ms);
             if let Some(kind) = args.fail.as_deref() {
@@ -473,8 +484,9 @@ fn build_batch_params(
     max_attempts: i16,
     padding: &str,
     controls: &ScenarioControls,
-) -> Vec<InsertParams> {
+) -> (Vec<InsertParams>, usize) {
     let mut params = Vec::with_capacity(batch_size);
+    let mut abandon_tagged = 0;
     for _ in 0..batch_size {
         let seq = *next_seq;
         let priority = priority_pattern[seq.rem_euclid(priority_pattern.len() as i64) as usize];
@@ -491,7 +503,9 @@ fn build_batch_params(
             fail: tag.as_ref().map(|tag| tag.kind.to_owned()),
             fail_attempts: tag.and_then(|tag| tag.fail_attempts),
             run_at_ms: None,
+            abandon: controls.abandon_tag(),
         };
+        abandon_tagged += usize::from(args.abandon.is_some());
         params.push(
             insert::params_with(
                 &args,
@@ -506,7 +520,7 @@ fn build_batch_params(
         );
         *next_seq += 1;
     }
-    params
+    (params, abandon_tagged)
 }
 
 fn queue_storage_event_tables(
@@ -573,6 +587,7 @@ fn emit_descriptor(system: &str, db_name: &str, event_tables: Vec<String>) {
         "version": env!("CARGO_PKG_VERSION"),
         "schema_version": env_string("AWA_SCHEMA_VERSION", "current"),
         "db_name": db_name,
+        "abandon_rescue": "stale-heartbeat and deadline rescue (heartbeat_staleness 90 s default, LEASE_DEADLINE_MS)",
         "started_at": now_iso_ms(),
     }));
 }
@@ -776,7 +791,10 @@ pub async fn run() {
         // The portable bench is measuring queue behavior, not the cost of
         // refreshing runtime/admin snapshots every few seconds.
         .queue_stats_interval(Duration::from_secs(300))
-        .runtime_snapshot_interval(Duration::from_secs(300))
+        .runtime_snapshot_interval(Duration::from_millis(env_u64(
+            "AWA_RUNTIME_SNAPSHOT_INTERVAL_MS",
+            300_000,
+        )))
         .dlq_enabled_by_default(dlq_enabled)
         .register_worker(worker);
     let client = match &queue_storage {
@@ -956,7 +974,7 @@ pub async fn run() {
             };
 
             let mut next_seq = seq;
-            let params = build_batch_params(
+            let (params, abandon_tagged) = build_batch_params(
                 &producer_queue_names,
                 &mut next_seq,
                 batch_size,
@@ -1003,6 +1021,7 @@ pub async fn run() {
                     }
                     drop(guard);
                     producer_enqueued.fetch_add(batch_size as u64, Ordering::Relaxed);
+                    producer_controls.record_abandon_tagged(abandon_tagged);
                     seq = next_seq;
                 }
                 Err(err) => {
@@ -1049,6 +1068,7 @@ pub async fn run() {
                                     fail: None,
                                     fail_attempts: None,
                                     run_at_ms: Some(run_at_ms),
+                                    abandon: None,
                                 },
                                 awa_model::InsertOpts {
                                     queue: herd_queue.clone(),

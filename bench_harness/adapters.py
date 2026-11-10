@@ -333,6 +333,8 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         "CONSUMER_BATCH_SIZE",
         "SUBSCRIBER_BATCH_SIZE",
         "CLAIM_TIMEOUT_SECS",
+        "STALLED_AFTER_SECS",
+        "EXPIRE_IN_SECS",
         "MAX_CONNECTIONS",
     ):
         if key in os.environ:
@@ -376,7 +378,11 @@ def launch_awa_canonical(manifest: AdapterManifest, overrides: dict[str, str]) -
 
 # Control files the orchestrator creates next to the producer-rate file
 # (same directory, so the existing /control mount covers them).
-SCENARIO_CONTROL_FILE_KEYS = ("JOB_FAILURE_CONTROL_FILE", "SCHEDULE_CONTROL_FILE")
+SCENARIO_CONTROL_FILE_KEYS = (
+    "JOB_FAILURE_CONTROL_FILE",
+    "SCHEDULE_CONTROL_FILE",
+    "JOB_ABANDON_CONTROL_FILE",
+)
 
 
 ADAPTER_CONTAINER_LABEL = "bench.pg_port"

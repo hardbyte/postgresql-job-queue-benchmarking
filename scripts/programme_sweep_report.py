@@ -3,9 +3,10 @@
 Usage: python scripts/programme_sweep_report.py <results_root> > SUMMARY.md
 
 Reads run_index.tsv, merges each cell's per-system summary.json, and prints
-one table per section with the headline columns for that scenario. Missing
-values print as "–"; a system absent from a cell (failed run, unsupported
-scenario) is omitted from that table.
+one table per section with the headline columns for that scenario, then a
+resource table (CPU, memory, database load, lock waits) for the section's
+busiest phase. Missing values print as "–"; a system absent from a cell
+(failed run, unsupported scenario) is omitted from that table.
 """
 
 from __future__ import annotations
@@ -16,7 +17,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-# (phase label or None for the system-level "run" block, dotted key, header, format)
+# (phase label, None for the system-level "run" block or "@<block>" for another
+# system-level block, dotted key, header, format)
 Column = tuple[str | None, str, str, str]
 
 SECTIONS: dict[str, tuple[str, list[Column]]] = {
@@ -150,7 +152,57 @@ SECTIONS: dict[str, tuple[str, list[Column]]] = {
             ("recovery", "median_queue_depth", "recovery depth", "{:,.0f}"),
         ],
     ),
+    "abandon": (
+        "Mass abandonment: fleet SIGKILLed holding every claim, fresh fleet restarted",
+        [
+            ("@abandon", "running_before_kill", "claimed at kill (DB)", "{:,.0f}"),
+            ("@abandon", "held_at_kill", "held at kill (workers)", "{:,.0f}"),
+            ("claim", "drain.drain_time_s", "claim s", "{:,.0f}"),
+            ("@abandon", "first_rescued_s", "first rescue s", "{:,.0f}"),
+            ("@abandon", "rescued_50_s", "50% s", "{:,.0f}"),
+            ("@abandon", "rescued_99_s", "99% s", "{:,.0f}"),
+            ("@abandon", "rescued_all_s", "100% s", "{:,.0f}"),
+            ("@abandon", "rescue_rate_10_90_per_s", "rescue/s 10–90%", "{:,.0f}"),
+            ("@abandon", "missing", "missing", "{:,.0f}"),
+            ("@abandon", "excess", "duplicates", "{:,.0f}"),
+            ("rescue", "median_claim_p99_ms", "fresh claim p99 ms", "{:,.0f}"),
+        ],
+    ),
 }
+
+# The phase each section's resource table reads: its busiest or most telling.
+RESOURCE_PHASE = {
+    "throughput": "clean",
+    "ref800": "clean",
+    "retry": "storm",
+    "fanout": "clean_1",
+    "logical": "stall_1",
+    "neighbour": "saturation",
+    "scheduled": "due",
+    "long_jobs": "steady",
+    "drain": "drain",
+    "payload": "clean_1",
+    "idle": "idle_1",
+    "chaos": "recovery",
+    "abandon": "rescue",
+}
+
+RESOURCE_COLUMNS: list[tuple[str, str, str]] = [
+    ("pg_cpu_cores", "PG cores", "{:.2f}"),
+    ("pg_cpu_cores_peak", "PG cores peak", "{:.2f}"),
+    ("adapter_cpu_cores", "worker cores", "{:.2f}"),
+    ("peak_pg_memory_anon_mb", "PG anon MB peak", "{:,.0f}"),
+    ("peak_adapter_memory_anon_mb", "worker MB peak", "{:,.0f}"),
+    ("db_load.aas", "AAS", "{:.2f}"),
+    ("db_load.aas_cpu", "AAS CPU", "{:.2f}"),
+    ("db_load.aas_lock", "AAS Lock", "{:.2f}"),
+    ("db_load.aas_lock_advisory", "AAS advisory", "{:.2f}"),
+    ("db_load.aas_lwlock", "AAS LWLock", "{:.2f}"),
+    ("db_load.aas_io", "AAS IO", "{:.2f}"),
+    ("db_load.lock_waiters_mean", "lock waiters", "{:.2f}"),
+    ("db_load.lock_wait_max_s", "max lock wait s", "{:.2f}"),
+    ("pg_deadlocks_delta", "deadlocks", "{:,.0f}"),
+]
 
 SYSTEM_ORDER = ["awa", "pgboss", "river", "oban", "procrastinate", "absurd", "pgmq", "pgque"]
 
@@ -161,6 +213,14 @@ def dig(blob: dict | None, dotted: str):
             return None
         blob = blob[part]
     return blob
+
+
+def block(summary: dict, phase: str | None) -> dict | None:
+    if phase is None:
+        return summary.get("run")
+    if phase.startswith("@"):
+        return summary.get(phase[1:])
+    return summary.get("phases", {}).get(phase)
 
 
 def fmt(value, pattern: str) -> str:
@@ -199,8 +259,18 @@ def main() -> None:
                 summary = systems[system]
                 values = []
                 for phase, key, _, pattern in columns:
-                    blob = summary.get("run") if phase is None else summary.get("phases", {}).get(phase)
-                    values.append(fmt(dig(blob, key), pattern))
+                    values.append(fmt(dig(block(summary, phase), key), pattern))
+                print(f"| {system} | " + " | ".join(values) + " |")
+            print()
+            resource_phase = RESOURCE_PHASE.get(section)
+            if resource_phase is None:
+                continue
+            print(f"Resources during `{resource_phase}`:\n")
+            print("| system | " + " | ".join(header for _, header, _ in RESOURCE_COLUMNS) + " |")
+            print("|---|" + "---:|" * len(RESOURCE_COLUMNS))
+            for system in ordered:
+                phase_block = systems[system].get("phases", {}).get(resource_phase)
+                values = [fmt(dig(phase_block, key), pattern) for key, _, pattern in RESOURCE_COLUMNS]
                 print(f"| {system} | " + " | ".join(values) + " |")
             print()
 

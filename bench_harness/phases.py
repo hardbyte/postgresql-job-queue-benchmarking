@@ -50,6 +50,9 @@ class PhaseType(str, Enum):
     # Workload-shape phases driven through adapter control files.
     RETRY_STORM = "retry-storm"
     SCHEDULE_PRELOAD = "schedule-preload"
+    # SIGKILL every replica while it holds its claims, then start a fresh
+    # fleet that must recover them (mass_abandon).
+    ABANDON_KILL = "abandon-kill"
     # CDC-suite phase types (docs/cdc-harness-design.md §9). Consumer-level
     # chaos is applied through the receiver's control API, not the replica
     # pool — the hooks live in cdc_harness, not bench_harness.hooks.
@@ -86,6 +89,7 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.LOGICAL_STALL:    ("#D8A03A", 0.30),
     PhaseType.RETRY_STORM:      ("#C86A8A", 0.30),
     PhaseType.SCHEDULE_PRELOAD: ("#6CAFAF", 0.25),
+    PhaseType.ABANDON_KILL:     ("#A02828", 0.45),
     PhaseType.CONSUMER_DEAD:    ("#C04A4A", 0.35),
     PhaseType.CONSUMER_SLOW:    ("#D8A03A", 0.30),
     PhaseType.SINK_OUTAGE:      ("#A03030", 0.40),
@@ -118,6 +122,7 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.LOGICAL_STALL:    True,
     PhaseType.RETRY_STORM:      True,
     PhaseType.SCHEDULE_PRELOAD: True,
+    PhaseType.ABANDON_KILL:     True,
     PhaseType.CONSUMER_DEAD:    True,
     PhaseType.CONSUMER_SLOW:    True,
     PhaseType.SINK_OUTAGE:      True,
@@ -527,6 +532,22 @@ SCENARIOS: dict[str, list[str]] = {
         "storm=retry-storm(transient_pct=30,poison_pct=1):20m",
         "recovery=recovery:20m",
     ],
+    # Mass abandonment. Every job preloaded while the gate is closed is
+    # tagged; `claim` opens the gate and workers hold their tagged jobs
+    # instead of running them. `kill` SIGKILLs the whole fleet at once,
+    # tells the next fleet to run tagged jobs normally and starts it.
+    # `rescue` measures how long the system takes to notice the abandoned
+    # claims and finish them, alongside a fresh stream at --producer-rate.
+    # Size --worker-count (or the batch knobs) so the fleet can hold every
+    # preloaded job, and set each system's claim timeout above `claim`.
+    "mass_abandon": [
+        "warmup=warmup(rate=0):1m",
+        "preload=preload(jobs=1000000):10m",
+        "claim=drain:5m",
+        "kill=abandon-kill:30s",
+        "rescue=clean:30m",
+        "settle=idle-background(rate=0):5m",
+    ],
 }
 
 # Phase types whose hooks create a logical replication slot. The harness
@@ -722,6 +743,8 @@ def default_registry() -> HookRegistry:
                       exit=hooks.exit_retry_storm)
     registry.register(PhaseType.SCHEDULE_PRELOAD,
                       enter=hooks.enter_schedule_preload)
+    registry.register(PhaseType.ABANDON_KILL,
+                      enter=hooks.enter_abandon_kill)
     # warmup, clean, recovery, preload — no extra runtime action; the adapter's
     # steady workload carries the load.
     return registry

@@ -3,6 +3,8 @@
 //! Default-off: `JOB_FAILURE_CONTROL_FILE` tags jobs enqueued while a
 //! failure plan is active as transient/poison failures;
 //! `SCHEDULE_CONTROL_FILE` asks instance 0 to enqueue a scheduled herd.
+//! `JOB_ABANDON_CONTROL_FILE` tags jobs for the mass-abandonment scenario
+//! and tells workers whether to hold them until the process dies.
 //! Untagged jobs keep their payload and code path unchanged.
 
 use serde::Deserialize;
@@ -21,6 +23,14 @@ struct FailurePlan {
     poison_pct: f64,
     #[serde(default)]
     transient_failures: Option<i16>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+struct AbandonPlan {
+    #[serde(default)]
+    tag: bool,
+    #[serde(default)]
+    hold: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,7 +113,9 @@ fn now_epoch_ms() -> i64 {
 pub struct ScenarioControls {
     failure_path: Option<String>,
     schedule_path: Option<String>,
+    abandon_path: Option<String>,
     plan: Mutex<(Option<FailurePlan>, Option<Instant>)>,
+    abandon_plan: Mutex<(AbandonPlan, Instant)>,
     last_herd_id: Mutex<Option<String>>,
 
     failed_attempts: AtomicU64,
@@ -116,15 +128,25 @@ pub struct ScenarioControls {
     pub schedule_preload_ms: AtomicI64,
     lateness_ms: Mutex<Vec<f64>>,
     last_rates: Mutex<HashMap<&'static str, u64>>,
+    abandon_held: AtomicI64,
+    abandon_tagged_enqueued: AtomicU64,
+    rescued_completed: AtomicU64,
 }
 
 impl ScenarioControls {
     pub fn from_env() -> Self {
         let non_empty = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        let abandon_path = non_empty("JOB_ABANDON_CONTROL_FILE");
+        let abandon_plan = abandon_path
+            .as_deref()
+            .and_then(read_json::<AbandonPlan>)
+            .unwrap_or_default();
         Self {
             failure_path: non_empty("JOB_FAILURE_CONTROL_FILE"),
             schedule_path: non_empty("SCHEDULE_CONTROL_FILE"),
+            abandon_path,
             plan: Mutex::new((None, None)),
+            abandon_plan: Mutex::new((abandon_plan, Instant::now())),
             last_herd_id: Mutex::new(None),
             failed_attempts: AtomicU64::new(0),
             retried_completions: AtomicU64::new(0),
@@ -135,7 +157,52 @@ impl ScenarioControls {
             schedule_preload_ms: AtomicI64::new(-1),
             lateness_ms: Mutex::new(Vec::new()),
             last_rates: Mutex::new(HashMap::new()),
+            abandon_held: AtomicI64::new(0),
+            abandon_tagged_enqueued: AtomicU64::new(0),
+            rescued_completed: AtomicU64::new(0),
         }
+    }
+
+    pub fn abandon_enabled(&self) -> bool {
+        self.abandon_path.is_some()
+    }
+
+    fn abandon_plan(&self) -> AbandonPlan {
+        let Some(path) = self.abandon_path.as_deref() else {
+            return AbandonPlan::default();
+        };
+        let mut guard = self.abandon_plan.lock().unwrap();
+        if guard.1.elapsed() >= Duration::from_secs(1) {
+            *guard = (
+                read_json::<AbandonPlan>(path).unwrap_or_default(),
+                Instant::now(),
+            );
+        }
+        guard.0
+    }
+
+    /// `Some(1)` for a job the producer must tag for mass abandonment.
+    pub fn abandon_tag(&self) -> Option<u8> {
+        self.abandon_plan().tag.then_some(1)
+    }
+
+    pub fn record_abandon_tagged(&self, enqueued: usize) {
+        self.abandon_tagged_enqueued
+            .fetch_add(enqueued as u64, Ordering::Relaxed);
+    }
+
+    /// Holds a tagged job until the process dies when the plan says so;
+    /// otherwise returns and the caller completes it as a rescued job.
+    pub async fn hold_if_abandoning(&self) {
+        if !self.abandon_plan().hold {
+            return;
+        }
+        self.abandon_held.fetch_add(1, Ordering::Relaxed);
+        std::future::pending::<()>().await;
+    }
+
+    pub fn on_rescued_complete(&self) {
+        self.rescued_completed.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn failure_enabled(&self) -> bool {
@@ -224,6 +291,25 @@ impl ScenarioControls {
     /// Extra sampler metrics as (name, value, window_s).
     pub fn metrics(&self, dt_s: f64, window_s: f64) -> Vec<(&'static str, f64, f64)> {
         let mut out = Vec::new();
+        if self.abandon_enabled() {
+            let rescued = self.rescued_completed.load(Ordering::Relaxed);
+            out.push((
+                "abandon_held_jobs",
+                self.abandon_held.load(Ordering::Relaxed) as f64,
+                0.0,
+            ));
+            out.push((
+                "abandon_tagged_enqueued_total",
+                self.abandon_tagged_enqueued.load(Ordering::Relaxed) as f64,
+                0.0,
+            ));
+            out.push(("rescued_completed_total", rescued as f64, 0.0));
+            out.push((
+                "rescued_completion_rate",
+                self.rate("rescued", rescued, dt_s),
+                window_s,
+            ));
+        }
         if self.failure_enabled() {
             out.push((
                 "injected_failure_rate",

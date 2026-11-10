@@ -33,6 +33,19 @@ class PollTargets:
     # {state: count SQL} from adapter.json -> state_queries; empty unless the
     # run's phases need DB-side job-state counts.
     state_queries: dict[str, str] = field(default_factory=dict)
+    # Minimum seconds between state-query polls; 0 polls every tick. Large
+    # backlogs make these counts expensive, so mass_abandon spaces them out.
+    state_query_every_s: float = 0.0
+
+
+def resource_metric_name(subject: str, reading: str) -> str:
+    """raw.csv metric for a resource reading: `pg_` for the Postgres
+    container (subject ""), `host_` for the host, `adapter_` for replicas.
+    Cumulative CPU becomes `<prefix>cpu_seconds_total`."""
+    prefix = "pg_" if not subject else "host_" if subject == "host" else "adapter_"
+    if reading == "cpu_seconds":
+        return f"{prefix}cpu_seconds_total"
+    return f"{prefix}{reading}"
 
 
 def _next_aligned_tick(now: float, period_s: int) -> float:
@@ -173,7 +186,8 @@ SELECT
   (xact_commit + xact_rollback)::double precision AS xacts,
   tup_updated::double precision,
   tup_deleted::double precision,
-  tup_inserted::double precision
+  tup_inserted::double precision,
+  deadlocks::double precision
 FROM pg_stat_database
 WHERE datname = current_database()
 """
@@ -326,7 +340,7 @@ class MetricsDaemon(threading.Thread):
         bench_start: float,
         get_phase: "callable",  # () -> (label, type)
         period_s: int = 10,
-        cpu_probe: "Callable[[], dict[str, float]] | None" = None,
+        cpu_probe: "Callable[[], dict[tuple[str, str], float]] | None" = None,
     ) -> None:
         super().__init__(name=f"metrics-{system}", daemon=True)
         self.run_id = run_id
@@ -337,8 +351,8 @@ class MetricsDaemon(threading.Thread):
         self.bench_start = bench_start
         self.get_phase = get_phase
         self.period_s = period_s
-        # Returns cumulative CPU seconds keyed by subject: "" for the
-        # Postgres container, "replica-<i>" for adapter replicas.
+        # Resource readings keyed by (subject, reading); see
+        # orchestrator._cpu_probe and resource_metric_name.
         self.cpu_probe = cpu_probe
         self.stop_event = threading.Event()
         # Per-tick timestamps captured once in _poll_once so all _emit calls
@@ -351,6 +365,7 @@ class MetricsDaemon(threading.Thread):
         # its per-phase delta drops out of the existing counter-delta path.
         self._relfilenode_prev: dict[str, str] = {}
         self._relfilenode_churn_total = 0
+        self._state_polled_at = float("-inf")
 
     # ── one-shot boundary snapshots ─────────────────────────────────────
     def phase_boundary_snapshot(self) -> None:
@@ -796,7 +811,13 @@ class MetricsDaemon(threading.Thread):
             # Per-database transaction / tuple churn (background chattiness).
             row = self._tick_query(conn, cur, _PG_STAT_DATABASE_SQL)
             if row is not None:
-                db_xacts, db_tup_updated, db_tup_deleted, db_tup_inserted = row
+                db_xacts, db_tup_updated, db_tup_deleted, db_tup_inserted, deadlocks = row
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_db_deadlocks_total",
+                    value=float(deadlocks),
+                )
                 self._emit(
                     subject_kind="cluster",
                     subject="",
@@ -867,18 +888,26 @@ class MetricsDaemon(threading.Thread):
 
             if self.cpu_probe is not None:
                 try:
-                    cpu = self.cpu_probe()
+                    readings = self.cpu_probe()
                 except Exception:
-                    cpu = {}
-                for subject, seconds in sorted(cpu.items()):
+                    readings = {}
+                for (subject, reading), value in sorted(readings.items()):
                     self._emit(
                         subject_kind="cluster",
                         subject=subject,
-                        metric="pg_cpu_seconds_total" if not subject else "adapter_cpu_seconds_total",
-                        value=float(seconds),
+                        metric=resource_metric_name(subject, reading),
+                        value=float(value),
                     )
 
-            for state, state_sql in self.targets.state_queries.items():
+            state_due = (
+                time.monotonic() - self._state_polled_at
+                >= self.targets.state_query_every_s
+            )
+            if state_due and self.targets.state_queries:
+                self._state_polled_at = time.monotonic()
+            for state, state_sql in (
+                self.targets.state_queries.items() if state_due else ()
+            ):
                 row = self._tick_query(conn, cur, state_sql)
                 if row is None or row[0] is None:
                     continue
