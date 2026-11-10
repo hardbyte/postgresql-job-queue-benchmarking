@@ -223,8 +223,59 @@ system has no delayed execution, ignore the herd command and add
 implementation for the other languages.
 
 Optionally declare `state_queries` in `adapter.json`: `{"scheduled": "SELECT
-count(*) ...", "retryable": "...", "dead": "..."}`. The harness polls them
-during these scenarios for DB-side job-state counts.
+count(*) ...", "retryable": "...", "dead": "...", "running": "..."}`. The
+harness polls them during these scenarios for DB-side job-state counts.
+`running` counts jobs claimed by a worker and not yet finished, in whatever
+state the system uses for that (`running`, `active`, `executing`, invisible
+pgmq messages, an open pgque batch).
+
+### Mass abandonment (optional, default-off)
+
+Used by the `mass_abandon` scenario: a fleet claims a large backlog, every
+replica is SIGKILLed at once while holding its claims, and a fresh fleet
+starts. The scenario measures how the system notices the abandoned claims
+and works them off.
+
+| Var | Meaning |
+|---|---|
+| `JOB_ABANDON_CONTROL_FILE` | JSON `{"tag": bool, "hold": bool}`; `{}` means both false. Read once at startup, before any consumer starts, then at most once per second. |
+
+- Producer: while `tag` is true, every job it enqueues carries
+  `"abandon": 1` in its payload. Other payload fields are unchanged.
+- Worker, tagged job, `hold` true: count it in `abandon_held_jobs`, then
+  block until the process dies. Do not complete, fail, snooze or return,
+  and ignore the system's own cancellation (job timeouts, context
+  cancellation): the job must stay claimed exactly as a handler stuck in a
+  dead process would leave it. Batch handlers (one handler call for many
+  jobs) hold the whole batch.
+- Worker, tagged job, `hold` false: run normally and complete. Count it in
+  `rescued_completed_total`; keep it out of `completion_rate` and the
+  `claim_*` / `subscriber_*` / `end_to_end_*` windows, like herd jobs.
+- The harness writes `{"tag": true, "hold": true}` before the run, SIGKILLs
+  every replica in the `abandon-kill` phase, writes `{"tag": false,
+  "hold": false}` and only then starts fresh replicas, so a live process
+  never sees `hold` flip.
+
+Emit every tick while the variable is set:
+
+| Metric | Meaning | Window |
+|---|---|---|
+| `abandon_held_jobs` | jobs this process is holding right now | 0 |
+| `abandon_tagged_enqueued_total` | tagged jobs this process enqueued (cumulative) | 0 |
+| `rescued_completed_total` | tagged jobs this process completed (cumulative) | 0 |
+| `rescued_completion_rate` | tagged jobs completed per second | `SAMPLE_EVERY_S` |
+
+Add `"abandon_rescue": "<mechanism (knob)>"` to the descriptor, naming how
+the system recovers a claim whose worker died and the setting that bounds
+it, e.g. `"heartbeat + deadline (LEASE_DEADLINE_MS)"`, `"visibility timeout
+(VISIBILITY_TIMEOUT_S)"`, `"stuck-job rescuer (RESCUE_AFTER_SECS)"`, or
+`"none"` when the system leaves abandoned claims for an operator. Declare
+`state_queries.running` (above).
+
+A process must be able to hold a large number of claims for this to be a
+mass abandonment: honour a large `WORKER_COUNT` (or, for batch handlers,
+`CONSUMER_BATCH_SIZE` / `SUBSCRIBER_BATCH_SIZE`) without opening a
+connection per held job.
 
 ### Shutdown
 
