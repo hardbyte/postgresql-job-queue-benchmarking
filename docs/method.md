@@ -213,7 +213,11 @@ The harness creates `JOB_ABANDON_CONTROL_FILE` reading `{"tag": true,
 before the kill carries `"abandon": 1`, and a worker that claims one holds it
 until its process dies. `abandon-kill` SIGKILLs the fleet, rewrites the
 control to `{"tag": false, "hold": false}` and starts a fresh fleet, which runs
-the tagged jobs normally once the system hands them out again. Tagged
+the tagged jobs normally once the system hands them out again. The fresh
+fleet reads `RESCUE_FLEET_<VAR>` from the harness environment as `<VAR>`
+(e.g. `RESCUE_FLEET_WORKER_COUNT=128`), so it can run at ordinary
+concurrency: a fleet sized to hold a million claims would otherwise restart
+with a million workers. Tagged
 completions stay out of `completion_rate` and the latency windows; adapters
 report them as `rescued_completed_total`. The adapter contract is in
 `CONTRIBUTING_ADAPTERS.md` ("Mass abandonment").
@@ -243,7 +247,9 @@ from the drain that follows it (`rescued_*_s`, `peak_rescue_rate_per_s`).
 `rescued_90_s`, `rescued_99_s`, `rescued_all_s`, `peak_rescue_rate_per_s`,
 `rescue_rate_10_90_per_s` (between the 10% and 90% marks), `missing`, `excess` (duplicate completions) and
 `running_cleared_s` (database claimed count back under 1% of its value at the
-kill). Times carry one sample period of resolution.
+kill). `running_cleared_s` measures the rescue mechanism alone; `rescued_*_s`
+also include working the jobs off again, so the fresh fleet's throughput
+bounds them. Times carry one sample period of resolution.
 
 ## Postgres diagnostics
 
