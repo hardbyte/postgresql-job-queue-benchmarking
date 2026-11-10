@@ -237,7 +237,7 @@ async fn count_by_state(
     queue_name: &str,
 ) -> HashMap<String, i64> {
     let schema = store.schema();
-    let rows: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    let rows: Vec<(String, i64)> = sqlx::query_as(&format!(
         r#"
         SELECT state, sum(count)::bigint AS count
         FROM (
@@ -293,7 +293,7 @@ async fn count_by_state(
         ) counts
         GROUP BY state
         "#,
-    )))
+    ))
     .bind(queue_name)
     .fetch_all(pool)
     .await

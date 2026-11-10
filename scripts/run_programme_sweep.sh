@@ -17,7 +17,7 @@ mkdir -p "$RESULTS_ROOT/logs"
 RUN_INDEX="$RESULTS_ROOT/run_index.tsv"
 [[ -f "$RUN_INDEX" ]] || echo -e "section\tcell_id\tsystems\trun_dir\texit_code\tstarted_at\tended_at" > "$RUN_INDEX"
 MASTER_LOG="$RESULTS_ROOT/run.log"
-PGMQ_IMAGE="ghcr.io/pgmq/pg18-pgmq:v1.13.0"
+PGMQ_IMAGE="ghcr.io/pgmq/pg18-pgmq:v1.13.1"
 SHARED="awa,absurd,oban,pgboss,procrastinate,river"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$MASTER_LOG"; }

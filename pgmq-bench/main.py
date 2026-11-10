@@ -24,8 +24,8 @@ QUEUE_NAME = "long_horizon_bench"
 # read_ct reached the attempt cap to a second queue is the documented
 # pattern.
 DLQ_NAME = f"{QUEUE_NAME}_dlq"
-PGMQ_PG_IMAGE = "ghcr.io/pgmq/pg18-pgmq:v1.13.0"
-PGMQ_UPSTREAM_VERSION = "v1.13.0"
+PGMQ_PG_IMAGE = "ghcr.io/pgmq/pg18-pgmq:v1.13.1"
+PGMQ_UPSTREAM_VERSION = "v1.13.1"
 
 
 def database_url() -> str:
