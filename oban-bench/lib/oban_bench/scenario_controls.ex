@@ -4,8 +4,9 @@ defmodule ObanBench.ScenarioControls do
 
   Default-off: `JOB_FAILURE_CONTROL_FILE` tags jobs enqueued while a failure
   plan is active as transient/poison failures; `SCHEDULE_CONTROL_FILE` asks
-  instance 0 to enqueue a scheduled herd. Untagged jobs keep their payload
-  and code path unchanged.
+  instance 0 to enqueue a scheduled herd; `JOB_ABANDON_CONTROL_FILE` tags
+  jobs for mass abandonment and makes workers hold them. Untagged jobs keep
+  their payload and code path unchanged.
   """
 
   @state :scenario_controls
@@ -16,18 +17,23 @@ defmodule ObanBench.ScenarioControls do
     :ets.new(@state, [:public, :named_table, :set])
     :ets.new(@lateness, [:public, :named_table, :duplicate_bag])
 
-    for key <- [:failed, :retried, :exhausted, :scheduled_done, :started, :enqueued, :early] do
+    for key <-
+          [:failed, :retried, :exhausted, :scheduled_done, :started, :enqueued, :early] ++
+            [:abandon_held, :abandon_enqueued, :rescued] do
       :ets.insert(@state, {key, 0})
     end
 
     :ets.insert(@state, {:preload_ms, -1})
     :ets.insert(@state, {:plan, %{}, nil})
+    :ets.insert(@state, {:abandon, %{}, nil})
+    abandon_control()
     :ets.insert(@state, {:last_herd_id, nil})
     :ok
   end
 
   def failure_path, do: System.get_env("JOB_FAILURE_CONTROL_FILE")
   def schedule_path, do: System.get_env("SCHEDULE_CONTROL_FILE")
+  def abandon_path, do: System.get_env("JOB_ABANDON_CONTROL_FILE")
 
   def max_attempts do
     case Integer.parse(System.get_env("JOB_MAX_ATTEMPTS") || "") do
@@ -51,22 +57,44 @@ defmodule ObanBench.ScenarioControls do
   def tag(seq) do
     case failure_path() do
       nil -> %{}
-      path -> failure_tag(current_plan(path), seq)
+      path -> failure_tag(cached_json(:plan, path), seq)
     end
   end
 
-  defp current_plan(path) do
+  defp cached_json(key, path) do
     now = System.monotonic_time(:millisecond)
 
-    case :ets.lookup(@state, :plan) do
-      [{:plan, plan, read_at}] when is_integer(read_at) and now - read_at < 1000 ->
-        plan
+    case :ets.lookup(@state, key) do
+      [{^key, value, read_at}] when is_integer(read_at) and now - read_at < 1000 ->
+        value
 
       _ ->
-        plan = read_json(path)
-        :ets.insert(@state, {:plan, plan, now})
-        plan
+        value = read_json(path)
+        :ets.insert(@state, {key, value, now})
+        value
     end
+  end
+
+  defp abandon_control do
+    case abandon_path() do
+      nil -> %{}
+      path -> cached_json(:abandon, path)
+    end
+  end
+
+  @doc "Abandon tag (string-keyed map) for jobs enqueued now."
+  def abandon_tag do
+    if abandon_control()["tag"] == true, do: %{"abandon" => 1}, else: %{}
+  end
+
+  def hold?, do: abandon_control()["hold"] == true
+
+  def record_abandon_enqueued(count), do: :ets.update_counter(@state, :abandon_enqueued, count)
+
+  @doc "Keep the job claimed until the process dies; never returns."
+  def hold_forever do
+    :ets.update_counter(@state, :abandon_held, 1)
+    :erlang.hibernate(Process, :sleep, [:infinity])
   end
 
   def failure_tag(plan, _seq) when map_size(plan) == 0, do: %{}
@@ -83,7 +111,7 @@ defmodule ObanBench.ScenarioControls do
     end
   end
 
-  def tagged?(args), do: Map.has_key?(args, "fail") or Map.has_key?(args, "run_at_ms")
+  def tagged?(args), do: Enum.any?(["fail", "run_at_ms", "abandon"], &Map.has_key?(args, &1))
 
   @doc "nil = succeed, :retry, or :exhausted (failing on the last attempt)."
   def failure_outcome(args, attempt, max_attempts) do
@@ -121,6 +149,7 @@ defmodule ObanBench.ScenarioControls do
   def on_complete(args) do
     if args["fail"] == "transient", do: :ets.update_counter(@state, :retried, 1)
     if Map.has_key?(args, "run_at_ms"), do: :ets.update_counter(@state, :scheduled_done, 1)
+    if Map.has_key?(args, "abandon"), do: :ets.update_counter(@state, :rescued, 1)
     :ok
   end
 
@@ -258,7 +287,21 @@ defmodule ObanBench.ScenarioControls do
         []
       end
 
-    failure ++ schedule
+    abandon =
+      if abandon_path() != nil do
+        rescued = count(:rescued)
+
+        [
+          {"abandon_held_jobs", count(:abandon_held) * 1.0, 0},
+          {"abandon_tagged_enqueued_total", count(:abandon_enqueued) * 1.0, 0},
+          {"rescued_completed_total", rescued * 1.0, 0},
+          {"rescued_completion_rate", rate(:rescued, rescued, dt_s), window_s}
+        ]
+      else
+        []
+      end
+
+    failure ++ schedule ++ abandon
   end
 
   defp instance_id do

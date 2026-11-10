@@ -14,6 +14,7 @@
   "state_queries": {
     "scheduled": "SELECT count(*) FROM oban_jobs WHERE state = 'scheduled'",
     "retryable": "SELECT count(*) FROM oban_jobs WHERE state = 'retryable'",
-    "dead": "SELECT count(*) FROM oban_jobs WHERE state = 'discarded'"
+    "dead": "SELECT count(*) FROM oban_jobs WHERE state = 'discarded'",
+    "running": "SELECT count(*) FROM oban_jobs WHERE state = 'executing'"
   }
 }

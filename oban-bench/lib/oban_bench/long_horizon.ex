@@ -14,8 +14,10 @@ defmodule ObanBench.LongHorizon do
   import Ecto.Query
   alias ObanBench.{Repo, LongHorizonWorker, ScenarioControls}
 
-  @queue :long_horizon_bench
   @latency_window_s 30.0
+  # Oban claims `limit - running` jobs in one UPDATE; above this the limit
+  # tracks `running + @max_claim` so no single fetch claims more.
+  @max_claim 10_000
 
   # Adapter metrics that describe a *global* observation (queue depth,
   # total backlog) rather than this replica's per-instance behaviour.
@@ -66,6 +68,7 @@ defmodule ObanBench.LongHorizon do
       version: "0.1.0",
       schema_version: System.get_env("OBAN_SCHEMA_VERSION", "current"),
       db_name: db_name,
+      abandon_rescue: "Lifeline stuck-job rescuer (RESCUE_AFTER_SECS)",
       started_at: now_iso()
     })
 
@@ -80,25 +83,18 @@ defmodule ObanBench.LongHorizon do
 
     queues = queue_names()
     per_queue_limit = max(1, div(worker_count, length(queues)))
-    Oban.scale_queue(queue: @queue, limit: per_queue_limit)
-
-    Enum.each(tl(queues), fn name ->
-      Oban.start_queue(queue: name, limit: per_queue_limit)
-    end)
-
     :ets.insert(:long_horizon_state, {:queues, List.to_tuple(queues)})
+    start_queues = fn -> Enum.each(queues, &start_queue(&1, per_queue_limit)) end
 
     case System.get_env("CONSUMER_GATE_FILE") do
       nil ->
-        :ok
+        start_queues.()
 
       gate_file ->
-        Enum.each(queues, fn name -> Oban.pause_queue(queue: name) end)
-
         spawn(fn ->
           wait_for_consumer_gate(gate_file)
-          IO.puts(:stderr, "[oban] consumer gate open; resuming queues")
-          Enum.each(queues, fn name -> Oban.resume_queue(queue: name) end)
+          IO.puts(:stderr, "[oban] consumer gate open; starting queues")
+          start_queues.()
         end)
     end
 
@@ -137,6 +133,33 @@ defmodule ObanBench.LongHorizon do
     ["long_horizon_bench" | Enum.map(1..(count - 1)//1, &"long_horizon_bench_#{&1}")]
   end
 
+  defp start_queue(name, limit) when limit <= @max_claim do
+    Oban.start_queue(queue: name, limit: limit, local_only: true)
+  end
+
+  defp start_queue(name, limit) do
+    Oban.start_queue(queue: name, limit: @max_claim, local_only: true)
+    spawn(fn -> follow_running(name, limit, @max_claim) end)
+  end
+
+  defp follow_running(name, target, limit) do
+    Process.sleep(500)
+
+    next_limit =
+      try do
+        %{running: running} = Oban.check_queue(queue: name)
+        wanted = min(target, length(running) + @max_claim)
+        if wanted != limit, do: Oban.scale_queue(queue: name, limit: wanted, local_only: true)
+        wanted
+      rescue
+        _ -> limit
+      catch
+        :exit, _ -> limit
+      end
+
+    follow_running(name, target, next_limit)
+  end
+
   # JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s.
   defp payload_padding(length) do
     length = max(0, length)
@@ -166,8 +189,8 @@ defmodule ObanBench.LongHorizon do
 
   # Jobs are spread over the queues by sequence number; with one queue the
   # worker's default queue is used.
-  defp new_job(seq, padding) do
-    LongHorizonWorker.new(job_args(seq, padding), job_opts() ++ queue_opts(seq))
+  defp new_job(seq, padding, abandon_tag) do
+    LongHorizonWorker.new(job_args(seq, padding, abandon_tag), job_opts() ++ queue_opts(seq))
   end
 
   defp queue_opts(seq) do
@@ -328,9 +351,11 @@ defmodule ObanBench.LongHorizon do
   # batch_max == 1 → preserve the original Oban.insert/1 wire path.
   # batch_max > 1 → Oban.insert_all/2 (documented bulk path).
   defp insert_batch(seq, 1, padding, batch_max) when batch_max <= 1 do
+    abandon_tag = ScenarioControls.abandon_tag()
+
     try do
-      case Oban.insert(new_job(seq, padding)) do
-        {:ok, _} -> :ok
+      case Oban.insert(new_job(seq, padding, abandon_tag)) do
+        {:ok, _} -> record_abandon_enqueued(abandon_tag, 1)
         _ -> :error
       end
     rescue
@@ -342,9 +367,11 @@ defmodule ObanBench.LongHorizon do
   end
 
   defp insert_batch(seq, batch_count, padding, _batch_max) do
+    abandon_tag = ScenarioControls.abandon_tag()
+
     changesets =
       for i <- 0..(batch_count - 1) do
-        new_job(seq + i, padding)
+        new_job(seq + i, padding, abandon_tag)
       end
 
     try do
@@ -352,7 +379,7 @@ defmodule ObanBench.LongHorizon do
       # https://hexdocs.pm/oban/Oban.html#insert_all/2 — issues a single
       # multi-row INSERT for the supplied changesets.
       case Oban.insert_all(changesets) do
-        jobs when is_list(jobs) -> :ok
+        jobs when is_list(jobs) -> record_abandon_enqueued(abandon_tag, batch_count)
         _ -> :error
       end
     rescue
@@ -363,8 +390,15 @@ defmodule ObanBench.LongHorizon do
     end
   end
 
-  defp job_args(seq, padding) do
-    Map.merge(%{seq: seq, padding: padding}, ScenarioControls.tag(seq))
+  defp record_abandon_enqueued(abandon_tag, count) do
+    if map_size(abandon_tag) > 0, do: ScenarioControls.record_abandon_enqueued(count)
+    :ok
+  end
+
+  defp job_args(seq, padding, abandon_tag) do
+    %{seq: seq, padding: padding}
+    |> Map.merge(ScenarioControls.tag(seq))
+    |> Map.merge(abandon_tag)
   end
 
   # [] keeps the worker's defaults; JOB_MAX_ATTEMPTS overrides max attempts.
@@ -605,6 +639,10 @@ defmodule ObanBench.LongHorizonWorker do
   end
 
   defp perform_tagged(args, attempt, max_attempts) do
+    if Map.has_key?(args, "abandon") and ScenarioControls.hold?() do
+      ScenarioControls.hold_forever()
+    end
+
     ScenarioControls.on_start(args)
 
     case ScenarioControls.failure_outcome(args, attempt, max_attempts) do
@@ -618,7 +656,7 @@ defmodule ObanBench.LongHorizonWorker do
         if work_ms > 0, do: Process.sleep(work_ms)
         ScenarioControls.on_complete(args)
 
-        unless Map.has_key?(args, "run_at_ms") do
+        unless Map.has_key?(args, "run_at_ms") or Map.has_key?(args, "abandon") do
           :ets.update_counter(:long_horizon_state, :completed, 1)
         end
 

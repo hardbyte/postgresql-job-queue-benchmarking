@@ -25,6 +25,7 @@ RUN apk add --no-cache libstdc++ postgresql-client
 
 WORKDIR /app
 ENV MIX_ENV=prod
+ENV ERL_FLAGS="+P 1048576"
 
 RUN mix local.hex --force && mix local.rebar --force
 

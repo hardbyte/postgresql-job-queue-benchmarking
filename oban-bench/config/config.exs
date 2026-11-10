@@ -10,13 +10,14 @@ worker_count =
 
 pool_size =
   case System.get_env("MAX_CONNECTIONS") do
-    nil -> max(20, worker_count + 8)
+    nil -> max(20, min(worker_count, 100) + 8)
     val -> String.to_integer(val)
   end
 
 config :oban_bench, ObanBench.Repo,
   url: System.get_env("DATABASE_URL", "postgres://bench:bench@localhost:15555/oban_bench"),
-  pool_size: pool_size
+  pool_size: pool_size,
+  timeout: String.to_integer(System.get_env("REPO_TIMEOUT_MS", "15000"))
 
 # Oban config — queues will be overridden at runtime by the benchmark runner
 rescue_after_secs =
@@ -25,10 +26,15 @@ rescue_after_secs =
     val -> String.to_integer(val)
   end
 
+oban_node =
+  "oban-bench-#{System.get_env("BENCH_INSTANCE_ID", "0")}-" <>
+    Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+
 config :oban_bench, Oban,
   engine: Oban.Engines.Basic,
   repo: ObanBench.Repo,
-  queues: [benchmark: 50, chaos: 10, long_horizon_bench: 32],
+  node: oban_node,
+  queues: [benchmark: 50, chaos: 10],
   lifeline: [rescue_after: :timer.seconds(rescue_after_secs)]
 
 config :logger, level: :warning

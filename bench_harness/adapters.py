@@ -336,6 +336,7 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         "STALLED_AFTER_SECS",
         "EXPIRE_IN_SECS",
         "SUPERVISE_INTERVAL_SECS",
+        "REPO_TIMEOUT_MS",
         "MAX_CONNECTIONS",
     ):
         if key in os.environ:
