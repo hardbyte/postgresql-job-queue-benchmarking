@@ -111,10 +111,16 @@ func readProducerRate(def int) int {
 	return int(value)
 }
 
-// queueNames returns BENCH_QUEUE_COUNT queue names; queue 0 keeps the
+// queueNames returns BENCH_QUEUE_COUNT queue names, raised so that
+// workerCount fits under River's per-queue MaxWorkers cap; queue 0 keeps the
 // legacy default queue.
-func queueNames() []string {
+func queueNames(workerCount int) []string {
 	count := envInt("BENCH_QUEUE_COUNT", 1)
+	if needed := (workerCount + river.QueueNumWorkersMax - 1) / river.QueueNumWorkersMax; needed > count {
+		logStderr("[river] WORKER_COUNT=%d exceeds MaxWorkers cap %d per queue; using %d queues",
+			workerCount, river.QueueNumWorkersMax, needed)
+		count = needed
+	}
 	names := []string{river.QueueDefault}
 	for i := 1; i < count; i++ {
 		names = append(names, fmt.Sprintf("long_horizon_bench_%d", i))
@@ -453,6 +459,7 @@ type LongHorizonArgs struct {
 	Fail         string `json:"fail,omitempty"`
 	FailAttempts int    `json:"fail_attempts,omitempty"`
 	RunAtMs      int64  `json:"run_at_ms,omitempty"`
+	Abandon      int    `json:"abandon,omitempty"`
 }
 
 func (LongHorizonArgs) Kind() string { return "long_horizon_job" }
@@ -479,6 +486,16 @@ type LongHorizonWorker struct {
 }
 
 func (w *LongHorizonWorker) Work(ctx context.Context, job *river.Job[LongHorizonArgs]) error {
+	if job.Args.Abandon != 0 {
+		if w.controls.abandonState().Hold {
+			w.controls.holdAbandoned()
+		}
+		if w.state.workMs > 0 {
+			time.Sleep(time.Duration(w.state.workMs) * time.Millisecond)
+		}
+		w.controls.onRescuedComplete()
+		return nil
+	}
 	if args := job.Args; args.Fail != "" || args.RunAtMs != 0 {
 		w.controls.onStart(args.RunAtMs)
 		if outcome := failureOutcome(args.Fail, args.FailAttempts, job.Attempt, job.MaxAttempts); outcome != "" {
@@ -633,6 +650,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 		"schema_version": envOrDefault("RIVER_SCHEMA_VERSION", "current"),
 		"db_name":        dbName,
 		"started_at":     nowISO(),
+		"abandon_rescue": "stuck-job rescuer (RESCUE_AFTER_SECS)",
 	})
 
 	state := &longHorizonState{
@@ -647,7 +665,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &LongHorizonWorker{state: state, controls: controls})
 
-	queues := queueNames()
+	queues := queueNames(workerCount)
 	perQueueWorkers := maxInt(1, workerCount/len(queues))
 	queueConfigs := make(map[string]river.QueueConfig, len(queues))
 	for _, name := range queues {
@@ -662,8 +680,8 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 		FetchPollInterval:    50 * time.Millisecond,
 		RescueStuckJobsAfter: rescueAfter(30),
 	}
-	if controls.failureEnabled() {
-		riverConfig.Logger = slog.New(injectedFailureFilter{slog.NewTextHandler(os.Stderr, nil)})
+	if controls.failureEnabled() || controls.abandonEnabled() {
+		riverConfig.Logger = slog.New(scenarioLogFilter{slog.NewTextHandler(os.Stderr, nil), controls})
 	}
 	client, err := river.NewClient(riverpgxv5.New(pool), riverConfig)
 	if err != nil {
@@ -689,7 +707,11 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	}
 	newArgs := func(seq int64) LongHorizonArgs {
 		fail, failAttempts := controls.tag(seq)
-		return LongHorizonArgs{Seq: seq, Padding: padding, Fail: fail, FailAttempts: failAttempts}
+		args := LongHorizonArgs{Seq: seq, Padding: padding, Fail: fail, FailAttempts: failAttempts}
+		if controls.abandonTag() {
+			args.Abandon = 1
+		}
+		return args
 	}
 
 	shutdown := make(chan struct{})
@@ -776,20 +798,25 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 			}
 
 			if batchCount == 1 {
-				_, err := client.Insert(ctx, newArgs(seq), insertOptsFor(seq))
+				args := newArgs(seq)
+				_, err := client.Insert(ctx, args, insertOptsFor(seq))
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "[river] producer insert failed: %v\n", err)
 					continue
 				}
 				state.enqueued.Add(1)
+				controls.onAbandonEnqueued(args.Abandon)
 				seq++
 			} else {
 				// Documented bulk path: Client.InsertManyFast (Postgres COPY).
 				// https://pkg.go.dev/github.com/riverqueue/river#Client.InsertManyFast
 				params := make([]river.InsertManyParams, 0, batchCount)
+				tagged := 0
 				for i := 0; i < batchCount; i++ {
+					args := newArgs(seq + int64(i))
+					tagged += args.Abandon
 					params = append(params, river.InsertManyParams{
-						Args:       newArgs(seq + int64(i)),
+						Args:       args,
 						InsertOpts: insertOptsFor(seq + int64(i)),
 					})
 				}
@@ -799,6 +826,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 					continue
 				}
 				state.enqueued.Add(uint64(batchCount))
+				controls.onAbandonEnqueued(tagged)
 				seq += int64(batchCount)
 			}
 		}

@@ -1049,6 +1049,9 @@ def run_one_system(
             str(abandon_control_file) if abandon_control_file else None
         ),
         "abandon_running_sql": manifest.state_queries.get("running"),
+        # The launch overrides every replica (re)start reads; abandon-kill
+        # rewrites them for the fresh fleet.
+        "replica_env_overrides": overrides,
     }
     phase_rates = [
         producer_rate if rate is None else rate

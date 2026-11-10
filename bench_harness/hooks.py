@@ -1222,6 +1222,11 @@ def enter_schedule_preload(runtime: PhaseRuntime) -> None:
 # tagged jobs they claim. The hook counts the claims the database holds,
 # SIGKILLs every replica at once, flips the control so the next fleet runs
 # tagged jobs normally, and starts that fleet after `down` (default 0 s).
+# The fresh fleet takes `RESCUE_FLEET_<VAR>` from the harness environment as
+# `<VAR>` (e.g. RESCUE_FLEET_WORKER_COUNT=128), so it can run at ordinary
+# concurrency instead of the size needed to hold the whole backlog.
+
+RESCUE_FLEET_PREFIX = "RESCUE_FLEET_"
 
 ABANDON_HOLD = {"tag": True, "hold": True}
 ABANDON_RELEASE = {"tag": False, "hold": False}
@@ -1262,6 +1267,11 @@ def enter_abandon_kill(runtime: PhaseRuntime) -> None:
     if running is not None:
         emit("cluster", "", "abandon_running_after_kill", running)
     down_s = parse_duration(runtime.phase.param("down", "0") or "0")
+    overrides = runtime.state.get("replica_env_overrides")
+    if isinstance(overrides, dict):
+        for key, value in os.environ.items():
+            if key.startswith(RESCUE_FLEET_PREFIX) and len(key) > len(RESCUE_FLEET_PREFIX):
+                overrides[key[len(RESCUE_FLEET_PREFIX):]] = value
     if down_s > 0:
         time.sleep(down_s)
     for instance_id in killed:

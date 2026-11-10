@@ -1,8 +1,10 @@
-// Scenario controls (CONTRIBUTING_ADAPTERS.md "Scenario controls").
+// Scenario controls (CONTRIBUTING_ADAPTERS.md "Scenario controls" and
+// "Mass abandonment").
 //
 // Default-off: JOB_FAILURE_CONTROL_FILE tags jobs enqueued while a failure
 // plan is active as transient/poison failures; SCHEDULE_CONTROL_FILE asks
-// instance 0 to enqueue a scheduled herd. Untagged jobs keep their payload
+// instance 0 to enqueue a scheduled herd; JOB_ABANDON_CONTROL_FILE tags jobs
+// "abandon" and makes workers hold them. Untagged jobs keep their payload
 // and code path unchanged.
 package main
 
@@ -36,9 +38,15 @@ type herdCommand struct {
 	SpreadMs int64  `json:"spread_ms"`
 }
 
+type abandonControl struct {
+	Tag  bool `json:"tag"`
+	Hold bool `json:"hold"`
+}
+
 type scenarioControls struct {
 	failurePath  string
 	schedulePath string
+	abandonPath  string
 	maxAttempts  int // 0 = system default
 
 	planMu     sync.Mutex
@@ -57,6 +65,13 @@ type scenarioControls struct {
 	latenessMu sync.Mutex
 	latenessMs []float64
 
+	abandonMu       sync.Mutex
+	abandon         abandonControl
+	abandonReadAt   time.Time
+	abandonHeld     atomic.Int64
+	abandonEnqueued atomic.Uint64
+	rescuedComplete atomic.Uint64
+
 	lastRates map[string]uint64
 }
 
@@ -64,17 +79,56 @@ func newScenarioControls() *scenarioControls {
 	c := &scenarioControls{
 		failurePath:  os.Getenv("JOB_FAILURE_CONTROL_FILE"),
 		schedulePath: os.Getenv("SCHEDULE_CONTROL_FILE"),
+		abandonPath:  os.Getenv("JOB_ABANDON_CONTROL_FILE"),
 		lastRates:    map[string]uint64{},
 	}
 	if n, err := strconv.Atoi(os.Getenv("JOB_MAX_ATTEMPTS")); err == nil && n > 0 {
 		c.maxAttempts = n
 	}
 	c.schedulePreloadMs.Store(-1)
+	c.abandonState()
 	return c
 }
 
 func (c *scenarioControls) failureEnabled() bool  { return c.failurePath != "" }
 func (c *scenarioControls) scheduleEnabled() bool { return c.schedulePath != "" }
+func (c *scenarioControls) abandonEnabled() bool  { return c.abandonPath != "" }
+
+// abandonState returns the abandon control, re-reading the file at most
+// once per second. A missing or unreadable file means both flags false.
+func (c *scenarioControls) abandonState() abandonControl {
+	if !c.abandonEnabled() {
+		return abandonControl{}
+	}
+	c.abandonMu.Lock()
+	defer c.abandonMu.Unlock()
+	if time.Since(c.abandonReadAt) >= time.Second {
+		var control abandonControl
+		if !readJSONFile(c.abandonPath, &control) {
+			control = abandonControl{}
+		}
+		c.abandon = control
+		c.abandonReadAt = time.Now()
+	}
+	return c.abandon
+}
+
+func (c *scenarioControls) abandonTag() bool { return c.abandonState().Tag }
+
+func (c *scenarioControls) onAbandonEnqueued(count int) {
+	if count > 0 {
+		c.abandonEnqueued.Add(uint64(count))
+	}
+}
+
+func (c *scenarioControls) onRescuedComplete() { c.rescuedComplete.Add(1) }
+
+// holdAbandoned blocks the calling worker until the process dies, ignoring
+// context cancellation so River's JobTimeout can't finish the attempt.
+func (c *scenarioControls) holdAbandoned() {
+	c.abandonHeld.Add(1)
+	select {}
+}
 
 func readJSONFile(path string, out interface{}) bool {
 	buf, err := os.ReadFile(path)
@@ -249,6 +303,14 @@ type controlMetric struct {
 
 func (c *scenarioControls) metrics(dt, windowS float64) []controlMetric {
 	var out []controlMetric
+	if c.abandonEnabled() {
+		out = append(out,
+			controlMetric{"abandon_held_jobs", float64(c.abandonHeld.Load()), 0},
+			controlMetric{"abandon_tagged_enqueued_total", float64(c.abandonEnqueued.Load()), 0},
+			controlMetric{"rescued_completed_total", float64(c.rescuedComplete.Load()), 0},
+			controlMetric{"rescued_completion_rate", c.rate("rescued", c.rescuedComplete.Load(), dt), windowS},
+		)
+	}
 	if c.failureEnabled() {
 		out = append(out,
 			controlMetric{"injected_failure_rate", c.rate("failed", c.failedAttempts.Load(), dt), windowS},
@@ -291,11 +353,18 @@ func (c *scenarioControls) metrics(dt, windowS float64) []controlMetric {
 	return out
 }
 
-// injectedFailureFilter drops River's per-attempt "Job errored" log lines
-// for injected failures so a storm doesn't flood stderr.
-type injectedFailureFilter struct{ slog.Handler }
+// scenarioLogFilter drops River's per-attempt "Job errored" log lines for
+// injected failures so a storm doesn't flood stderr, and, while abandoned
+// jobs are held, the per-job "Job appears to be stuck" warnings.
+type scenarioLogFilter struct {
+	slog.Handler
+	controls *scenarioControls
+}
 
-func (h injectedFailureFilter) Handle(ctx context.Context, record slog.Record) error {
+func (h scenarioLogFilter) Handle(ctx context.Context, record slog.Record) error {
+	if h.controls.abandonHeld.Load() > 0 && strings.Contains(record.Message, "Job appears to be stuck") {
+		return nil
+	}
 	injected := false
 	record.Attrs(func(attr slog.Attr) bool {
 		if strings.Contains(attr.Value.String(), "injected ") {
@@ -310,12 +379,12 @@ func (h injectedFailureFilter) Handle(ctx context.Context, record slog.Record) e
 	return h.Handler.Handle(ctx, record)
 }
 
-func (h injectedFailureFilter) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return injectedFailureFilter{h.Handler.WithAttrs(attrs)}
+func (h scenarioLogFilter) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return scenarioLogFilter{h.Handler.WithAttrs(attrs), h.controls}
 }
 
-func (h injectedFailureFilter) WithGroup(name string) slog.Handler {
-	return injectedFailureFilter{h.Handler.WithGroup(name)}
+func (h scenarioLogFilter) WithGroup(name string) slog.Handler {
+	return scenarioLogFilter{h.Handler.WithGroup(name), h.controls}
 }
 
 func logStderr(format string, args ...interface{}) {
