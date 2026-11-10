@@ -8,7 +8,7 @@
 #   RESULTS_ROOT=results/2026-10-programme bash scripts/run_programme_sweep.sh [section...]
 #
 # Sections: throughput ref800 idle chaos neighbour logical scheduled retry
-# fanout payload long_jobs drain (default: all, in that order).
+# fanout payload long_jobs drain abandon (default: all, in that order).
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -129,8 +129,62 @@ section_drain() {
     --phase drain=drain:6m --phase "settle=idle-background(rate=0):4m"
 }
 
+# Mass abandonment: 4 replicas hold ABANDON_JOBS claims between them, all
+# four are SIGKILLed at once, and a fresh fleet at ordinary concurrency
+# (RESCUE_FLEET_*) works the backlog off while 20 jobs/s per replica keep
+# arriving. Every claim timeout is 300 s (awa's default deadline), above the
+# 3-minute claim phase, so no live holder is rescued before the kill. One
+# cell per system: each needs its own knobs to hold 250k claims a process.
+ABANDON_JOBS="${ABANDON_JOBS:-1000000}"
+ABANDON_TIMEOUTS=(
+  LEASE_DEADLINE_MS=300000 RESCUE_AFTER_SECS=300 EXPIRE_IN_SECS=300
+  VISIBILITY_TIMEOUT_S=300 CLAIM_TIMEOUT_SECS=300 STALLED_AFTER_SECS=300
+  AWA_RUNTIME_SNAPSHOT_INTERVAL_MS=10000 RESCUE_FLEET_WORKER_COUNT=128
+)
+HOLD_PER_REPLICA=$(( ABANDON_JOBS / 4 + ABANDON_JOBS / 40 ))
+
+# abandon_cell <system> [VAR=value ...] [bench args ...]. CLAIM=<duration>
+# overrides the 3-minute claim phase.
+abandon_cell() {
+  local system="$1"; shift
+  local extra=() claim=3m
+  while [[ $# -gt 0 && "$1" == *=* ]]; do
+    if [[ "$1" == CLAIM=* ]]; then claim="${1#CLAIM=}"; else extra+=("$1"); fi
+    shift
+  done
+  ( export "${ABANDON_TIMEOUTS[@]}" ${extra[@]+"${extra[@]}"}
+    run_cell abandon "abandon_${system}" "$system" "$@" \
+      --producer-rate 20 --replicas 4 \
+      --phase "warmup=warmup(rate=0):1m" \
+      --phase "preload=preload(jobs=${ABANDON_JOBS}):10m" \
+      --phase "claim=drain:${claim}" \
+      --phase kill=abandon-kill:30s \
+      --phase rescue=clean:30m \
+      --phase "settle=idle-background(rate=0):5m" )
+}
+
+section_abandon() {
+  abandon_cell awa MAX_CONNECTIONS=64 --worker-count "$HOLD_PER_REPLICA"
+  abandon_cell pgboss SUBSCRIBER_BATCH_SIZE=1000 RESCUE_FLEET_SUBSCRIBER_BATCH_SIZE=16 \
+    --worker-count $(( HOLD_PER_REPLICA / 1000 + 1 ))
+  # River caps a queue at 10,000 workers; 50 queues keep each fetch small.
+  abandon_cell river BENCH_QUEUE_COUNT=50 MAX_CONNECTIONS=40 --worker-count "$HOLD_PER_REPLICA"
+  abandon_cell oban MAX_CONNECTIONS=80 --worker-count "$HOLD_PER_REPLICA"
+  # One fetch per job at ~330 claims/s a process; its rescue keys off worker
+  # heartbeats, so a longer hold doesn't release live claims.
+  abandon_cell procrastinate CLAIM=15m --worker-count "$HOLD_PER_REPLICA"
+  abandon_cell absurd --worker-count "$HOLD_PER_REPLICA"
+  abandon_cell pgmq CONSUMER_BATCH_SIZE=$(( HOLD_PER_REPLICA / 32 + 1 )) \
+    RESCUE_FLEET_CONSUMER_BATCH_SIZE=8 RESCUE_FLEET_WORKER_COUNT=32 \
+    --worker-count 32 --pg-image "$PGMQ_IMAGE"
+  # Cooperative subconsumers split the log; a held batch needs at least
+  # SUBSCRIBER_BATCH_SIZE events, so ask each replica for a fifth.
+  abandon_cell pgque PRODUCER_BATCH_MAX=1000 SUBSCRIBER_BATCH_SIZE=$(( ABANDON_JOBS / 5 )) \
+    --worker-count 32
+}
+
 sections=("$@")
-[[ ${#sections[@]} -eq 0 ]] && sections=(throughput ref800 idle chaos neighbour logical scheduled retry fanout payload long_jobs drain)
+[[ ${#sections[@]} -eq 0 ]] && sections=(throughput ref800 idle chaos neighbour logical scheduled retry fanout payload long_jobs drain abandon)
 for section in "${sections[@]}"; do
   log "==== ${section} ===="
   "section_${section}"

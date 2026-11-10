@@ -243,9 +243,11 @@ from the drain that follows it (`rescued_*_s`, `peak_rescue_rate_per_s`).
 
 `summary.json` gets a per-system `abandon` block: `tagged_enqueued`,
 `held_at_kill` (what the dead fleet reported holding), `running_before_kill` /
-`running_after_kill` (database count), `first_rescued_s`, `rescued_50_s`,
+`running_after_kill` (database count), `first_rescued_s` (1% of the tagged
+jobs done again), `rescued_50_s`,
 `rescued_90_s`, `rescued_99_s`, `rescued_all_s`, `peak_rescue_rate_per_s`,
-`rescue_rate_10_90_per_s` (between the 10% and 90% marks), `missing`, `excess` (duplicate completions) and
+`rescue_rate_10_90_per_s` (between the 10% and 90% marks), `missing`, `excess` (duplicate completions; a few jobs either way is sample
+timing, as the tagged count is the killed fleet's last report) and
 `running_cleared_s` (database claimed count back under 1% of its value at the
 kill). `running_cleared_s` measures the rescue mechanism alone; `rescued_*_s`
 also include working the jobs off again, so the fresh fleet's throughput

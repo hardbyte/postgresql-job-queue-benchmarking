@@ -1008,12 +1008,14 @@ def _abandon_summary(
 
     `held_at_kill` is what the killed fleet reported holding and
     `running_before_kill` what the database counted as claimed (the
-    adapter's `state_queries.running`). `rescued_*_s` are the times until
+    adapter's `state_queries.running`). `first_rescued_s` is the time until
+    1% of the tagged jobs had completed again, and `rescued_*_s` the times until
     that fraction of all tagged jobs had completed again; they carry one
     sample period of resolution. `rescue_rate_10_90_per_s` is the rate
     between the 10% and 90% marks, past detection and before the tail. `missing` = tagged jobs never completed
     by the end of the run, `excess` = completions beyond the tagged count
-    (duplicate execution). `running_cleared_s` is when the database's
+    (duplicate execution; a few jobs either way is sample timing, since the
+    tagged count is the killed fleet's last report). `running_cleared_s` is when the database's
     claimed count fell to 1% of its value at the kill.
     """
     kill_index = next(
@@ -1071,9 +1073,22 @@ def _abandon_summary(
     rescued = max((v for _, v in cumulative), default=None)
     out["rescued_completed"] = rescued
     out["peak_rescue_rate_per_s"] = _peak([v for _, v in rates]) if rates else None
-    first = next((t for t, v in cumulative if v > 0), None)
-    out["first_rescued_s"] = first - kill_t if first is not None else None
+    # The killed fleet's last tagged report can trail its final inserts by a
+    # few jobs; the claimed count read after the kill is exact (the claim
+    # phase offers no untagged work).
+    after_kill = out["running_after_kill"]
+    if tagged is not None and after_kill is not None and after_kill > tagged:
+        tagged = after_kill
+        out["tagged_enqueued"] = tagged
     target = tagged or None
+    # 1% of the tagged jobs, so a few tagged jobs no worker had claimed yet
+    # (runnable at once by the fresh fleet) don't stand in for the rescue.
+    first = (
+        next((t for t, v in cumulative if v >= 0.01 * target), None)
+        if target
+        else None
+    )
+    out["first_rescued_s"] = first - kill_t if first is not None else None
     for label, fraction in (
         ("10", 0.10), ("50", 0.50), ("90", 0.90), ("99", 0.99), ("all", 1.0)
     ):
