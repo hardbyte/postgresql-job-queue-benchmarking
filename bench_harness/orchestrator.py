@@ -35,6 +35,7 @@ from .adapters import (
     DEFAULT_SYSTEMS,
     ENGINES,
     AdapterEntry,
+    PG_PORT,
     AdapterManifest,
     pg_url,
     remove_adapter_containers,
@@ -138,6 +139,49 @@ def _postgres_container_id(pg_image: str, engine: str = DEFAULT_ENGINE) -> str |
     return container_id[0] if result.returncode == 0 and container_id else None
 
 
+def _pg_data_dir() -> Path | None:
+    """Host directory for this harness's Postgres data, from
+    BENCH_PG_DATA_DIR (one subdirectory per port). Unset keeps Docker's
+    anonymous volume under the Docker root."""
+    raw = os.environ.get("BENCH_PG_DATA_DIR")
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve() / f"pg-{PG_PORT}"
+
+
+def _pg_data_override() -> Path | None:
+    data = _pg_data_dir()
+    if data is None:
+        return None
+    path = SCRIPT_DIR / ".bench" / f"pgdata-{PG_PORT}.compose.yml"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(
+        "services:\n  postgres:\n    volumes:\n"
+        f"      - {data}:/var/lib/postgresql\n"
+    )
+    return path
+
+
+def _reset_pg_data_dir(pg_image: str) -> None:
+    """Empty the bind-mounted data directory so every start runs initdb on
+    a fresh cluster, as the anonymous volume does. Postgres owns the files,
+    so the wipe runs as root in a throwaway container."""
+    data = _pg_data_dir()
+    if data is None:
+        return
+    data.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "docker", "run", "--rm", "--user", "0", "--entrypoint", "sh",
+            "-v", f"{data}:/d", pg_image,
+            "-c", "rm -rf /d/* /d/.[!.]* 2>/dev/null; chmod 0777 /d",
+        ],
+        check=True,
+        capture_output=True,
+        timeout=600,
+    )
+
+
 def _compose_prefix(engine: str) -> list[str]:
     """`docker compose` argv prefix for an engine.
 
@@ -146,11 +190,21 @@ def _compose_prefix(engine: str) -> list[str]:
     (the tuning-matrix workflow relies on it). For an engine with an
     override we pass explicit ``-f`` files — which also disables the
     implicit merge, giving a reproducible, engine-pinned compose project.
+    BENCH_PG_DATA_DIR adds a generated file that bind-mounts the data
+    directory.
     """
     override = ENGINES[engine].compose_override if engine in ENGINES else None
-    if override is None:
+    pg_data = _pg_data_override()
+    if override is None and pg_data is None:
         return ["docker", "compose"]
-    return ["docker", "compose", "-f", "docker-compose.yml", "-f", override]
+    files = ["docker-compose.yml"]
+    if override is not None:
+        files.append(override)
+    elif (SCRIPT_DIR / "docker-compose.override.yml").exists():
+        files.append("docker-compose.override.yml")
+    if pg_data is not None:
+        files.append(str(pg_data))
+    return ["docker", "compose", *(arg for f in files for arg in ("-f", f))]
 
 
 def start_postgres(
@@ -159,6 +213,9 @@ def start_postgres(
     wal_level: str = "replica",
 ) -> None:
     prefix = _compose_prefix(engine)
+    if _pg_data_dir() is not None:
+        _run_cmd([*prefix, "down", "-v"], cwd=SCRIPT_DIR, env=_compose_env(pg_image), check=False)
+        _reset_pg_data_dir(pg_image)
     _run_cmd(
         [*prefix, "up", "-d", "--wait", "--force-recreate", "--renew-anon-volumes"],
         cwd=SCRIPT_DIR,
@@ -266,6 +323,80 @@ def stop_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
         env=_compose_env(pg_image),
         check=False,
     )
+    _reset_pg_data_dir(pg_image)
+
+
+def commit_latency_probe(commits: int = 200) -> dict[str, float] | None:
+    """Time single-row autocommit INSERTs (each a synchronous WAL flush)
+    against `SELECT 1` round trips on an otherwise idle server, so a slow
+    or drifting disk shows up next to the results it affected."""
+
+    def percentile(values: list[float], q: float) -> float:
+        ordered = sorted(values)
+        return ordered[min(len(ordered) - 1, int(round(q * (len(ordered) - 1))))]
+
+    try:
+        with psycopg.connect(
+            pg_url("postgres"), autocommit=True, application_name="bench-harness-probe"
+        ) as conn:
+            conn.execute("DROP TABLE IF EXISTS bench_commit_probe")
+            conn.execute("CREATE TABLE bench_commit_probe (id int)")
+            selects: list[float] = []
+            inserts: list[float] = []
+            for i in range(commits):
+                started = time.perf_counter()
+                conn.execute("SELECT 1")
+                selects.append((time.perf_counter() - started) * 1000)
+                started = time.perf_counter()
+                conn.execute("INSERT INTO bench_commit_probe VALUES (%s)", (i,))
+                inserts.append((time.perf_counter() - started) * 1000)
+            conn.execute("DROP TABLE bench_commit_probe")
+    except psycopg.Error as exc:
+        print(f"[harness] commit latency probe failed: {exc}", file=sys.stderr)
+        return None
+    return {
+        "commit_p50_ms": percentile(inserts, 0.50),
+        "commit_p99_ms": percentile(inserts, 0.99),
+        "roundtrip_p50_ms": percentile(selects, 0.50),
+    }
+
+
+def _emit_probe(
+    probe: dict[str, float] | None,
+    *,
+    when: str,
+    phase: Phase,
+    run_id: str,
+    system: str,
+    bench_start: float,
+    out_queue: "queue.Queue[Sample]",
+) -> None:
+    from .sample import now_iso
+
+    for metric, value in (probe or {}).items():
+        out_queue.put(
+            Sample(
+                run_id=run_id,
+                system=system,
+                instance_id=0,
+                elapsed_s=round(time.time() - bench_start, 3),
+                sampled_at=now_iso(),
+                phase_label=phase.label,
+                phase_type=phase.type.value,
+                subject_kind="probe",
+                subject=when,
+                metric=metric,
+                value=float(value),
+                window_s=0.0,
+            )
+        )
+    if probe:
+        print(
+            f"[{system}] commit probe {when}: p50 {probe['commit_p50_ms']:.2f} ms, "
+            f"p99 {probe['commit_p99_ms']:.2f} ms, round trip "
+            f"{probe['roundtrip_p50_ms']:.2f} ms",
+            file=sys.stderr,
+        )
 
 
 def preflight_database(manifest: AdapterManifest, *, recreate: bool = False) -> None:
@@ -863,6 +994,7 @@ def run_one_system(
         start_postgres(pg_image, engine, wal_level)
 
     preflight_database(manifest, recreate=fast)
+    probe_before = commit_latency_probe()
 
     overrides: dict[str, str] = {
         "SAMPLE_EVERY_S": str(sample_every_s),
@@ -912,6 +1044,10 @@ def run_one_system(
     )
 
     bench_start = time.time()
+    _emit_probe(
+        probe_before, when="before", phase=phases[0], run_id=run_id,
+        system=system, bench_start=bench_start, out_queue=out_queue,
+    )
     # Stamp the tracker to the first phase before tailers start ingesting.
     # Without this, early samples land under the *previous* system's final
     # phase (or "pre-run" for the first system), skewing per-phase aggregates
@@ -1117,6 +1253,10 @@ def run_one_system(
         # with a documented slow-drain shutdown path can override.
         pool.stop_all(timeout_s=manifest.shutdown_grace_s)
         shutil.rmtree(control_dir, ignore_errors=True)
+        _emit_probe(
+            commit_latency_probe(), when="after", phase=phases[-1], run_id=run_id,
+            system=system, bench_start=bench_start, out_queue=out_queue,
+        )
 
     # Representative descriptor for manifest inclusion. Prefer replica 0's
     # if still available; otherwise any slot's (replica 0 may have been

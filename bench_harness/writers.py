@@ -327,7 +327,7 @@ def compute_summary(
         ):
             # Defer to the per-timestamp aggregator below; skip raw bucket.
             continue
-        if row.get("subject_kind") in ("wait_event", "lock_wait"):
+        if row.get("subject_kind") in ("wait_event", "lock_wait", "probe"):
             # Wait-event rows have their own dedicated aggregation pass
             # (top-N histogram per phase) and don't fit the generic
             # (median, peak, count) shape — skip them in the bucket pass.
@@ -1262,6 +1262,15 @@ def _run_totals(rows: list[dict], *, system: str, phases: list[Phase]) -> dict:
         rows, system=system, phase_labels=None, metric="completion_rate"
     )
     out: dict = {}
+    probe: dict[str, dict[str, float]] = {}
+    for row in rows:
+        if row["system"] == system and row.get("subject_kind") == "probe":
+            try:
+                probe.setdefault(row["subject"], {})[row["metric"]] = float(row["value"])
+            except (TypeError, ValueError):
+                continue
+    if probe:
+        out["commit_probe"] = probe
     if enqueued is not None or completed is not None:
         out["jobs_enqueued_total"] = enqueued
         out["jobs_completed_total"] = completed

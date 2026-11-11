@@ -104,6 +104,15 @@ batch runs serially), `SUBSCRIBER_BATCH_SIZE` (pg-boss) and
 `CLAIM_TIMEOUT_SECS` (absurd; default 10 s). awa's lease deadline is
 `LEASE_DEADLINE_MS` (default 5 min).
 
+Set `BENCH_PG_DATA_DIR` to keep Postgres's data in a host directory
+(`<dir>/pg-<port>`, emptied before every start) instead of an anonymous
+volume under the Docker root, e.g. to put it on a faster or quieter disk.
+The sweep scripts default it to `.pgdata/` in the repository. Before and
+after each system, the harness times 200 single-row autocommit INSERTs (a
+synchronous WAL flush each) and 200 `SELECT 1` round trips on the idle server,
+and stores them as `run.commit_probe.{before,after}` in `summary.json`, so a
+slow or drifting disk is visible next to the results it affected.
+
 Set `BENCH_PG_PORT` (default `15555`) to run a second harness against its own
 Postgres container, e.g. from another worktree. Set `BENCH_IMAGE_TAG` to build
 and run adapter images as `<adapter>-bench:<tag>` instead of the shared

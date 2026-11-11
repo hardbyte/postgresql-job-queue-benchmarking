@@ -11,6 +11,8 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# Postgres data on the repository's disk rather than under the Docker root.
+export BENCH_PG_DATA_DIR="${BENCH_PG_DATA_DIR:-$ROOT/.pgdata}"
 RESULTS_ROOT="${RESULTS_ROOT:-$ROOT/results/$(date -u +%Y-%m-%d)-awa-ab}"
 ROUNDS="${ROUNDS:-2}"
 mkdir -p "$RESULTS_ROOT/logs"

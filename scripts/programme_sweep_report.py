@@ -266,11 +266,16 @@ def main() -> None:
             if resource_phase is None:
                 continue
             print(f"Resources during `{resource_phase}`:\n")
-            print("| system | " + " | ".join(header for _, header, _ in RESOURCE_COLUMNS) + " |")
-            print("|---|" + "---:|" * len(RESOURCE_COLUMNS))
+            print("| system | " + " | ".join(header for _, header, _ in RESOURCE_COLUMNS) + " | commit p50 ms before / after |")
+            print("|---|" + "---:|" * (len(RESOURCE_COLUMNS) + 1))
             for system in ordered:
                 phase_block = systems[system].get("phases", {}).get(resource_phase)
                 values = [fmt(dig(phase_block, key), pattern) for key, _, pattern in RESOURCE_COLUMNS]
+                probe = dig(systems[system].get("run"), "commit_probe") or {}
+                values.append(
+                    f"{fmt(dig(probe, 'before.commit_p50_ms'), '{:.2f}')} / "
+                    f"{fmt(dig(probe, 'after.commit_p50_ms'), '{:.2f}')}"
+                )
                 print(f"| {system} | " + " | ".join(values) + " |")
             print()
 

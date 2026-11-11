@@ -8,10 +8,13 @@
 #   RESULTS_ROOT=results/2026-10-programme bash scripts/run_programme_sweep.sh [section...]
 #
 # Sections: throughput ref800 idle chaos neighbour logical scheduled retry
-# fanout payload long_jobs drain abandon (default: all, in that order).
+# fanout payload long_jobs drain abandon (default: all, in that order; abandon
+# goes last because its million-job cells leave the disk busy afterwards).
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# Postgres data on the repository's disk rather than under the Docker root.
+export BENCH_PG_DATA_DIR="${BENCH_PG_DATA_DIR:-$ROOT/.pgdata}"
 RESULTS_ROOT="${RESULTS_ROOT:-$ROOT/results/$(date -u +%Y-%m-%d)-programme-sweep}"
 mkdir -p "$RESULTS_ROOT/logs"
 RUN_INDEX="$RESULTS_ROOT/run_index.tsv"
