@@ -131,6 +131,21 @@ SECTIONS: dict[str, tuple[str, list[Column]]] = {
             ("drain_1", "database_size_mb_end", "DB MB after", "{:,.1f}"),
         ],
     ),
+    "large_args": (
+        "Large incompressible args (64 KiB / 1 MiB saturation; 8 GiB of 1 MiB jobs preloaded and drained)",
+        [
+            ("clean", "median_throughput_per_s", "jobs/s", "{:,.0f}"),
+            ("clean", "median_producer_call_p99_ms", "producer call p99 ms", "{:,.0f}"),
+            ("clean", "wal_bytes_per_completed_job", "WAL B/job", "{:,.0f}"),
+            ("clean", "peak_adapter_memory_anon_mb", "worker MB peak", "{:,.0f}"),
+            ("preload", "jobs_enqueued", "preloaded jobs", "{:,.0f}"),
+            ("drain", "drain.mean_drain_rate_per_s", "drain jobs/s", "{:,.1f}"),
+            ("drain", "peak_adapter_memory_anon_mb", "drain worker MB peak", "{:,.0f}"),
+            ("settle", "event_toast_size_mb_end", "TOAST MB after", "{:,.1f}"),
+            (None, "database_size_mb_peak", "DB MB peak", "{:,.0f}"),
+            (None, "database_size_mb_final", "DB MB final", "{:,.0f}"),
+        ],
+    ),
     "idle": (
         "Idle background cost (workers running, no jobs)",
         [
@@ -185,6 +200,7 @@ RESOURCE_PHASE = {
     "idle": "idle_1",
     "chaos": "recovery",
     "abandon": "rescue",
+    "large_args": ("clean", "drain"),
 }
 
 RESOURCE_COLUMNS: list[tuple[str, str, str]] = [
@@ -263,6 +279,15 @@ def main() -> None:
                 print(f"| {system} | " + " | ".join(values) + " |")
             print()
             resource_phase = RESOURCE_PHASE.get(section)
+            if isinstance(resource_phase, tuple):
+                resource_phase = next(
+                    (
+                        label
+                        for label in resource_phase
+                        if any(label in s.get("phases", {}) for s in systems.values())
+                    ),
+                    None,
+                )
             if resource_phase is None:
                 continue
             print(f"Resources during `{resource_phase}`:\n")

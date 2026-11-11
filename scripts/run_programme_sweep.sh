@@ -8,7 +8,7 @@
 #   RESULTS_ROOT=results/2026-10-programme bash scripts/run_programme_sweep.sh [section...]
 #
 # Sections: throughput ref800 idle chaos neighbour logical scheduled retry
-# fanout payload long_jobs drain abandon (default: all, in that order; abandon
+# fanout payload large_args long_jobs drain abandon (default: all, in that order; abandon
 # goes last because its million-job cells leave the disk busy afterwards).
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -126,6 +126,32 @@ section_long_jobs() {
     --phase tail=drain:90s
 }
 
+# Large incompressible args. The saturation cells compare each system's
+# insert path at 64 KiB and 1 MiB (one producer per system, so they are
+# enqueue-bound); the backlog cell preloads ~8 GiB of 1 MiB jobs from four
+# producers behind the gate and drains it, for worker memory, drain rate and
+# how far TOAST and the database shrink afterwards. Producer batches stay at
+# 128 rows for every system, pgque included, so one insert call carries at
+# most 128 MiB.
+section_large_args() {
+  local systems args
+  for bytes in 65536 1048576; do
+    args=(--job-payload-bytes "$bytes" --job-payload-kind random
+      --producer-rate 50000 --producer-mode depth-target --target-depth 2000
+      --worker-count 64 --phase warmup=warmup:30s --phase clean=clean:120s)
+    run_cell large_args "sat_${bytes}_shared" "$SHARED" "${args[@]}"
+    PRODUCER_BATCH_MAX=128 run_cell large_args "sat_${bytes}_pgque" pgque "${args[@]}"
+    run_cell large_args "sat_${bytes}_pgmq" pgmq --pg-image "$PGMQ_IMAGE" "${args[@]}"
+  done
+  args=(--job-payload-bytes 1048576 --job-payload-kind random
+    --producer-rate 2000 --replicas 4 --worker-count 16
+    --phase "warmup=warmup(rate=0):30s" --phase "preload=preload(jobs=8000):4m"
+    --phase drain=drain:5m --phase "settle=idle-background(rate=0):3m")
+  run_cell large_args backlog_1m_shared "$SHARED" "${args[@]}"
+  PRODUCER_BATCH_MAX=128 run_cell large_args backlog_1m_pgque pgque "${args[@]}"
+  run_cell large_args backlog_1m_pgmq pgmq --pg-image "$PGMQ_IMAGE" "${args[@]}"
+}
+
 section_drain() {
   run_all drain backlog_drain --producer-rate 2000 --worker-count 64 \
     --phase "warmup=warmup(rate=0):30s" --phase "preload=preload(jobs=200000):3m" \
@@ -187,7 +213,7 @@ section_abandon() {
 }
 
 sections=("$@")
-[[ ${#sections[@]} -eq 0 ]] && sections=(throughput ref800 idle chaos neighbour logical scheduled retry fanout payload long_jobs drain abandon)
+[[ ${#sections[@]} -eq 0 ]] && sections=(throughput ref800 idle chaos neighbour logical scheduled retry fanout payload large_args long_jobs drain abandon)
 for section in "${sections[@]}"; do
   log "==== ${section} ===="
   "section_${section}"
