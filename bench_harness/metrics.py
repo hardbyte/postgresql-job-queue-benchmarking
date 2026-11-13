@@ -477,13 +477,16 @@ class MetricsDaemon(threading.Thread):
         )
 
     # ── continuous polling ──────────────────────────────────────────────
+    def _connect(self) -> "psycopg.Connection":
+        return psycopg.connect(
+            self.database_url,
+            autocommit=True,
+            application_name=HARNESS_APPLICATION_NAME,
+        )
+
     def run(self) -> None:
         try:
-            conn = psycopg.connect(
-                self.database_url,
-                autocommit=True,
-                application_name=HARNESS_APPLICATION_NAME,
-            )
+            conn = self._connect()
         except psycopg.Error as exc:
             # Surface the failure instead of exiting silently: a daemon that
             # dies here leaves the run looking healthy with zero DB
@@ -496,13 +499,7 @@ class MetricsDaemon(threading.Thread):
             )
             self._emit_connect_error(exc)
             return
-        try:
-            self._poll_loop(conn)
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        self._poll_loop(conn)
 
     def _emit_connect_error(self, exc: Exception) -> None:
         # Best-effort error marker written into raw.csv so the
@@ -523,18 +520,31 @@ class MetricsDaemon(threading.Thread):
         period = self.period_s
         # Align to wall-clock boundary so cross-system timebases line up.
         next_tick = _next_aligned_tick(time.time(), period)
-        while not self.stop_event.is_set():
-            now = time.time()
-            if now < next_tick:
-                # Wake early if stop fires.
-                self.stop_event.wait(timeout=min(0.5, next_tick - now))
-                continue
-            self._poll_once(conn)
-            # Skip past any missed ticks after a slow poll so we resume on
-            # the next wall-clock boundary instead of replaying a burst of
-            # back-to-back polls to "catch up" (which would pile on the
-            # same DB we just stalled against).
-            next_tick = max(next_tick + period, _next_aligned_tick(time.time(), period))
+        try:
+            while not self.stop_event.is_set():
+                now = time.time()
+                if now < next_tick:
+                    # Wake early if stop fires.
+                    self.stop_event.wait(timeout=min(0.5, next_tick - now))
+                    continue
+                # A lost connection (a Postgres restart) skips ticks until a
+                # reconnect succeeds instead of ending the daemon.
+                try:
+                    if conn.closed:
+                        conn = self._connect()
+                    self._poll_once(conn)
+                except psycopg.OperationalError as exc:
+                    print(f"[{self.system}] metrics poll failed: {exc}", file=sys.stderr)
+                # Skip past any missed ticks after a slow poll so we resume on
+                # the next wall-clock boundary instead of replaying a burst of
+                # back-to-back polls to "catch up" (which would pile on the
+                # same DB we just stalled against).
+                next_tick = max(next_tick + period, _next_aligned_tick(time.time(), period))
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _poll_once(self, conn: "psycopg.Connection") -> None:
         # Capture one timestamp for every _emit in this tick so per-tick

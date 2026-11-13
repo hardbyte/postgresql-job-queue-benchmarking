@@ -211,13 +211,16 @@ class WaitEventSampler:
             self._thread = None
 
     # ── data ingestion (worker thread) ─────────────────────────────────
+    def _connect(self) -> "psycopg.Connection":
+        return psycopg.connect(
+            self.database_url,
+            autocommit=True,
+            application_name="bench-harness-wait-events",
+        )
+
     def _run(self) -> None:
         try:
-            conn = psycopg.connect(
-                self.database_url,
-                autocommit=True,
-                application_name="bench-harness-wait-events",
-            )
+            conn = self._connect()
         except psycopg.Error as exc:
             print(
                 f"[wait-events] failed to connect to "
@@ -225,32 +228,34 @@ class WaitEventSampler:
                 file=sys.stderr,
             )
             return
+        self._poll_loop(conn)
+
+    def _poll_loop(self, conn: "psycopg.Connection") -> None:
         try:
-            self._poll_loop(conn)
+            while not self._stop_event.is_set():
+                tick_start = time.time()
+                try:
+                    if conn.closed:
+                        conn = self._connect()
+                    self._poll_once(conn)
+                except psycopg.Error as exc:
+                    # Don't kill the sampler on a transient PG error — the
+                    # bench can outlive a brief connection blip. Log once and
+                    # keep going; a hard, persistent failure will keep raising
+                    # and just produce empty counters, which is the right
+                    # observable behaviour ("no wait-event data") rather than
+                    # crashing the whole orchestrator.
+                    print(f"[wait-events] poll error: {exc}", file=sys.stderr)
+                elapsed = time.time() - tick_start
+                remaining = self.sample_every_s - elapsed
+                if remaining > 0:
+                    # Wake early on stop.
+                    self._stop_event.wait(timeout=remaining)
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
-
-    def _poll_loop(self, conn: "psycopg.Connection") -> None:
-        while not self._stop_event.is_set():
-            tick_start = time.time()
-            try:
-                self._poll_once(conn)
-            except psycopg.Error as exc:
-                # Don't kill the sampler on a transient PG error — the
-                # bench can outlive a brief connection blip. Log once and
-                # keep going; a hard, persistent failure will keep raising
-                # and just produce empty counters, which is the right
-                # observable behaviour ("no wait-event data") rather than
-                # crashing the whole orchestrator.
-                print(f"[wait-events] poll error: {exc}", file=sys.stderr)
-            elapsed = time.time() - tick_start
-            remaining = self.sample_every_s - elapsed
-            if remaining > 0:
-                # Wake early on stop.
-                self._stop_event.wait(timeout=remaining)
 
     def _poll_once(self, conn: "psycopg.Connection") -> None:
         with conn.cursor() as cur:
