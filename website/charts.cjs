@@ -261,7 +261,7 @@ function smallMultiples(series, opts) {
         .filter((_, i) => i % Math.max(1, Math.floor(pts.length / 24)) === 0 || i === pts.length - 1)
         .map(([px, py]) => {
           const tip = `${s.name}: ${format(py, opts.yUnit)} at ${xFmt(px)} ${opts.xLabel}`;
-          return `<circle class="hit-dot" cx="${sx(px).toFixed(1)}" cy="${sy(py).toFixed(1)}" r="9" tabindex="0" aria-label="${esc(tip)}" data-tip="${esc(tip)}"/>`;
+          return `<circle class="hit-dot" cx="${sx(px).toFixed(1)}" cy="${sy(py).toFixed(1)}" r="9" tabindex="0" role="img" aria-label="${esc(tip)}" data-tip="${esc(tip)}"/>`;
         })
         .join("");
       const end = last ? `<circle class="end-dot" cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="4" fill="var(--sys-${esc(s.id)})"/>` : "";

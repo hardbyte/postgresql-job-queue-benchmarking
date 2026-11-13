@@ -156,13 +156,13 @@ const contentTypes = {
         [...document.querySelectorAll(".system-card")].filter((x) => !x.hidden)
           .length === 14,
     );
-    for (const id of ["awa", "pg-boss", "potatoq", "river"])
+    for (const id of ["absurd", "awa", "oban", "pg-boss", "pgmq", "pgque", "potatoq", "river"])
       await page.locator(`[data-compare="${id}"]`).click();
-    assert.equal(await page.locator("[data-compare=oban]").isDisabled(), true);
+    assert.equal(await page.locator("[data-compare=procrastinate]").isDisabled(), true);
     await page.locator("#tray-link").click();
     await page.locator(".comparison-table").waitFor();
     assert.match(page.url(), /compare\//);
-    assert.equal(await page.locator(".comparison-table thead th").count(), 5);
+    assert.equal(await page.locator(".comparison-table thead th").count(), 9);
     assert.match(
       await page.locator(".comparison-table").textContent(),
       /not implemented|not.*implement|wishlist/i,
@@ -192,7 +192,7 @@ const contentTypes = {
       await axe(s.id);
     }
     await go("systems/potatoq/");
-    assert.match(await page.locator(".profile-badges").textContent(), /Alpha/);
+    assert.match(await page.locator(".profile-badges").textContent(), /Docs: alpha/i);
     await page.screenshot({
       path: path.join(artifacts, "desktop-potatoq.png"),
       fullPage: true,
