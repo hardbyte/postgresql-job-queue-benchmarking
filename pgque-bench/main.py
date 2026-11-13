@@ -96,9 +96,19 @@ def _pgque_consumer_mode() -> str:
     return os.environ.get("PGQUE_CONSUMER_MODE", "subconsumer").lower()
 
 
-def _subconsumer_name() -> str:
-    """One subconsumer name per replica, derived from BENCH_INSTANCE_ID."""
-    return f"sub_{os.environ.get('BENCH_INSTANCE_ID', '0')}"
+def _subconsumer_name(index: int = 0) -> str:
+    """Subconsumer names per replica, derived from BENCH_INSTANCE_ID.
+    Index 0 keeps the single-subconsumer name."""
+    base = f"sub_{os.environ.get('BENCH_INSTANCE_ID', '0')}"
+    return base if index == 0 else f"{base}_{index}"
+
+
+def _subconsumers_per_queue() -> int:
+    """PGQUE_SUBCONSUMERS: cooperative subconsumers per queue per replica,
+    each with its own open batch. Default 1."""
+    if _pgque_consumer_mode() != "subconsumer":
+        return 1
+    return max(1, int(os.environ.get("PGQUE_SUBCONSUMERS", "1")))
 
 
 def _worker_fail_mode() -> str:
@@ -448,8 +458,30 @@ async def scenario_long_horizon() -> None:
 
     work_sem = asyncio.Semaphore(worker_count)
 
+    # PGQUE_CONSUMER_CONNS: consumer connections per replica; consumer tasks
+    # share them round-robin. Default 1 (one shared consumer connection).
+    consumer_conns = [consumer_conn] + [
+        ReconnectingConn(await aconnect())
+        for _ in range(max(1, env_int("PGQUE_CONSUMER_CONNS", 1)) - 1)
+    ]
+    # PGQUE_SHARED_LISTEN=1: one LISTEN connection per replica for every
+    # queue instead of one per consumer task.
+    shared_listen = env_str("PGQUE_SHARED_LISTEN", "0") == "1"
+    tick_waiters: dict[str, list[asyncio.Event]] = {}
+    # PGQUE_TICKER_MODE=loop: instance 0 alone drives `CALL
+    # pgque.ticker_loop()` (the pg_cron job pgque.start() schedules) at
+    # pgque.set_tick_period_ms(PGQUE_TICK_MS). Default `per-queue`: every
+    # replica calls pgque.ticker(queue) for each queue every PGQUE_TICK_MS.
+    ticker_mode = env_str("PGQUE_TICKER_MODE", "per-queue")
+    tick_ms = max(1, env_int("PGQUE_TICK_MS", 50))
+    # PGQUE_IDLE_POLL_MS: longest wait for a tick NOTIFY before re-polling.
+    idle_poll_s = max(1, env_int("PGQUE_IDLE_POLL_MS", 100)) / 1000.0
+
     async def producer() -> None:
         nonlocal enqueued, current_producer_target_rate
+        if producer_mode == "depth-target" and not _observer_enabled():
+            # Instance 0 alone observes depth and fills to the target.
+            return
         seq = 0
         next_t = loop.time()
         # Fixed-rate accounting (used when PRODUCER_PACING=adapter — the
@@ -636,6 +668,24 @@ async def scenario_long_horizon() -> None:
         # Iterates over all configured queues each tick so multi-queue
         # runs don't need extra ticker connections.
         ticker_queues = _queue_names()
+        if ticker_mode == "loop":
+            if not _observer_enabled():
+                return
+            try:
+                async with ticker_conn.cursor() as cur:
+                    await cur.execute("SELECT pgque.set_tick_period_ms(%s)", (tick_ms,))
+            except Exception as exc:
+                print(f"[pgque] set_tick_period_ms({tick_ms}) failed: {exc}", file=sys.stderr)
+                raise
+            while not shutdown.is_set():
+                try:
+                    async with ticker_conn.cursor() as cur:
+                        await cur.execute("CALL pgque.ticker_loop()")
+                except Exception as exc:
+                    print(f"[pgque] ticker_loop failed: {exc}", file=sys.stderr)
+                    await ticker_conn.reconnect()
+                    await asyncio.sleep(0.1)
+            return
         while not shutdown.is_set():
             try:
                 async with ticker_conn.cursor() as cur:
@@ -644,7 +694,7 @@ async def scenario_long_horizon() -> None:
             except Exception as exc:
                 print(f"[pgque] ticker failed: {exc}", file=sys.stderr)
                 await ticker_conn.reconnect()
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(tick_ms / 1000.0)
 
     # Maint cadence ~10 s, matching pgque.start()'s scheduler default.
     # Reaps orphan batches and rotates tables on the same cadence.
@@ -734,7 +784,11 @@ async def scenario_long_horizon() -> None:
             end_to_end_latencies_ms.append((time.monotonic(), end_to_end_latency_ms))
             completed += 1
 
-    async def consumer_task(queue_name: str = QUEUE_NAME) -> None:
+    async def consumer_task(
+        queue_name: str = QUEUE_NAME,
+        subconsumer_index: int = 0,
+        consumer_conn: "ReconnectingConn" = consumer_conn,
+    ) -> None:
         # PGQUE_CONSUMER_MODE selects the path:
         #   subconsumer (default): cooperative `next_batch_custom`
         #     against a per-replica subconsumer.
@@ -747,13 +801,20 @@ async def scenario_long_horizon() -> None:
         # batches — PgQ opens a batch unconditionally and the consumer
         # must finish_batch to advance the cursor.
         consumer_mode = _pgque_consumer_mode()
-        subconsumer = _subconsumer_name() if consumer_mode == "subconsumer" else None
+        subconsumer = (
+            _subconsumer_name(subconsumer_index) if consumer_mode == "subconsumer" else None
+        )
         fail_mode = _worker_fail_mode()
+        wake: asyncio.Event | None = None
+        if shared_listen:
+            wake = asyncio.Event()
+            tick_waiters.setdefault(f"pgque_{queue_name}", []).append(wake)
         await wait_for_consumer_gate(shutdown)
-        listen_conn = await aconnect()
+        listen_conn = None if shared_listen else await aconnect()
         try:
-            async with listen_conn.cursor() as cur:
-                await cur.execute(f'LISTEN "pgque_{queue_name}"')
+            if listen_conn is not None:
+                async with listen_conn.cursor() as cur:
+                    await cur.execute(f'LISTEN "pgque_{queue_name}"')
             while not shutdown.is_set():
                 try:
                     async with consumer_conn.cursor() as cur:
@@ -789,10 +850,17 @@ async def scenario_long_horizon() -> None:
                     await asyncio.sleep(0.1)
                     continue
 
+                if batch_id is None and wake is not None:
+                    try:
+                        await asyncio.wait_for(wake.wait(), idle_poll_s)
+                    except asyncio.TimeoutError:
+                        pass
+                    wake.clear()
+                    continue
                 if batch_id is None:
                     # No tick boundary yet — wait for NOTIFY or up to 100ms.
                     try:
-                        await asyncio.wait_for(_drain_notifies(listen_conn), 0.1)
+                        await asyncio.wait_for(_drain_notifies(listen_conn), idle_poll_s)
                     except asyncio.TimeoutError:
                         pass
                     except Exception as exc:
@@ -927,7 +995,29 @@ async def scenario_long_horizon() -> None:
                     print(f"[pgque] finish_batch failed: {exc}", file=sys.stderr)
                     await consumer_conn.reconnect()
         finally:
-            await listen_conn.close()
+            if listen_conn is not None:
+                await listen_conn.close()
+
+    async def tick_listener() -> None:
+        while not shutdown.is_set():
+            listen_conn = None
+            try:
+                listen_conn = await aconnect()
+                async with listen_conn.cursor() as cur:
+                    for channel in tick_waiters:
+                        await cur.execute(f'LISTEN "{channel}"')
+                for waiters in tick_waiters.values():
+                    for event in waiters:
+                        event.set()
+                async for notify in listen_conn.notifies():
+                    for event in tick_waiters.get(notify.channel, ()):
+                        event.set()
+            except Exception as exc:
+                print(f"[pgque] tick listener: {exc}", file=sys.stderr)
+                await asyncio.sleep(0.2)
+            finally:
+                if listen_conn is not None:
+                    await listen_conn.close()
 
     def _message(row: dict) -> dict:
         try:
@@ -1059,10 +1149,20 @@ async def scenario_long_horizon() -> None:
     ]
     # One consumer task per queue. Each polls next_batch_custom
     # against its own subconsumer and runs independently.
+    consumer_slot = 0
     for q in _queue_names():
-        tasks.append(
-            asyncio.create_task(consumer_task(q), name=f"consumer:{q}")
-        )
+        for sub_idx in range(_subconsumers_per_queue()):
+            tasks.append(
+                asyncio.create_task(
+                    consumer_task(
+                        q, sub_idx, consumer_conns[consumer_slot % len(consumer_conns)]
+                    ),
+                    name=f"consumer:{q}:{sub_idx}",
+                )
+            )
+            consumer_slot += 1
+    if shared_listen:
+        tasks.append(asyncio.create_task(tick_listener(), name="tick_listener"))
     try:
         await shutdown.wait()
     finally:
@@ -1085,10 +1185,11 @@ async def scenario_long_horizon() -> None:
             try:
                 async with consumer_conn.cursor() as cur:
                     for q in _queue_names():
-                        await cur.execute(
-                            "SELECT pgque.unregister_subconsumer(%s, %s, %s, 1)",
-                            (q, CONSUMER_NAME, _subconsumer_name()),
-                        )
+                        for sub_idx in range(_subconsumers_per_queue()):
+                            await cur.execute(
+                                "SELECT pgque.unregister_subconsumer(%s, %s, %s, 1)",
+                                (q, CONSUMER_NAME, _subconsumer_name(sub_idx)),
+                            )
             except Exception as exc:
                 print(
                     f"[pgque] unregister_subconsumer on shutdown: {exc}",
@@ -1096,7 +1197,7 @@ async def scenario_long_horizon() -> None:
                 )
         for c in (
             producer_conn,
-            consumer_conn,
+            *consumer_conns,
             ticker_conn,
             maint_conn,
             maint_step2_conn,

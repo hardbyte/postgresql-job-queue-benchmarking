@@ -102,18 +102,21 @@ defmodule ObanBench.LongHorizon do
 
     padding = payload_padding(payload_bytes - 32)
 
+    # Only instance 0 observes depth, so only it produces in depth-target mode.
     _producer =
-      spawn(fn ->
-        producer_loop(
-          producer_mode,
-          producer_rate,
-          target_depth,
-          padding,
-          producer_rate_control_file,
-          producer_batch_max,
-          producer_batch_ms
-        )
-      end)
+      if producer_mode != "depth-target" or observer_enabled?() do
+        spawn(fn ->
+          producer_loop(
+            producer_mode,
+            producer_rate,
+            target_depth,
+            padding,
+            producer_rate_control_file,
+            producer_batch_max,
+            producer_batch_ms
+          )
+        end)
+      end
 
     _herd =
       spawn(fn ->

@@ -427,9 +427,14 @@ async function scenarioLongHorizon() {
   // Unset keeps pg-boss's defaults: expireInSeconds 900, supervise/monitor every 60 s.
   const expireInSecs = envInt("EXPIRE_IN_SECS", null);
   const superviseIntervalSecs = envInt("SUPERVISE_INTERVAL_SECS", null);
+  // Unset keeps pg-boss's pool default (max 10).
+  const maxConnections = envInt("MAX_CONNECTIONS", null);
+  const listenNotify = envStr("PGBOSS_LISTEN_NOTIFY", "0") === "1";
 
   const boss = new PgBoss({
     connectionString: databaseUrl(),
+    ...(maxConnections !== null ? { max: maxConnections } : {}),
+    ...(listenNotify ? { useListenNotify: true } : {}),
     ...(superviseIntervalSecs !== null
       ? { superviseIntervalSeconds: superviseIntervalSecs, monitorIntervalSeconds: superviseIntervalSecs }
       : {}),
@@ -444,7 +449,10 @@ async function scenarioLongHorizon() {
   const queues = queueNames();
   for (const name of queues) {
     if (!(await boss.getQueue(name))) {
-      await boss.createQueue(name, { partition: true });
+      await boss.createQueue(name, { partition: true, ...(listenNotify ? { notify: true } : {}) });
+    } else if (listenNotify) {
+      // Another replica created it; this also refreshes the local queue cache.
+      await boss.updateQueue(name, { notify: true });
     }
   }
 
@@ -575,9 +583,10 @@ async function scenarioLongHorizon() {
   // pg-boss workers are per queue; worker concurrency is split across them.
   const perQueueConcurrency = Math.max(1, Math.floor(workerCount / queues.length));
   const workOptions = {
-    pollingIntervalSeconds: 0.5,
+    pollingIntervalSeconds: Number.parseFloat(envStr("PGBOSS_POLLING_INTERVAL_S", "0.5")),
     localConcurrency: perQueueConcurrency,
     batchSize: subscriberBatchSize,
+    ...(envStr("PGBOSS_BURST_WHEN_BATCH_FULL", "0") === "1" ? { burstWhenBatchFull: true } : {}),
   };
   const workIds = new Map();
   const startWorkers = (async () => {
@@ -616,6 +625,10 @@ async function scenarioLongHorizon() {
   };
 
   const producerTask = (async () => {
+    // Only instance 0 observes depth, so only it produces in depth-target mode.
+    if (producerMode === "depth-target" && !observerEnabled()) {
+      return;
+    }
     let nextAt = nowMonoMs();
     let batchIndex = 0;
     while (!shuttingDown) {

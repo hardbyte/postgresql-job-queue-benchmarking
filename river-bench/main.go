@@ -676,8 +676,8 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 		Queues:               queueConfigs,
 		Workers:              workers,
 		JobTimeout:           rescueAfter(30),
-		FetchCooldown:        50 * time.Millisecond,
-		FetchPollInterval:    50 * time.Millisecond,
+		FetchCooldown:        time.Duration(envInt("RIVER_FETCH_COOLDOWN_MS", 50)) * time.Millisecond,
+		FetchPollInterval:    time.Duration(envInt("RIVER_FETCH_POLL_INTERVAL_MS", 50)) * time.Millisecond,
 		RescueStuckJobsAfter: rescueAfter(30),
 	}
 	if controls.failureEnabled() || controls.abandonEnabled() {
@@ -739,6 +739,12 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	producerWG.Add(1)
 	go func() {
 		defer producerWG.Done()
+		// Only instance 0 observes queue depth, so in depth-target mode it is
+		// the only replica that can produce against the target.
+		if producerMode == "depth-target" && instanceID() != 0 {
+			<-shutdown
+			return
+		}
 		var seq int64
 		// Fractional credit budget for fixed-rate batching.
 		var rateCredit float64

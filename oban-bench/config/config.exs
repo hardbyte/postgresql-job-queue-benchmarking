@@ -30,11 +30,22 @@ oban_node =
   "oban-bench-#{System.get_env("BENCH_INSTANCE_ID", "0")}-" <>
     Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
 
-config :oban_bench, Oban,
-  engine: Oban.Engines.Basic,
-  repo: ObanBench.Repo,
-  node: oban_node,
-  queues: [benchmark: 50, chaos: 10],
-  lifeline: [rescue_after: :timer.seconds(rescue_after_secs)]
+# Unset keeps Oban's default dispatch_cooldown (5 ms).
+dispatch_cooldown_opts =
+  case System.get_env("OBAN_DISPATCH_COOLDOWN_MS") do
+    nil -> []
+    val -> [dispatch_cooldown: String.to_integer(val)]
+  end
+
+oban_opts =
+  [
+    engine: Oban.Engines.Basic,
+    repo: ObanBench.Repo,
+    node: oban_node,
+    queues: [benchmark: 50, chaos: 10],
+    lifeline: [rescue_after: :timer.seconds(rescue_after_secs)]
+  ] ++ dispatch_cooldown_opts
+
+config :oban_bench, Oban, oban_opts
 
 config :logger, level: :warning

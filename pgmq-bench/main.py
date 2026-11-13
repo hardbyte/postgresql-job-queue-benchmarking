@@ -207,6 +207,15 @@ async def scenario_long_horizon() -> None:
     producer_batch_max = env_int("PRODUCER_BATCH_MAX", 128)
     poll_interval_ms = env_int("POLL_INTERVAL_MS", 50)
     visibility_timeout_s = env_int("VISIBILITY_TIMEOUT_S", 30)
+    # PGMQ_ACK=delete acks with pgmq.delete (no archive-table insert).
+    ack_function = "pgmq.delete" if env_str("PGMQ_ACK", "archive") == "delete" else "pgmq.archive"
+    # PGMQ_CONSUMER_SWEEP=1: every consumer polls all queues round-robin,
+    # starting at its own offset, instead of a fixed share.
+    consumer_sweep = env_str("PGMQ_CONSUMER_SWEEP", "0") == "1"
+    # PGMQ_NOTIFY_INSERT_MS=<throttle>: pgmq.enable_notify_insert on every
+    # queue; idle consumers wait on LISTEN (POLL_INTERVAL_MS becomes the
+    # fallback poll).
+    notify_insert_ms = os.environ.get("PGMQ_NOTIFY_INSERT_MS")
     # Floor at 8 to keep the W>=64 path off pgmq.read(qty=1), which
     # serialises the readers on FOR UPDATE and was the direct cause
     # of pgmq's W=16 → W=256 throughput cliff in the 2026-05-09 sweep
@@ -227,6 +236,13 @@ async def scenario_long_horizon() -> None:
             await setup_queue(setup_conn, queue, keep_existing=controls.abandon_enabled)
         if controls.failure_enabled and _observer_enabled():
             await setup_queue(setup_conn, DLQ_NAME)
+        if notify_insert_ms is not None and _observer_enabled():
+            async with setup_conn.cursor() as cur:
+                for queue in queues:
+                    await cur.execute(
+                        "SELECT pgmq.enable_notify_insert(%s, %s)",
+                        (queue, int(notify_insert_ms)),
+                    )
         extversion = await extension_version(setup_conn)
     finally:
         await setup_conn.close()
@@ -319,6 +335,9 @@ async def scenario_long_horizon() -> None:
 
     async def producer() -> None:
         nonlocal enqueued, current_producer_target_rate, current_queue_depth
+        if producer_mode == "depth-target" and _instance_id() != 0:
+            # Instance 0 alone fills to the fleet-wide depth target.
+            return
         seq = 0
         batch_index = 0
         next_t = loop.time()
@@ -395,10 +414,18 @@ async def scenario_long_horizon() -> None:
         nonlocal completed
         # pgmq has no cross-queue read: each consumer polls its share of
         # the queues in turn and only sleeps after a full empty sweep.
-        if len(queues) <= worker_count:
+        if consumer_sweep:
+            start = (_instance_id() * worker_count + worker_idx) % len(queues)
+            assigned = queues[start:] + queues[:start]
+        elif len(queues) <= worker_count:
             assigned = [queues[worker_idx % len(queues)]]
         else:
             assigned = queues[worker_idx::worker_count]
+        wake: asyncio.Event | None = None
+        if notify_insert_ms is not None:
+            wake = asyncio.Event()
+            for name in assigned:
+                insert_waiters.setdefault(f"pgmq.q_{name}.INSERT", []).append(wake)
         await wait_for_consumer_gate(shutdown)
         conn = ReconnectingConn(await aconnect())
         in_flight[worker_idx] = (assigned[0], [])
@@ -422,7 +449,14 @@ async def scenario_long_horizon() -> None:
                     empty_in_sweep += 1
                     if empty_in_sweep >= len(assigned):
                         empty_in_sweep = 0
-                        await asyncio.sleep(poll_interval_ms / 1000.0)
+                        if wake is None:
+                            await asyncio.sleep(poll_interval_ms / 1000.0)
+                        else:
+                            try:
+                                await asyncio.wait_for(wake.wait(), poll_interval_ms / 1000.0)
+                            except asyncio.TimeoutError:
+                                pass
+                            wake.clear()
                     continue
                 empty_in_sweep = 0
 
@@ -470,7 +504,7 @@ async def scenario_long_horizon() -> None:
                             await cur.fetchall()
                             await cur.execute(
                                 "SELECT pgmq.delete(%s, %s::bigint[])",
-                                (QUEUE_NAME, [int(r["msg_id"]) for r in dead_rows]),
+                                (queue, [int(r["msg_id"]) for r in dead_rows]),
                             )
                             await cur.fetchall()
                     except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
@@ -490,7 +524,7 @@ async def scenario_long_horizon() -> None:
                 try:
                     async with conn.cursor() as cur:
                         await cur.execute(
-                            "SELECT pgmq.archive(%s, %s)",
+                            f"SELECT {ack_function}(%s, %s::bigint[])",
                             (queue, msg_ids),
                         )
                         await cur.fetchall()
@@ -517,6 +551,30 @@ async def scenario_long_horizon() -> None:
                 completed += len(rows) - not_counted
         finally:
             await conn.close()
+
+    insert_waiters: dict[str, list[asyncio.Event]] = {}
+
+    async def insert_listener() -> None:
+        # One LISTEN connection per process for every queue's insert channel.
+        while not shutdown.is_set():
+            listen_conn = None
+            try:
+                listen_conn = await aconnect()
+                async with listen_conn.cursor() as cur:
+                    for channel in insert_waiters:
+                        await cur.execute(f'LISTEN "{channel}"')
+                for waiters in insert_waiters.values():
+                    for event in waiters:
+                        event.set()
+                async for notify in listen_conn.notifies():
+                    for event in insert_waiters.get(notify.channel, ()):
+                        event.set()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[pgmq] insert listener: {exc}", file=sys.stderr, flush=True)
+                await asyncio.sleep(0.2)
+            finally:
+                if listen_conn is not None:
+                    await listen_conn.close()
 
     herd_conn = ReconnectingConn(await aconnect()) if controls.schedule_enabled else None
 
@@ -633,6 +691,8 @@ async def scenario_long_horizon() -> None:
     tasks.extend(
         asyncio.create_task(consumer_task(idx)) for idx in range(worker_count)
     )
+    if notify_insert_ms is not None:
+        tasks.append(asyncio.create_task(insert_listener()))
 
     await shutdown.wait()
     controls.exit_if_holding()
@@ -657,7 +717,7 @@ async def scenario_long_horizon() -> None:
                         if not ids:
                             continue
                         await cur.execute(
-                            "SELECT pgmq.archive(%s, %s)",
+                            f"SELECT {ack_function}(%s, %s::bigint[])",
                             (queue, sorted(ids)),
                         )
                         await cur.fetchall()

@@ -27,7 +27,7 @@ ABSURD_SQL_PATH = Path(os.environ.get("ABSURD_SQL_PATH", "/opt/absurd.sql"))
 ABSURD_SDK_VERSION = importlib.metadata.version("absurd-sdk")
 QUEUE_NAME = "long_horizon_bench"
 TASK_NAME = "bench_job"
-POLL_INTERVAL_SECS = 0.05
+POLL_INTERVAL_SECS = int(os.environ.get("ABSURD_POLL_INTERVAL_MS", "50")) / 1000.0
 OBSERVER_METRICS = frozenset(
     {
         "queue_depth",
@@ -191,6 +191,7 @@ def ensure_schema() -> None:
 def build_app(
     queue_name: str,
     *,
+    conn: AsyncConnection | None = None,
     loop: asyncio.AbstractEventLoop,
     subscriber_latencies_ms,
     end_to_end_latencies_ms,
@@ -198,7 +199,9 @@ def build_app(
     work_ms: int,
     controls: ScenarioControls | None = None,
 ) -> AsyncAbsurd:
-    app = AsyncAbsurd(database_url(), queue_name=queue_name)
+    app = AsyncAbsurd(
+        conn if conn is not None else database_url(), queue_name=queue_name
+    )
 
     @app.register_task(TASK_NAME)
     async def bench_job(params: dict, _ctx) -> None:
@@ -263,6 +266,30 @@ async def recreate_queue(queue_name: str, *, keep_existing: bool = False) -> Non
         await app.create_queue()
     finally:
         await app.close()
+
+
+LIVE_RUN_STATES = ["pending", "running", "sleeping"]
+
+
+async def count_live_runs(conn: AsyncConnection, queue_names: list[str]) -> dict[str, int]:
+    # Unfinished runs only, through the r_ (state, available_at) index, so the
+    # probe doesn't scan completed history.
+    union = sql.SQL(" UNION ALL ").join(
+        sql.SQL("SELECT state FROM absurd.{} WHERE state = ANY(%s)").format(
+            sql.Identifier(f"r_{q}")
+        )
+        for q in queue_names
+    )
+    async with conn.cursor() as cur:
+        await cur.execute(
+            sql.SQL(
+                "SELECT state::text AS state, count(*)::bigint AS count "
+                "FROM ({}) AS r GROUP BY state"
+            ).format(union),
+            [LIVE_RUN_STATES] * len(queue_names),
+        )
+        rows = await cur.fetchall()
+    return {row["state"]: int(row["count"]) for row in rows}
 
 
 async def count_by_state(conn: AsyncConnection, queue_names: list[str]) -> dict[str, int]:
@@ -406,10 +433,30 @@ async def scenario_long_horizon() -> None:
 
     producer_conn = ReconnectingConn(await connect())
     depth_conn = ReconnectingConn(await connect())
-    # Absurd workers are per queue: one app (and connection) per queue.
-    def make_app(queue: str) -> AsyncAbsurd:
+    # Absurd workers are per queue. ABSURD_CLIENTS_PER_QUEUE runs that many
+    # worker clients on each queue. Each client owns a connection unless
+    # ABSURD_SHARED_CONNECTIONS > 0, in which case clients share that many.
+    clients_per_queue = max(1, env_int("ABSURD_CLIENTS_PER_QUEUE", 1))
+    worker_slots = [queue for queue in queues for _ in range(clients_per_queue)]
+    shared_conns: list[AsyncConnection | None] = [None] * max(
+        0, env_int("ABSURD_SHARED_CONNECTIONS", 0)
+    )
+
+    async def worker_conn(index: int) -> AsyncConnection | None:
+        if not shared_conns:
+            return None
+        slot = index % len(shared_conns)
+        conn = shared_conns[slot]
+        if conn is None or conn.closed or conn.broken:
+            shared_conns[slot] = await AsyncConnection.connect(
+                database_url(), autocommit=True
+            )
+        return shared_conns[slot]
+
+    async def make_app(index: int) -> AsyncAbsurd:
         return build_app(
-            queue,
+            worker_slots[index],
+            conn=await worker_conn(index),
             loop=loop,
             subscriber_latencies_ms=subscriber_latencies_ms,
             end_to_end_latencies_ms=end_to_end_latencies_ms,
@@ -418,11 +465,15 @@ async def scenario_long_horizon() -> None:
             controls=controls,
         )
 
-    worker_apps = [make_app(queue) for queue in queues]
+    worker_apps = [await make_app(index) for index in range(len(worker_slots))]
 
     async def producer() -> None:
         nonlocal enqueued, current_producer_target_rate, current_queue_depth
-        if not producer_enabled():
+        # In depth-target mode only instance 0 sees the depth signal, so only
+        # it produces.
+        if not producer_enabled() or (
+            producer_mode == "depth-target" and not observer_enabled()
+        ):
             while not shutdown.is_set():
                 await asyncio.sleep(0.25)
             return
@@ -524,7 +575,11 @@ async def scenario_long_horizon() -> None:
             return
         while not shutdown.is_set():
             try:
-                counts = await count_by_state(depth_conn.conn, queues)
+                counts = (
+                    await count_by_state(depth_conn.conn, queues)
+                    if controls.failure_enabled
+                    else await count_live_runs(depth_conn.conn, queues)
+                )
             except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
                 await depth_conn.reconnect()
                 continue
@@ -622,7 +677,7 @@ async def scenario_long_horizon() -> None:
     # §1, §3). 10s is short enough to clear within a chaos-recovery window
     # and long enough to absorb a worker hiccup.
     claim_timeout_secs = env_int("CLAIM_TIMEOUT_SECS", 10)
-    per_queue_concurrency = max(1, worker_count // len(queues))
+    per_client_concurrency = max(1, worker_count // len(worker_slots))
 
     # start_worker() returns when its connection fails. Restart it with a
     # fresh client, as a process supervisor would restart a worker process.
@@ -632,7 +687,7 @@ async def scenario_long_horizon() -> None:
             app = worker_apps[index]
             try:
                 await app.start_worker(
-                    concurrency=per_queue_concurrency,
+                    concurrency=per_client_concurrency,
                     poll_interval=POLL_INTERVAL_SECS,
                     claim_timeout=claim_timeout_secs,
                 )
@@ -640,12 +695,12 @@ async def scenario_long_horizon() -> None:
                 if shutdown.is_set():
                     return
                 print(
-                    f"[absurd] worker for {queues[index]} exited ({exc!r}); restarting in 1 s",
+                    f"[absurd] worker for {worker_slots[index]} exited ({exc!r}); restarting in 1 s",
                     file=sys.stderr,
                 )
                 await app.close()
                 await asyncio.sleep(1)
-                worker_apps[index] = make_app(queues[index])
+                worker_apps[index] = await make_app(index)
             else:
                 return
 
@@ -670,6 +725,9 @@ async def scenario_long_horizon() -> None:
     await asyncio.gather(*tasks, return_exceptions=True)
     for app in worker_apps:
         await app.close()
+    for conn in shared_conns:
+        if conn is not None:
+            await conn.close()
     await producer_conn.close()
     await depth_conn.close()
     if herd_conn is not None:

@@ -374,8 +374,14 @@ async def scenario_long_horizon() -> None:
     # procrastinate discovers tasks by name, so we can shadow the module-level
     # `bench_job` with a queue-scoped handler. We use a fresh App to avoid
     # cross-scenario leakage.
+    # MAX_CONNECTIONS caps the psycopg pool. Unset keeps psycopg_pool's
+    # default of 4.
+    pool_size = env_int("MAX_CONNECTIONS", 0)
+    pool_kwargs = {"min_size": min(4, pool_size), "max_size": pool_size} if pool_size > 0 else {}
     lh_app = procrastinate.App(
-        connector=procrastinate.PsycopgConnector(conninfo=database_url()),
+        connector=procrastinate.PsycopgConnector(
+            conninfo=database_url(), **pool_kwargs
+        ),
     )
     controls = ScenarioControls()
     if controls.failure_enabled:
@@ -503,6 +509,10 @@ async def scenario_long_horizon() -> None:
 
         async def producer() -> None:
             nonlocal enqueued, current_producer_target_rate
+            if producer_mode == "depth-target" and not _observer_enabled():
+                # Only instance 0 sees the depth signal, so only it produces.
+                await shutdown.wait()
+                return
             seq = 0
             deferrers = [long_horizon_task.configure(queue=q) for q in queues]
             batch_index = 0
@@ -605,9 +615,12 @@ async def scenario_long_horizon() -> None:
                 while not shutdown.is_set():
                     await asyncio.sleep(0.25)
                 return
-            while not shutdown.is_set():
-                try:
-                    async with await connect() as conn:
+            conn: AsyncConnection | None = None
+            try:
+                while not shutdown.is_set():
+                    try:
+                        if conn is None or conn.closed:
+                            conn = await connect()
                         async with conn.cursor() as cur:
                             await cur.execute(
                                 "SELECT count(*)::bigint AS cnt "
@@ -621,11 +634,16 @@ async def scenario_long_horizon() -> None:
                             )
                             row = await cur.fetchone()
                             queue_depth = int(row["cnt"]) if row else 0
-                except Exception:
-                    pass
-                # Fast poll so the producer's depth-target backoff
-                # sees fresh values.
-                await asyncio.sleep(0.2)
+                    except Exception:
+                        if conn is not None:
+                            await conn.close()
+                        conn = None
+                    # Fast poll so the producer's depth-target backoff
+                    # sees fresh values.
+                    await asyncio.sleep(0.2)
+            finally:
+                if conn is not None:
+                    await conn.close()
 
         async def sampler() -> None:
             now_epoch = int(time.time())
@@ -795,6 +813,13 @@ async def main() -> None:
     worker_count = env_int("WORKER_COUNT", 50)
     latency_iterations = env_int("LATENCY_ITERATIONS", 100)
 
+    if scenario == "long_horizon":
+        # long_horizon opens its own app; don't hold this app's pool open.
+        async with app.open_async():
+            await ensure_schema_applied()
+        await scenario_long_horizon()
+        return
+
     async with app.open_async():
         await ensure_schema_applied()
         if scenario == "migrate_only":
@@ -802,9 +827,6 @@ async def main() -> None:
             return
         if scenario == "worker_only":
             await scenario_worker_only()
-            return
-        if scenario == "long_horizon":
-            await scenario_long_horizon()
             return
 
         results: list[dict] = []

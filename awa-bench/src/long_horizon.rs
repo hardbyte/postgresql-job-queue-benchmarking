@@ -395,7 +395,11 @@ fn instance_id() -> u32 {
 }
 
 fn producer_enabled() -> bool {
-    if env_u32("PRODUCER_ONLY_INSTANCE_ZERO", 0) == 0 {
+    // Only instance 0 observes queue depth, so in depth-target mode it is
+    // the only replica that can produce against the target.
+    if env_string("PRODUCER_MODE", "fixed") == "depth-target" {
+        instance_id() == 0
+    } else if env_u32("PRODUCER_ONLY_INSTANCE_ZERO", 0) == 0 {
         true
     } else {
         instance_id() == 0
@@ -765,8 +769,18 @@ pub async fn run() {
     // pool stays roughly the same as a single-queue run. min 1 worker
     // per queue.
     let per_queue_workers: u32 = ((worker_count as usize) / queue_names.len().max(1)).max(1) as u32;
+    // AWA_WEIGHTED_WORKERS=1: weighted mode, one shared pool of
+    // `worker_count` permits across every queue (min_workers 0, weight 1;
+    // max_workers is ignored in weighted mode).
+    let weighted_workers = matches!(
+        env_string("AWA_WEIGHTED_WORKERS", "0").as_str(),
+        "1" | "true" | "TRUE" | "yes" | "on"
+    );
     let mut client_builder =
         Client::builder(pool.clone()).priority_aging_interval(priority_aging_interval());
+    if weighted_workers {
+        client_builder = client_builder.global_max_workers(worker_count);
+    }
     for q in &queue_names {
         client_builder = client_builder.queue(
             q.as_str(),
