@@ -470,12 +470,27 @@ async def scenario_long_horizon() -> None:
 
         worker_started = False
 
+        # The worker stops itself when a side task such as the LISTEN
+        # listener loses its connection. Restart it, as a process supervisor
+        # would restart `procrastinate worker`.
         async def run_worker() -> None:
             nonlocal worker_started
             await wait_for_consumer_gate(shutdown)
-            if not shutdown.is_set():
+            while not shutdown.is_set():
                 worker_started = True
-                await worker.run()
+                try:
+                    await worker.run()
+                except Exception as exc:
+                    reason = repr(exc)
+                else:
+                    reason = "stopped"
+                if shutdown.is_set():
+                    return
+                print(
+                    f"[procrastinate] worker exited ({reason}); restarting in 1 s",
+                    file=sys.stderr,
+                )
+                await asyncio.sleep(1)
 
         worker_task = asyncio.create_task(run_worker())
 

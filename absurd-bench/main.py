@@ -407,8 +407,8 @@ async def scenario_long_horizon() -> None:
     producer_conn = ReconnectingConn(await connect())
     depth_conn = ReconnectingConn(await connect())
     # Absurd workers are per queue: one app (and connection) per queue.
-    worker_apps = [
-        build_app(
+    def make_app(queue: str) -> AsyncAbsurd:
+        return build_app(
             queue,
             loop=loop,
             subscriber_latencies_ms=subscriber_latencies_ms,
@@ -417,8 +417,8 @@ async def scenario_long_horizon() -> None:
             work_ms=work_ms,
             controls=controls,
         )
-        for queue in queues
-    ]
+
+    worker_apps = [make_app(queue) for queue in queues]
 
     async def producer() -> None:
         nonlocal enqueued, current_producer_target_rate, current_queue_depth
@@ -624,17 +624,32 @@ async def scenario_long_horizon() -> None:
     claim_timeout_secs = env_int("CLAIM_TIMEOUT_SECS", 10)
     per_queue_concurrency = max(1, worker_count // len(queues))
 
-    async def run_worker(app: AsyncAbsurd) -> None:
+    # start_worker() returns when its connection fails. Restart it with a
+    # fresh client, as a process supervisor would restart a worker process.
+    async def run_worker(index: int) -> None:
         await wait_for_consumer_gate(shutdown)
-        if shutdown.is_set():
-            return
-        await app.start_worker(
-            concurrency=per_queue_concurrency,
-            poll_interval=POLL_INTERVAL_SECS,
-            claim_timeout=claim_timeout_secs,
-        )
+        while not shutdown.is_set():
+            app = worker_apps[index]
+            try:
+                await app.start_worker(
+                    concurrency=per_queue_concurrency,
+                    poll_interval=POLL_INTERVAL_SECS,
+                    claim_timeout=claim_timeout_secs,
+                )
+            except Exception as exc:
+                if shutdown.is_set():
+                    return
+                print(
+                    f"[absurd] worker for {queues[index]} exited ({exc!r}); restarting in 1 s",
+                    file=sys.stderr,
+                )
+                await app.close()
+                await asyncio.sleep(1)
+                worker_apps[index] = make_app(queues[index])
+            else:
+                return
 
-    worker_tasks = [asyncio.create_task(run_worker(app)) for app in worker_apps]
+    worker_tasks = [asyncio.create_task(run_worker(i)) for i in range(len(worker_apps))]
     tasks = [
         asyncio.create_task(producer()),
         asyncio.create_task(depth_task()),
