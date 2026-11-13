@@ -42,10 +42,11 @@
       "id": "saturation",
       "title": "Throughput at saturation",
       "question": "How many 1 ms jobs per second does one worker process complete as it gets more workers?",
-      "setup": "The producer keeps 4,000 jobs queued. One worker process with 4, 16, 64 or 128 workers; 30 s warmup, then 150 s measured.",
+      "setup": "Out of the box: the producer keeps 4,000 jobs queued; one worker process with 4, 16, 64 or 128 workers and a pool of workers + 8 connections; 30 s warmup, then 150 s measured. Tuned: each system at the settings its own documentation points to, within one budget for all: at most 4 processes, 128 handlers and 200 connections, the same 1 ms jobs, measured at one queue and at its recommended number of queues.",
       "read": [
         "PgQue and PGMQ provide lighter contracts than the job frameworks; compare them with each other, not with job frameworks.",
-        "Queue wait dominates claim latency here by design, so throughput is the figure to compare."
+        "Queue wait dominates claim latency here by design, so throughput is the figure to compare.",
+        "The tuned settings are listed below with their sources in each system's proposal; corrections from maintainers are welcome."
       ],
       "charts": [
         {
@@ -75,6 +76,62 @@
           "metric": "jobs_per_s",
           "title": "128 workers",
           "group": "grid"
+        },
+        {
+          "type": "bars",
+          "cell": "sat_tuned_best",
+          "metric": "jobs_per_s",
+          "title": "Tuned: completed jobs/s",
+          "caption": "Each system's best of one queue and its recommended queue count."
+        },
+        {
+          "type": "dumbbell",
+          "cellA": "sat_tuned",
+          "cellB": "sat_tuned_best",
+          "a": "jobs_per_s",
+          "b": "jobs_per_s",
+          "aLabel": "1 queue",
+          "bLabel": "Recommended queues",
+          "title": "What sharding across queues adds"
+        },
+        {
+          "type": "settings",
+          "title": "Tuned settings",
+          "caption": "Processes × handlers, queues and connections, plus each system's documented knobs.",
+          "rows": [
+            {
+              "system": "absurd",
+              "text": "4 × 32 handlers; 1 or 4 queues; producer batches of 256."
+            },
+            {
+              "system": "awa",
+              "text": "1 × 128 handlers; 1 or 4 queues; 64 connections; lease rotation 1 s (the default); producer batches of 1,000."
+            },
+            {
+              "system": "oban",
+              "text": "4 × 32 handlers; 1 queue; 40 connections each; dispatch_cooldown 1 ms (default 5 ms); producer batches of 1,000."
+            },
+            {
+              "system": "pg-boss",
+              "text": "4 × 32 handlers; 1 queue; pool of 40 each; batchSize 32, burstWhenBatchFull, LISTEN/NOTIFY; producer batches of 1,000."
+            },
+            {
+              "system": "pgmq",
+              "text": "4 × 32 consumers; 1 or 16 queues, every consumer sweeping all queues; read batches of 32; ack with pgmq.delete; producer batches of 1,000."
+            },
+            {
+              "system": "pgque",
+              "text": "4 processes × 4 cooperative subconsumers, 32 handlers each; 1 queue; ticker_loop every 10 ms; producer batches of 1,000."
+            },
+            {
+              "system": "procrastinate",
+              "text": "4 × 32 handlers; 1 queue; pool of 33 each (concurrency + 1, as its docs advise); producer batches of 500."
+            },
+            {
+              "system": "river",
+              "text": "1 × 128 handlers; 1 or 4 queues; 32 connections; FetchCooldown 2 ms and FetchPollInterval 20 ms (River's own benchmark settings); producer batches of 1,000."
+            }
+          ]
         },
         {
           "type": "bars",
@@ -273,10 +330,11 @@
     {
       "id": "fanout",
       "title": "Many queues",
-      "question": "What does spreading the same load over 200 queues cost?",
-      "setup": "One process. 200 jobs/s in total, round-robin over 1 queue and then over 200 queues (1 job/s per queue); 16 workers requested; 4 minutes busy, then 3 minutes idle.",
+      "question": "What does spreading the same load over 200 queues cost, and how does each system serve many queues?",
+      "setup": "One process. 200 jobs/s in total, round-robin over 1 queue and then over 200 queues (1 job/s per queue); 16 handlers and 24 connections requested; each system uses its own idiomatic way of serving many queues, the same in both runs; 4 minutes busy, then 3 minutes idle.",
       "read": [
-        "Not a like-for-like comparison yet. Awa, River, Oban, pg-boss and Absurd need at least one worker per queue, so at 200 queues they ran 200 workers; Procrastinate, PGMQ and PgQue kept 16. Pollers and connections differ just as widely. This scenario is being redesigned.",
+        "Awa (weighted workers), Procrastinate (one worker over every queue), PGMQ and PgQue share 16 handlers across all 200 queues.",
+        "River, Oban, pg-boss and Absurd need at least one worker per queue, so they run 200 at 200 queues. That is part of the result.",
         "Per-queue polling and listening connections multiply with the queue count."
       ],
       "charts": [
@@ -300,6 +358,54 @@
           "aLabel": "1 queue",
           "bLabel": "200 queues",
           "title": "Transactions per second once idle"
+        },
+        {
+          "type": "dumbbell",
+          "cellA": "fanout_q1",
+          "cellB": "fanout_q200",
+          "a": "backends",
+          "b": "backends",
+          "aLabel": "1 queue",
+          "bLabel": "200 queues",
+          "title": "Postgres connections"
+        },
+        {
+          "type": "settings",
+          "title": "How each system serves 200 queues",
+          "rows": [
+            {
+              "system": "absurd",
+              "text": "One client per queue (200 handler slots), sharing 16 connections; 250 ms poll (the SDK default)."
+            },
+            {
+              "system": "awa",
+              "text": "Weighted mode: one pool of 16 workers across every queue; one LISTEN connection."
+            },
+            {
+              "system": "oban",
+              "text": "One producer per queue with limit 1 (200 slots); idle queues don't poll."
+            },
+            {
+              "system": "pg-boss",
+              "text": "One worker per queue (200); LISTEN/NOTIFY wakes idle workers."
+            },
+            {
+              "system": "pgmq",
+              "text": "16 consumers sweeping their share of the queues; insert NOTIFY on one LISTEN connection; 500 ms fallback poll."
+            },
+            {
+              "system": "pgque",
+              "text": "Shared consumer over 16 connections; one LISTEN connection; ticker_loop every 50 ms."
+            },
+            {
+              "system": "procrastinate",
+              "text": "One worker over all 200 queues with concurrency 16; one LISTEN connection."
+            },
+            {
+              "system": "river",
+              "text": "One producer per queue with MaxWorkers 1 (200); River's default 100 ms cooldown and 1 s poll; one notifier connection."
+            }
+          ]
         }
       ]
     },

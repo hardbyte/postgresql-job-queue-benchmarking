@@ -41,8 +41,17 @@ Metric = tuple[str, str | None, str, str, str, str]
 SECTIONS: list[dict] = [
     {
         "id": "saturation",
-        "cells": ["sat_w4", "sat_w16", "sat_w64", "sat_w128"],
-        "cell_labels": {"sat_w4": "4 workers", "sat_w16": "16 workers", "sat_w64": "64 workers", "sat_w128": "128 workers"},
+        "cells": ["sat_w4", "sat_w16", "sat_w64", "sat_w128", "sat_tuned", "sat_tuned_k4", "sat_tuned_k16"],
+        "cell_labels": {
+            "sat_w4": "4 workers",
+            "sat_w16": "16 workers",
+            "sat_w64": "64 workers",
+            "sat_w128": "128 workers",
+            "sat_tuned": "Tuned, 1 queue",
+            "sat_tuned_k4": "Tuned, 4 queues",
+            "sat_tuned_k16": "Tuned, 16 queues",
+            "sat_tuned_best": "Tuned, best queue count",
+        },
         "metrics": [
             ("jobs_per_s", "clean", "median_throughput_per_s", "Completed jobs/s", "jobs/s", "higher"),
             ("peak_dead_tup", "clean", "peak_dead_tup", "Peak dead tuples", "tuples", "lower"),
@@ -240,6 +249,29 @@ def strip_local_paths(text: str) -> str:
     return re.sub(r"/(?:home|Users)/[^\s\"']*?/(?=results/|bench_harness/|\.venv/|[a-z_-]+-bench/)", "", text)
 
 
+TUNED_QUEUES = {"sat_tuned": 1, "sat_tuned_k4": 4, "sat_tuned_k16": 16}
+
+
+def tuned_best(cells: list[dict]) -> dict | None:
+    """Each system's highest-throughput tuned cell, with its queue count."""
+    values: dict[str, dict] = {}
+    source: dict[str, str] = {}
+    for cell in cells:
+        queues = TUNED_QUEUES.get(cell["id"])
+        if queues is None:
+            continue
+        for system, metrics in cell["values"].items():
+            rate = metrics.get("jobs_per_s")
+            if rate is None:
+                continue
+            if system not in values or rate > values[system]["jobs_per_s"]:
+                values[system] = {**metrics, "queues": queues}
+                source[system] = cell["source"][system]
+    if not values:
+        return None
+    return {"id": "sat_tuned_best", "label": "Tuned, best queue count", "values": values, "source": source}
+
+
 def abandon_curve(raw_csv: Path, system: str, phases: list[dict]) -> list[list[float]]:
     """[seconds since the kill, % of tagged jobs completed again] points."""
     rows = _load_rows(raw_csv)
@@ -349,6 +381,10 @@ def main() -> None:
             )
         if not cells_out:
             continue
+        if spec["id"] == "saturation":
+            best = tuned_best(cells_out)
+            if best:
+                cells_out.append(best)
         section = {
             "id": spec["id"],
             "metrics": [

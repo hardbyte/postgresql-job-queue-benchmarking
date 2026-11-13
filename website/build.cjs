@@ -231,9 +231,14 @@ function sectionCharts(spec, section) {
           }),
         { title: chart.title, caption: chart.caption, xLabel: "min after the kill", yUnit: "%", xMax: 36, yMax: 100, xFormat: (m) => `${Math.round(m)} min` },
       );
+    } else if (chart.type === "settings") {
+      const rows = chart.rows
+        .map((row) => `<tr><th scope="row"><span class="swatch" style="background:var(--sys-${esc(row.system)})"></span>${esc(systemName(row.system))}</th><td>${esc(row.text)}</td></tr>`)
+        .join("");
+      out = `<figure class="settings-figure"><figcaption><b>${esc(chart.title)}</b>${chart.caption ? `<span>${esc(chart.caption)}</span>` : ""}</figcaption><div class="table-scroll"><table class="measure-table"><tbody>${rows}</tbody></table></div></figure>`;
     }
     if (!out) continue;
-    if (chart.type === "multiples") {
+    if (chart.type === "multiples" || chart.type === "settings") {
       flush();
       html.push(out);
     } else grid.push(out);
