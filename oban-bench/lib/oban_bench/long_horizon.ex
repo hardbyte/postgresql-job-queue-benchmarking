@@ -366,6 +366,7 @@ defmodule ObanBench.LongHorizon do
     rescue
       # A pool checkout that times out under load: skip this batch.
       DBConnection.ConnectionError -> :error
+      Postgrex.Error -> :error
       ArgumentError -> :stopping
       RuntimeError -> :stopping
     catch
@@ -392,6 +393,7 @@ defmodule ObanBench.LongHorizon do
     rescue
       # A pool checkout that times out under load: skip this batch.
       DBConnection.ConnectionError -> :error
+      Postgrex.Error -> :error
       ArgumentError -> :stopping
       RuntimeError -> :stopping
     catch

@@ -82,7 +82,7 @@
           "cell": "sat_tuned_best",
           "metric": "jobs_per_s",
           "title": "Tuned: completed jobs/s",
-          "caption": "Each system's best of one queue and its recommended queue count."
+          "caption": "Each system at its recommended queue count."
         },
         {
           "type": "dumbbell",
@@ -526,7 +526,8 @@
       "read": [
         "Timeout-based systems cannot release a claim before its timeout, which has to exceed the longest job; the first rescue is mostly configuration. The rate after that is the system.",
         "PgQue is a different contract, not a faster rescue. A consumer's claim is one open batch (here about 200,000 events each). The restarted consumer gets the same batch back at once, reads it in one query, runs the handlers and acknowledges the whole batch with one statement. The job frameworks write a state change for every one of the million jobs.",
-        "The completion curves include working the jobs off again, so the fresh fleet's speed bounds them."
+        "The completion curves include working the jobs off again, so the fresh fleet's speed bounds them.",
+        "River held no claims to abandon: with 250,000 workers per process its fetches (up to 5,500 jobs per queue) hit River's 10 s fetch timeout on the million-job table, so this setup measures nothing for River."
       ],
       "charts": [
         {

@@ -175,6 +175,7 @@ function sectionCharts(spec, section) {
         note = `reached ${charts.compact(values[chart.behindMetric])} jobs/s`;
       if (chart.zeroNote && value === 0) note = chart.zeroNote;
       if (chart.missingNote && values && typeof value !== "number") note = chart.missingNote;
+      if (!values && cell?.excluded?.[id]) note = cell.excluded[id];
       return { id, name: systemName(id), value: typeof value === "number" ? value : null, note, unit: meta?.unit };
     });
   };

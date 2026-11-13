@@ -50,7 +50,7 @@ SECTIONS: list[dict] = [
             "sat_tuned": "Tuned, 1 queue",
             "sat_tuned_k4": "Tuned, 4 queues",
             "sat_tuned_k16": "Tuned, 16 queues",
-            "sat_tuned_best": "Tuned, best queue count",
+            "sat_tuned_best": "Tuned, recommended queue count",
         },
         "metrics": [
             ("jobs_per_s", "clean", "median_throughput_per_s", "Completed jobs/s", "jobs/s", "higher"),
@@ -253,23 +253,25 @@ TUNED_QUEUES = {"sat_tuned": 1, "sat_tuned_k4": 4, "sat_tuned_k16": 16}
 
 
 def tuned_best(cells: list[dict]) -> dict | None:
-    """Each system's highest-throughput tuned cell, with its queue count."""
+    """Each system's tuned cell at its recommended queue count: the sharded
+    cell where the system has one, else its one-queue cell. Chosen by queue
+    count, not by result, so no system gets a best-of-two pick."""
     values: dict[str, dict] = {}
     source: dict[str, str] = {}
+    chosen: dict[str, int] = {}
     for cell in cells:
         queues = TUNED_QUEUES.get(cell["id"])
         if queues is None:
             continue
         for system, metrics in cell["values"].items():
-            rate = metrics.get("jobs_per_s")
-            if rate is None:
+            if metrics.get("jobs_per_s") is None or queues < chosen.get(system, 0):
                 continue
-            if system not in values or rate > values[system]["jobs_per_s"]:
-                values[system] = {**metrics, "queues": queues}
-                source[system] = cell["source"][system]
+            chosen[system] = queues
+            values[system] = {**metrics, "queues": queues}
+            source[system] = cell["source"][system]
     if not values:
         return None
-    return {"id": "sat_tuned_best", "label": "Tuned, best queue count", "values": values, "source": source}
+    return {"id": "sat_tuned_best", "label": "Tuned, recommended queue count", "values": values, "source": source}
 
 
 def abandon_curve(raw_csv: Path, system: str, phases: list[dict]) -> list[list[float]]:
@@ -329,6 +331,8 @@ def main() -> None:
     sources: dict[str, dict[str, str]] = defaultdict(dict)
     manifests: dict[str, dict] = {}
     raw_dirs: dict[tuple[str, str], Path] = {}
+    # cell -> system -> why its run is left out of the results
+    excluded: dict[str, dict[str, str]] = defaultdict(dict)
     for (_, cell_id), row in sorted(index.items()):
         run_dir = REPO / row["run_dir"]
         summary_path = run_dir / "summary.json"
@@ -342,6 +346,7 @@ def main() -> None:
         for system, blob in summary.get("systems", {}).items():
             if cell == "abandon" and not dig(blob.get("abandon") or {}, "running_before_kill"):
                 print(f"skipping {cell_id}/{system}: no claims held at the kill", file=sys.stderr)
+                excluded[cell][CATALOG_ID.get(system, system)] = "held no claims at the kill"
                 continue
             by_cell[cell][system] = {"summary": blob, "phases": summary["phases"]}
             sources[cell][system] = cell_id
@@ -374,6 +379,7 @@ def main() -> None:
                     "id": cell,
                     "label": spec.get("cell_labels", {}).get(cell),
                     "values": values,
+                    "excluded": excluded.get(cell, {}),
                     "source": {
                         CATALOG_ID.get(s, s): cell_id for s, cell_id in sources[cell].items()
                     },
