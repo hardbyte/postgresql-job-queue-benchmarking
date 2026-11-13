@@ -11,7 +11,7 @@
 # ABANDON_SYSTEMS=oban with a new RESULTS_ROOT, then pass both roots to
 # scripts/export_site_results.py.
 #
-# Sections: throughput ref800 idle chaos neighbour logical scheduled retry
+# Sections: throughput throughput_tuned ref800 idle chaos neighbour logical scheduled retry
 # fanout payload large_args long_jobs drain abandon (default: all, in that order; abandon
 # goes last because its million-job cells leave the disk busy afterwards).
 set -u
@@ -27,6 +27,8 @@ MASTER_LOG="$RESULTS_ROOT/run.log"
 PGMQ_IMAGE="ghcr.io/pgmq/pg18-pgmq:v1.13.1"
 SHARED="${SHARED_SYSTEMS:-awa,absurd,oban,pgboss,procrastinate,river}"
 
+# ONLY_SYSTEMS=awa,absurd limits the per-system sections (tuned, fanout).
+want() { [[ -z "${ONLY_SYSTEMS:-}" || ",${ONLY_SYSTEMS}," == *",$1,"* ]]; }
 log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$MASTER_LOG"; }
 
 run_cell() {
@@ -59,6 +61,46 @@ section_throughput() {
     run_all throughput "sat_w${workers}" \
       --producer-rate 50000 --producer-mode depth-target --target-depth 4000 \
       --worker-count "$workers" --phase warmup=warmup:30s --phase clean=clean:150s
+  done
+}
+
+# Each system tuned for throughput within one budget: at most 4 processes,
+# 128 handlers and 200 connections, the same 1 ms jobs and depth-target
+# producer, documented library settings only. TUNED_QUEUES is each system's
+# recommended queue count; a second cell at one queue shows what sharding adds.
+tuned_cell() {
+  local system="$1" queues="$2"; shift 2
+  want "$system" || return 0
+  local suffix="sat_tuned"
+  [[ "$queues" == 1 ]] || suffix="sat_tuned_k${queues}"
+  run_cell throughput "${suffix}_${system}" "$system" "$@" --queue-count "$queues" \
+    --producer-rate 50000 --producer-mode depth-target --target-depth 4000 \
+    --phase warmup=warmup:30s --phase clean=clean:150s
+}
+
+section_throughput_tuned() {
+  local queues
+  for queues in 1 4; do
+    ( export PRODUCER_BATCH_MAX=1000 MAX_CONNECTIONS=64 LEASE_ROTATE_MS=1000
+      tuned_cell awa "$queues" --replicas 1 --worker-count 128 )
+    ( export PRODUCER_BATCH_MAX=1000 MAX_CONNECTIONS=32 RIVER_FETCH_COOLDOWN_MS=2 RIVER_FETCH_POLL_INTERVAL_MS=20
+      tuned_cell river "$queues" --replicas 1 --worker-count 128 )
+    ( export PRODUCER_BATCH_MAX=256
+      tuned_cell absurd "$queues" --replicas 4 --worker-count 32 )
+  done
+  ( export PRODUCER_BATCH_MAX=1000 MAX_CONNECTIONS=40 OBAN_DISPATCH_COOLDOWN_MS=1
+    tuned_cell oban 1 --replicas 4 --worker-count 32 )
+  ( export PRODUCER_BATCH_MAX=1000 MAX_CONNECTIONS=40 SUBSCRIBER_BATCH_SIZE=32 \
+      PGBOSS_BURST_WHEN_BATCH_FULL=1 PGBOSS_LISTEN_NOTIFY=1
+    tuned_cell pgboss 1 --replicas 4 --worker-count 32 )
+  ( export PRODUCER_BATCH_MAX=500 MAX_CONNECTIONS=33
+    tuned_cell procrastinate 1 --replicas 4 --worker-count 32 )
+  ( export PRODUCER_BATCH_MAX=1000 PGQUE_SUBCONSUMERS=4 PGQUE_CONSUMER_CONNS=4 PGQUE_SHARED_LISTEN=1 \
+      PGQUE_TICKER_MODE=loop PGQUE_TICK_MS=10
+    tuned_cell pgque 1 --replicas 4 --worker-count 32 )
+  for queues in 1 16; do
+    ( export PRODUCER_BATCH_MAX=1000 CONSUMER_BATCH_SIZE=32 PGMQ_CONSUMER_SWEEP=1 PGMQ_ACK=delete
+      tuned_cell pgmq "$queues" --pg-image "$PGMQ_IMAGE" --replicas 4 --worker-count 32 )
   done
 }
 
@@ -109,11 +151,37 @@ section_retry() {
     --phase recovery=recovery:6m
 }
 
+# Many queues at a fixed load: 200 jobs/s round-robin over 1 queue, then over
+# 200 queues, 16 handlers requested and 24 connections per process. Each
+# system serves many queues its own idiomatic way (FANOUT_ENV), the same for
+# both cells. River, Oban, pg-boss and Absurd need at least one worker per
+# queue, so they run 200 at 200 queues; the write-up reports it.
+fanout_env() {
+  case "$1" in
+    awa) echo AWA_WEIGHTED_WORKERS=1 ;;
+    river) echo RIVER_FETCH_COOLDOWN_MS=100 RIVER_FETCH_POLL_INTERVAL_MS=1000 ;;
+    pgboss) echo PGBOSS_LISTEN_NOTIFY=1 ;;
+    absurd) echo ABSURD_SHARED_CONNECTIONS=16 ABSURD_POLL_INTERVAL_MS=250 ;;
+    pgmq) echo PGMQ_NOTIFY_INSERT_MS=0 POLL_INTERVAL_MS=500 ;;
+    pgque) echo PGQUE_CONSUMER_MODE=shared PGQUE_CONSUMER_CONNS=16 PGQUE_SHARED_LISTEN=1 \
+      PGQUE_IDLE_POLL_MS=1000 PGQUE_TICKER_MODE=loop PGQUE_TICK_MS=50 ;;
+  esac
+}
+
 section_fanout() {
+  local system queues extra
   for queues in 1 200; do
-    MAX_CONNECTIONS=300 run_all fanout "fanout_q${queues}" --producer-rate 200 --worker-count 16 \
-      --queue-count "$queues" --phase warmup=warmup:60s --phase clean_1=clean:4m \
-      --phase "idle_1=idle-background(rate=0):3m"
+    for system in awa absurd oban pgboss procrastinate river pgque pgmq; do
+      want "$system" || continue
+      extra=()
+      [[ "$system" == pgmq ]] && extra=(--pg-image "$PGMQ_IMAGE")
+      # shellcheck disable=SC2046
+      ( export MAX_CONNECTIONS=24 $(fanout_env "$system")
+        run_cell fanout "fanout_q${queues}_${system}" "$system" "${extra[@]+"${extra[@]}"}" \
+          --producer-rate 200 --worker-count 16 --queue-count "$queues" \
+          --phase warmup=warmup:60s --phase clean_1=clean:4m \
+          --phase "idle_1=idle-background(rate=0):3m" )
+    done
   done
 }
 
@@ -221,7 +289,7 @@ section_abandon() {
 }
 
 sections=("$@")
-[[ ${#sections[@]} -eq 0 ]] && sections=(throughput ref800 idle chaos neighbour logical scheduled retry fanout payload large_args long_jobs drain abandon)
+[[ ${#sections[@]} -eq 0 ]] && sections=(throughput throughput_tuned ref800 idle chaos neighbour logical scheduled retry fanout payload large_args long_jobs drain abandon)
 for section in "${sections[@]}"; do
   log "==== ${section} ===="
   "section_${section}"
