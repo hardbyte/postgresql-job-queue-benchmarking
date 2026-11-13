@@ -51,6 +51,12 @@ Awa-only experiments:
 | `AWA_QUEUE_CLAIMERS` | `1` | Queue-storage dispatcher/claimer loops per logical queue. Claimers share that queue's worker permits. |
 | `AWA_CLAIM_BATCH_SIZE` | `512` | Maximum jobs each claimer attempts to claim in one database round trip. |
 | `AWA_QS_PRODUCER_PATH` | `copy` | Queue-storage producer entry point: `copy` (`enqueue_params_copy`) or `batch` (`enqueue_params_batch`). |
+| `AWA_POINT_READS_PER_S` | `0` | `admin::get_job` calls per second from 4 readers on their own 4-connection pool, alternating between recently started jobs and older ones (whose ring slots may be sealed). Reports `point_read_{found,not_found,errors}_total` and `point_read_p50_ms` / `_p99_ms` over 30 s. |
+
+The awa adapter also reports awa's ring maintenance counters every tick as
+`maint_prune_<ring>_<outcome>_total` and `maint_rotate_<ring>_<outcome>_total`
+(cumulative, from awa's own OpenTelemetry metrics). Only the process that
+leads maintenance has non-zero counts.
 
 To benchmark an unpublished awa checkout, point the adapter at it with a
 local Cargo patch (gitignored), then build as usual:

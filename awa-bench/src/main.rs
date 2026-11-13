@@ -16,6 +16,7 @@
 //! `QueueStorage::install` + `QueueStorage::reset` to ensure a clean slot set
 //! before measuring.
 
+mod diagnostics;
 mod long_horizon;
 mod scenario_controls;
 
@@ -111,30 +112,34 @@ fn lease_rotate_interval() -> Duration {
     )
 }
 
-fn maybe_install_otlp_metrics() -> Option<SdkMeterProvider> {
-    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok()?;
+/// The process's meter provider: always an in-memory reader for the
+/// maintenance counters the sampler reports, plus OTLP export when
+/// OTEL_EXPORTER_OTLP_ENDPOINT is set.
+fn install_metrics() -> SdkMeterProvider {
     let service_name =
         std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "awa-portable-bench".to_string());
-    let export_interval_ms = std::env::var("OTEL_EXPORT_INTERVAL_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(1000);
-
-    let exporter = opentelemetry_otlp::MetricExporter::builder()
-        .with_tonic()
-        .with_endpoint(endpoint)
-        .build()
-        .expect("failed to build OTLP metric exporter");
-    let reader = PeriodicReader::builder(exporter)
-        .with_interval(Duration::from_millis(export_interval_ms))
-        .build();
-    let resource = Resource::builder().with_service_name(service_name).build();
-    let provider = SdkMeterProvider::builder()
-        .with_reader(reader)
-        .with_resource(resource)
-        .build();
+    let mut builder = SdkMeterProvider::builder()
+        .with_reader(diagnostics::maintenance_reader(Duration::from_secs(5)))
+        .with_resource(Resource::builder().with_service_name(service_name).build());
+    if let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+        let export_interval_ms = std::env::var("OTEL_EXPORT_INTERVAL_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(1000);
+        let exporter = opentelemetry_otlp::MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint)
+            .build()
+            .expect("failed to build OTLP metric exporter");
+        builder = builder.with_reader(
+            PeriodicReader::builder(exporter)
+                .with_interval(Duration::from_millis(export_interval_ms))
+                .build(),
+        );
+    }
+    let provider = builder.build();
     global::set_meter_provider(provider.clone());
-    Some(provider)
+    provider
 }
 
 /// Migrate the canonical schema, then install + reset the queue_storage
@@ -607,7 +612,7 @@ async fn main() {
         .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
         .init();
-    let _meter_provider = maybe_install_otlp_metrics();
+    let _meter_provider = install_metrics();
 
     let scenario = std::env::var("SCENARIO").unwrap_or_else(|_| "all".into());
     let job_count: i64 = std::env::var("JOB_COUNT")

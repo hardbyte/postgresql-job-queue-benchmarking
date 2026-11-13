@@ -25,6 +25,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::time::{interval_at, MissedTickBehavior};
 
+use crate::diagnostics::{maintenance_totals, PointReads};
 use crate::scenario_controls::{failure_outcome, herd_batches, ScenarioControls};
 
 const PRODUCER_SEQUENCE_STRIDE: i64 = 1_000_000_000_000;
@@ -142,6 +143,7 @@ struct LongHorizonWorker {
     completed_original_priority_4_counter: Arc<AtomicU64>,
     aged_completion_counter: Arc<AtomicU64>,
     controls: Arc<ScenarioControls>,
+    point_reads: Option<Arc<PointReads>>,
 }
 
 #[async_trait]
@@ -151,6 +153,9 @@ impl Worker for LongHorizonWorker {
     }
 
     async fn perform(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
+        if let Some(point_reads) = &self.point_reads {
+            point_reads.observe(ctx.job.id);
+        }
         let args: LongHorizonJob = serde_json::from_value(ctx.job.args.clone())
             .map_err(|err| JobError::Terminal(format!("failed to deserialize args: {err}")))?;
         if args.abandon.is_some() {
@@ -738,6 +743,7 @@ pub async fn run() {
     let scheduled_depth = Arc::new(AtomicU64::new(0));
     let producer_target_rate = Arc::new(AtomicU64::new(producer_rate));
     let controls = Arc::new(ScenarioControls::from_env());
+    let point_reads = PointReads::from_env();
 
     let worker = LongHorizonWorker {
         work_ms,
@@ -752,6 +758,7 @@ pub async fn run() {
         completed_original_priority_4_counter: Arc::clone(&completed_original_priority_4),
         aged_completion_counter: Arc::clone(&aged_completions),
         controls: Arc::clone(&controls),
+        point_reads: point_reads.as_ref().map(|(reads, _)| Arc::clone(reads)),
     };
 
     // LEASE_DEADLINE_MS — per-claim deadline-rescue window in ms.
@@ -827,6 +834,14 @@ pub async fn run() {
             .expect("Failed to build client"),
     };
     let client = Arc::new(client);
+    if let Some((reads, rate)) = &point_reads {
+        let read_pool = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&database_url)
+            .await
+            .expect("Failed to connect point-read pool");
+        reads.spawn(read_pool, *rate, 4);
+    }
     let shutdown = Arc::new(AtomicBool::new(false));
     if std::env::var("CONSUMER_GATE_FILE").is_ok() {
         let gated_client = Arc::clone(&client);
@@ -1307,6 +1322,7 @@ pub async fn run() {
     let sample_end_to_end_latencies = Arc::clone(&end_to_end_latencies);
     let sample_target_rate = Arc::clone(&producer_target_rate);
     let sample_controls = Arc::clone(&controls);
+    let sample_point_reads = point_reads.as_ref().map(|(reads, _)| Arc::clone(reads));
     let sample_handle = tokio::spawn(async move {
         // Align first tick to the next wall-clock `sample_every_s` boundary.
         let now_epoch = SystemTime::now()
@@ -1492,6 +1508,38 @@ pub async fn run() {
                 }
             }
 
+            let mut diagnostics: Vec<(String, f64)> = maintenance_totals();
+            if let Some(reads) = &sample_point_reads {
+                diagnostics.push((
+                    "point_read_found_total".into(),
+                    reads.found.load(Ordering::Relaxed) as f64,
+                ));
+                diagnostics.push((
+                    "point_read_not_found_total".into(),
+                    reads.not_found.load(Ordering::Relaxed) as f64,
+                ));
+                diagnostics.push((
+                    "point_read_errors_total".into(),
+                    reads.errors.load(Ordering::Relaxed) as f64,
+                ));
+                if let Some((p50, p99)) = reads.percentiles() {
+                    diagnostics.push(("point_read_p50_ms".into(), p50));
+                    diagnostics.push(("point_read_p99_ms".into(), p99));
+                }
+            }
+            for (metric, value) in diagnostics {
+                emit(json!({
+                    "t": ts,
+                    "system": system_name,
+                    "instance_id": instance_id(),
+                    "kind": "adapter",
+                    "subject_kind": "adapter",
+                    "subject": "",
+                    "metric": metric,
+                    "value": value,
+                    "window_s": 0.0,
+                }));
+            }
             for (metric, value, window_s) in sample_controls.metrics(dt, sample_every_s as f64) {
                 emit(json!({
                     "t": ts,
