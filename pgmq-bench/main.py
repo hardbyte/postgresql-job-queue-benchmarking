@@ -233,7 +233,12 @@ async def scenario_long_horizon() -> None:
     try:
         for queue in queues:
             # A replacement fleet must find the claims the killed fleet held.
-            await setup_queue(setup_conn, queue, keep_existing=controls.abandon_enabled)
+            # Replicas after the first must not drop the queue instance 0 uses.
+            await setup_queue(
+                setup_conn,
+                queue,
+                keep_existing=controls.abandon_enabled or _instance_id() != 0,
+            )
         if controls.failure_enabled and _observer_enabled():
             await setup_queue(setup_conn, DLQ_NAME)
         if notify_insert_ms is not None and _observer_enabled():

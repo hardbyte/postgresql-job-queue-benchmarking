@@ -344,8 +344,11 @@ async def scenario_long_horizon() -> None:
     schema_version = await installed_schema_version()
     controls = ScenarioControls()
     for queue in queues:
-        # A replacement fleet must find the claims the killed fleet held.
-        await recreate_queue(queue, keep_existing=controls.abandon_enabled)
+        # A replacement fleet must find the claims the killed fleet held, and
+        # replicas after the first must not drop the queue it is already using.
+        await recreate_queue(
+            queue, keep_existing=controls.abandon_enabled or instance_id() != 0
+        )
 
     db_name = database_url().rsplit("/", 1)[-1]
     spawn_options = (
