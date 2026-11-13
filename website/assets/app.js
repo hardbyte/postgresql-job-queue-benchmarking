@@ -6,6 +6,8 @@
   const $ = (id) => document.getElementById(id);
   const prefix = document.body.dataset.prefix;
   const storageKey = "postgres-queue-guide-comparison";
+  // Wide enough for every system with a benchmark adapter side by side.
+  const maxCompare = 8;
   const escapeHtml = (value) =>
     String(value ?? "").replace(
       /[&<>"']/g,
@@ -22,7 +24,7 @@
   try {
     selected = JSON.parse(localStorage.getItem(storageKey) || "[]")
       .filter((id) => byId.has(id))
-      .slice(0, 4);
+      .slice(0, maxCompare);
   } catch {}
   const toggle = $("nav-toggle");
   toggle?.addEventListener("click", () => {
@@ -48,11 +50,11 @@
         "aria-label",
         `${active ? "Remove" : "Add"} ${byId.get(button.dataset.compare).name} ${active ? "from" : "to"} comparison`,
       );
-      button.disabled = !active && selected.length >= 4;
+      button.disabled = !active && selected.length >= maxCompare;
     });
     $("compare-tray").hidden =
       selected.length === 0 || document.body.dataset.page === "compare";
-    $("tray-label").textContent = `${selected.length} of 4 selected`;
+    $("tray-label").textContent = `${selected.length} of ${maxCompare} selected`;
     $("tray-link").href = prefix + "compare/?systems=" + selected.join(",");
   }
   document.querySelectorAll("[data-compare]").forEach((button) =>
@@ -60,7 +62,7 @@
       const id = button.dataset.compare;
       selected = selected.includes(id)
         ? selected.filter((x) => x !== id)
-        : selected.length < 4
+        : selected.length < maxCompare
           ? [...selected, id]
           : selected;
       updateSelection();
@@ -111,7 +113,7 @@
     if (query !== null)
       selected = [
         ...new Set(query.split(",").filter((id) => byId.has(id))),
-      ].slice(0, 4);
+      ].slice(0, maxCompare);
     else if (!selected.length)
       selected = ["awa", "pg-boss", "potatoq", "river"];
     function measuredRows(chosen) {
@@ -158,9 +160,9 @@
       updateSelection();
       document.querySelectorAll("[name=compare-system]").forEach((input) => {
         input.checked = selected.includes(input.value);
-        input.disabled = !input.checked && selected.length >= 4;
+        input.disabled = !input.checked && selected.length >= maxCompare;
       });
-      $("selection-count").textContent = `(${selected.length}/4)`;
+      $("selection-count").textContent = `(${selected.length}/${maxCompare})`;
       const chosen = selected
         .map((id) => byId.get(id))
         .sort((a, b) => a.name.localeCompare(b.name));
@@ -177,7 +179,7 @@
           })
           .join("");
       $("comparison-table").innerHTML =
-        `<table class="comparison-table"><caption class="sr-only">Source-backed documentation comparison for ${chosen.map((s) => escapeHtml(s.name)).join(", ")}</caption><thead><tr><th scope="col">Capability & scope</th>${chosen.map((s) => `<th scope="col"><a href="${prefix}systems/${s.id}/">${escapeHtml(s.name)} ↗</a><small>${escapeHtml(s.snapshot.label)}</small><span class="badge ${s.hasAdapter ? "measured" : "documented"}">${s.hasAdapter ? "Adapter in this repo" : "Documentation only"}</span></th>`).join("")}</tr></thead><tbody><tr><th scope="row">Contract / API surface</th>${chosen.map((s) => `<td><span class="mobile-cell-name">${escapeHtml(s.name)}</span><strong>${escapeHtml(window.QUEUE_GUIDE.contractNames[s.contract])}</strong><p>${escapeHtml(s.languages.join(" · "))}</p></td>`).join("")}</tr>${measuredRows(chosen)}${featureHeader(chosen)}${Object.entries(
+        `<table class="comparison-table" style="min-width:${180 + chosen.length * 230}px"><caption class="sr-only">Source-backed documentation comparison for ${chosen.map((s) => escapeHtml(s.name)).join(", ")}</caption><thead><tr><th scope="col">Capability & scope</th>${chosen.map((s) => `<th scope="col"><a href="${prefix}systems/${s.id}/">${escapeHtml(s.name)} ↗</a><small>${escapeHtml(s.snapshot.label)}</small><span class="badge ${s.hasAdapter ? "measured" : "documented"}">${s.hasAdapter ? "Adapter in this repo" : "Documentation only"}</span></th>`).join("")}</tr></thead><tbody><tr><th scope="row">Contract / API surface</th>${chosen.map((s) => `<td><span class="mobile-cell-name">${escapeHtml(s.name)}</span><strong>${escapeHtml(window.QUEUE_GUIDE.contractNames[s.contract])}</strong><p>${escapeHtml(s.languages.join(" · "))}</p></td>`).join("")}</tr>${measuredRows(chosen)}${featureHeader(chosen)}${Object.entries(
           features,
         )
           .map(
@@ -203,6 +205,11 @@
         renderCompare();
       }),
     );
+    $("compare-measured")?.addEventListener("click", () => {
+      const ids = Object.keys(window.QUEUE_RESULTS?.keyResults || {});
+      selected = ids.filter((id) => byId.has(id)).slice(0, maxCompare);
+      renderCompare();
+    });
     $("clear-comparison").addEventListener("click", () => {
       selected = [];
       renderCompare();
