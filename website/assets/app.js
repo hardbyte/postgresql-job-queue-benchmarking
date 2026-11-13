@@ -114,6 +114,46 @@
       ].slice(0, 4);
     else if (!selected.length)
       selected = ["awa", "pg-boss", "potatoq", "river"];
+    function measuredRows(chosen) {
+      const data = window.QUEUE_RESULTS;
+      if (!data) return "";
+      const labels = [
+        ...new Set(
+          Object.values(data.keyResults).flatMap((rows) =>
+            rows.map((r) => r.label),
+          ),
+        ),
+      ];
+      if (!labels.length) return "";
+      const head = `<tr class="group-row"><th scope="rowgroup" colspan="${chosen.length + 1}">Measured in the ${escapeHtml(data.run.started)} run <a href="${prefix}benchmarks/">How these were measured →</a></th></tr>`;
+      return (
+        head +
+        labels
+          .map((label) => {
+            const anchor = Object.values(data.keyResults)
+              .flat()
+              .find((r) => r.label === label)?.anchor;
+            return `<tr><th scope="row"><a href="${prefix}benchmarks/#${escapeHtml(anchor || "")}">${escapeHtml(label)}</a></th>${chosen
+              .map((s) => {
+                const row = (data.keyResults[s.id] || []).find(
+                  (r) => r.label === label,
+                );
+                const text = row
+                  ? row.text
+                  : s.hasAdapter
+                    ? "Not measured"
+                    : "No adapter";
+                return `<td><span class="mobile-cell-name">${escapeHtml(s.name)}</span><strong class="measured-value">${escapeHtml(text)}</strong></td>`;
+              })
+              .join("")}</tr>`;
+          })
+          .join("")
+      );
+    }
+    function featureHeader(chosen) {
+      if (!window.QUEUE_RESULTS) return "";
+      return `<tr class="group-row"><th scope="rowgroup" colspan="${chosen.length + 1}">Documented semantics <a href="${prefix}methodology/#evidence">How these were sourced →</a></th></tr>`;
+    }
     function renderCompare() {
       updateSelection();
       document.querySelectorAll("[name=compare-system]").forEach((input) => {
@@ -137,7 +177,7 @@
           })
           .join("");
       $("comparison-table").innerHTML =
-        `<table class="comparison-table"><caption class="sr-only">Source-backed documentation comparison for ${chosen.map((s) => escapeHtml(s.name)).join(", ")}</caption><thead><tr><th scope="col">Capability & scope</th>${chosen.map((s) => `<th scope="col"><a href="${prefix}systems/${s.id}/">${escapeHtml(s.name)} ↗</a><small>${escapeHtml(s.snapshot.label)}</small><span class="badge ${s.hasAdapter ? "measured" : "documented"}">${s.hasAdapter ? "Adapter in this repo" : "Documentation only"}</span></th>`).join("")}</tr></thead><tbody><tr><th scope="row">Contract / API surface</th>${chosen.map((s) => `<td><span class="mobile-cell-name">${escapeHtml(s.name)}</span><strong>${escapeHtml(window.QUEUE_GUIDE.contractNames[s.contract])}</strong><p>${escapeHtml(s.languages.join(" · "))}</p></td>`).join("")}</tr>${Object.entries(
+        `<table class="comparison-table"><caption class="sr-only">Source-backed documentation comparison for ${chosen.map((s) => escapeHtml(s.name)).join(", ")}</caption><thead><tr><th scope="col">Capability & scope</th>${chosen.map((s) => `<th scope="col"><a href="${prefix}systems/${s.id}/">${escapeHtml(s.name)} ↗</a><small>${escapeHtml(s.snapshot.label)}</small><span class="badge ${s.hasAdapter ? "measured" : "documented"}">${s.hasAdapter ? "Adapter in this repo" : "Documentation only"}</span></th>`).join("")}</tr></thead><tbody><tr><th scope="row">Contract / API surface</th>${chosen.map((s) => `<td><span class="mobile-cell-name">${escapeHtml(s.name)}</span><strong>${escapeHtml(window.QUEUE_GUIDE.contractNames[s.contract])}</strong><p>${escapeHtml(s.languages.join(" · "))}</p></td>`).join("")}</tr>${measuredRows(chosen)}${featureHeader(chosen)}${Object.entries(
           features,
         )
           .map(
@@ -178,4 +218,31 @@
     });
     renderCompare();
   }
+  // Chart tooltips: one floating element, filled with textContent from the
+  // mark's data-tip on hover or keyboard focus. Values are also in each
+  // chart's table view, so the tooltip never gates a number.
+  const tip = document.createElement("div");
+  tip.className = "chart-tip";
+  tip.setAttribute("role", "status");
+  tip.hidden = true;
+  document.body.appendChild(tip);
+  const showTip = (mark, x, y) => {
+    tip.textContent = mark.dataset.tip;
+    tip.hidden = false;
+    const width = tip.offsetWidth;
+    tip.style.left = `${Math.min(window.scrollX + x + 14, window.scrollX + document.documentElement.clientWidth - width - 8)}px`;
+    tip.style.top = `${window.scrollY + y + 16}px`;
+  };
+  document.addEventListener("pointermove", (e) => {
+    const mark = e.target.closest?.("[data-tip]");
+    if (mark) showTip(mark, e.clientX, e.clientY);
+    else tip.hidden = true;
+  });
+  document.addEventListener("focusin", (e) => {
+    const mark = e.target.closest?.("[data-tip]");
+    if (!mark) return;
+    const box = mark.getBoundingClientRect();
+    showTip(mark, box.left, box.bottom);
+  });
+  document.addEventListener("focusout", () => (tip.hidden = true));
 })();

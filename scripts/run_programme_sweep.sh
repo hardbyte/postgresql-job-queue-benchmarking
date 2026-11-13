@@ -203,7 +203,7 @@ section_abandon() {
   abandon_cell pgboss SUBSCRIBER_BATCH_SIZE=1000 RESCUE_FLEET_SUBSCRIBER_BATCH_SIZE=16 \
     --worker-count $(( HOLD_PER_REPLICA / 1000 + 1 ))
   # River caps a queue at 10,000 workers; 50 queues keep each fetch small.
-  abandon_cell river BENCH_QUEUE_COUNT=50 MAX_CONNECTIONS=80 --worker-count "$HOLD_PER_REPLICA"
+  abandon_cell river BENCH_QUEUE_COUNT=50 MAX_CONNECTIONS=60 --worker-count "$HOLD_PER_REPLICA"
   abandon_cell oban MAX_CONNECTIONS=80 --worker-count "$HOLD_PER_REPLICA"
   # One fetch per job at ~330 claims/s a process; its rescue keys off worker
   # heartbeats, so a longer hold doesn't release live claims.

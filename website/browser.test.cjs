@@ -199,10 +199,14 @@ const contentTypes = {
     });
     await go("benchmarks/");
     assert.equal(await page.locator(".adapter-grid article").count(), 8);
-    assert.match(
-      await page.locator(".notice.warning").textContent(),
-      /No new benchmark/,
+    assert.ok((await page.locator(".result-section").count()) >= 10);
+    assert.equal(
+      await page.locator("figure.chart").count(),
+      await page.locator("figure.chart details.table-view").count(),
     );
+    await page.locator("figure.chart .mark").first().focus();
+    assert.equal(await page.locator(".chart-tip").isVisible(), true);
+    await noOverflow("benchmarks");
     await axe("benchmarking");
     await go("methodology/");
     await page.getByRole("link", { name: "Coverage", exact: true }).click();
