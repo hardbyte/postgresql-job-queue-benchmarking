@@ -78,7 +78,9 @@ defmodule ObanBench.LongHorizon do
     :ets.insert(:long_horizon_state, {:work_ms, work_ms})
     :ets.insert(:long_horizon_state, {:queue_depth, 0})
     :ets.insert(:long_horizon_state, {:producer_target_rate, producer_rate * 1.0})
-    :ets.new(:long_horizon_lat, [:public, :named_table, :duplicate_bag])
+    # Keyed by {monotonic ms, unique} so trimming old samples is one ranged
+    # select_delete rather than a scan per deleted object.
+    :ets.new(:long_horizon_lat, [:public, :named_table, :ordered_set, write_concurrency: true])
     ScenarioControls.init()
 
     queues = queue_names()
@@ -545,10 +547,9 @@ defmodule ObanBench.LongHorizon do
     cutoff = System.monotonic_time(:millisecond) - trunc(window_s * 1000)
 
     values =
-      :ets.tab2list(:long_horizon_lat)
-      |> Enum.flat_map(fn {_, ts_ms, lat_ms} ->
-        if ts_ms >= cutoff, do: [lat_ms], else: []
-      end)
+      :ets.select(:long_horizon_lat, [
+        {{{:"$1", :_}, :"$2"}, [{:>=, :"$1", cutoff}], [:"$2"]}
+      ])
 
     case values do
       [] ->
@@ -673,21 +674,12 @@ defmodule ObanBench.LongHorizonWorker do
     latency_ms = max(0, DateTime.diff(now, inserted_at, :millisecond))
     ts_ms = System.monotonic_time(:millisecond)
 
-    :ets.insert(:long_horizon_lat, {:lat, ts_ms, latency_ms * 1.0})
+    :ets.insert(:long_horizon_lat, {{ts_ms, :erlang.unique_integer()}, latency_ms * 1.0})
 
-    # Coarse trim: when the ETS bag gets too large, drop everything older than
-    # the rolling window. Cheap enough at this frequency.
+    # Drop samples older than the rolling window now and then.
     if :rand.uniform(200) == 1 do
       cutoff = ts_ms - 30_000
-
-      :ets.foldl(
-        fn {_, t, _} = obj, acc ->
-          if t < cutoff, do: [obj | acc], else: acc
-        end,
-        [],
-        :long_horizon_lat
-      )
-      |> Enum.each(&:ets.delete_object(:long_horizon_lat, &1))
+      :ets.select_delete(:long_horizon_lat, [{{{:"$1", :_}, :_}, [{:<, :"$1", cutoff}], [true]}])
     end
 
     work_ms =
