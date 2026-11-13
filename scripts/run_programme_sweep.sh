@@ -7,6 +7,10 @@
 #
 #   RESULTS_ROOT=results/2026-10-programme bash scripts/run_programme_sweep.sh [section...]
 #
+# Rerun one system over a finished sweep: SHARED_SYSTEMS=oban SHARED_ONLY=1
+# ABANDON_SYSTEMS=oban with a new RESULTS_ROOT, then pass both roots to
+# scripts/export_site_results.py.
+#
 # Sections: throughput ref800 idle chaos neighbour logical scheduled retry
 # fanout payload large_args long_jobs drain abandon (default: all, in that order; abandon
 # goes last because its million-job cells leave the disk busy afterwards).
@@ -21,7 +25,7 @@ RUN_INDEX="$RESULTS_ROOT/run_index.tsv"
 [[ -f "$RUN_INDEX" ]] || echo -e "section\tcell_id\tsystems\trun_dir\texit_code\tstarted_at\tended_at" > "$RUN_INDEX"
 MASTER_LOG="$RESULTS_ROOT/run.log"
 PGMQ_IMAGE="ghcr.io/pgmq/pg18-pgmq:v1.13.1"
-SHARED="awa,absurd,oban,pgboss,procrastinate,river"
+SHARED="${SHARED_SYSTEMS:-awa,absurd,oban,pgboss,procrastinate,river}"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$MASTER_LOG"; }
 
@@ -45,6 +49,7 @@ run_cell() {
 run_all() {
   local section="$1" cell="$2"; shift 2
   run_cell "$section" "${cell}_shared" "$SHARED" "$@"
+  [[ "${SHARED_ONLY:-0}" == 1 ]] && return 0
   PRODUCER_BATCH_MAX=1000 run_cell "$section" "${cell}_pgque" pgque "$@"
   run_cell "$section" "${cell}_pgmq" pgmq --pg-image "$PGMQ_IMAGE" "$@"
 }
@@ -176,6 +181,7 @@ HOLD_PER_REPLICA=$(( ABANDON_JOBS / 4 + ABANDON_JOBS / 40 ))
 # overrides the 3-minute claim phase.
 abandon_cell() {
   local system="$1"; shift
+  [[ -n "${ABANDON_SYSTEMS:-}" && ",${ABANDON_SYSTEMS}," != *",${system},"* ]] && return 0
   local extra=() claim=3m
   while [[ $# -gt 0 && "$1" == *=* ]]; do
     if [[ "$1" == CLAIM=* ]]; then claim="${1#CLAIM=}"; else extra+=("$1"); fi
