@@ -97,6 +97,19 @@ class PhaseTracker:
 # Postgres lifecycle
 # ────────────────────────────────────────────────────────────────────────
 
+# postgres.conf sets max_connections = 400; the harness's own samplers and
+# the commit probe keep a few of them.
+PG_MAX_CONNECTIONS = 400
+HARNESS_CONNECTION_RESERVE = 40
+POOL_OVERHEAD = 8
+
+
+def default_max_connections(worker_count: int, replicas: int) -> int:
+    """Pool size per adapter process when a cell doesn't set MAX_CONNECTIONS:
+    one connection per worker plus a small fixed overhead, the same rule for
+    every system, capped so all replicas fit under Postgres' max_connections."""
+    per_process_cap = (PG_MAX_CONNECTIONS - HARNESS_CONNECTION_RESERVE) // max(1, replicas)
+    return max(POOL_OVERHEAD, min(worker_count + POOL_OVERHEAD, per_process_cap))
 
 def _run_cmd(
     argv: list[str],
@@ -1005,6 +1018,8 @@ def run_one_system(
     }
     if awa_completion_batch_size is not None:
         overrides["AWA_COMPLETION_BATCH_SIZE"] = str(awa_completion_batch_size)
+    if "MAX_CONNECTIONS" not in os.environ:
+        overrides["MAX_CONNECTIONS"] = str(default_max_connections(worker_count, replicas))
     overrides.update(adapter_env or {})
     control_dir = Path(tempfile.mkdtemp(prefix=f"bench-control-{system}-"))
     control_file = control_dir / "producer_rate.txt"
