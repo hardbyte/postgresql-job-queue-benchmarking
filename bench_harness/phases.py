@@ -34,6 +34,25 @@ class PhaseType(str, Enum):
     PG_BACKEND_KILL = "pg-backend-kill"
     POOL_EXHAUSTION = "pool-exhaustion"
     REPEATED_KILL = "repeated-kill"
+    # Backlog phases. `preload` offers a fixed job count with consumers
+    # held behind the adapter's consumer gate; `drain` stops the producer
+    # and opens the gate so the backlog is worked off at full speed.
+    PRELOAD = "preload"
+    DRAIN = "drain"
+    # Neighbour-impact phase types. neighbour-oltp runs a rate-limited
+    # pgbench workload against a separate database on the same server for
+    # the phase. logical-stream / logical-stall drive a logical replication
+    # slot + consumer on the system's database; the slot persists from the
+    # first logical phase until the system's run ends.
+    NEIGHBOUR_OLTP = "neighbour-oltp"
+    LOGICAL_STREAM = "logical-stream"
+    LOGICAL_STALL = "logical-stall"
+    # Workload-shape phases driven through adapter control files.
+    RETRY_STORM = "retry-storm"
+    SCHEDULE_PRELOAD = "schedule-preload"
+    # SIGKILL every replica while it holds its claims, then start a fresh
+    # fleet that must recover them (mass_abandon).
+    ABANDON_KILL = "abandon-kill"
     # CDC-suite phase types (docs/cdc-harness-design.md §9). Consumer-level
     # chaos is applied through the receiver's control API, not the replica
     # pool — the hooks live in cdc_harness, not bench_harness.hooks.
@@ -63,6 +82,14 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.PG_BACKEND_KILL:  ("#D86A3A", 0.30),
     PhaseType.POOL_EXHAUSTION:  ("#C8884A", 0.30),
     PhaseType.REPEATED_KILL:    ("#B04040", 0.35),
+    PhaseType.PRELOAD:          ("#8FB3D9", 0.30),
+    PhaseType.DRAIN:            ("#7FBF9F", 0.30),
+    PhaseType.NEIGHBOUR_OLTP:   ("#5FA8A0", 0.25),
+    PhaseType.LOGICAL_STREAM:   ("#7FA6D8", 0.25),
+    PhaseType.LOGICAL_STALL:    ("#D8A03A", 0.30),
+    PhaseType.RETRY_STORM:      ("#C86A8A", 0.30),
+    PhaseType.SCHEDULE_PRELOAD: ("#6CAFAF", 0.25),
+    PhaseType.ABANDON_KILL:     ("#A02828", 0.45),
     PhaseType.CONSUMER_DEAD:    ("#C04A4A", 0.35),
     PhaseType.CONSUMER_SLOW:    ("#D8A03A", 0.30),
     PhaseType.SINK_OUTAGE:      ("#A03030", 0.40),
@@ -88,6 +115,14 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.PG_BACKEND_KILL:  True,
     PhaseType.POOL_EXHAUSTION:  True,
     PhaseType.REPEATED_KILL:    True,
+    PhaseType.PRELOAD:          True,
+    PhaseType.DRAIN:            True,
+    PhaseType.NEIGHBOUR_OLTP:   True,
+    PhaseType.LOGICAL_STREAM:   True,
+    PhaseType.LOGICAL_STALL:    True,
+    PhaseType.RETRY_STORM:      True,
+    PhaseType.SCHEDULE_PRELOAD: True,
+    PhaseType.ABANDON_KILL:     True,
     PhaseType.CONSUMER_DEAD:    True,
     PhaseType.CONSUMER_SLOW:    True,
     PhaseType.SINK_OUTAGE:      True,
@@ -122,6 +157,47 @@ class Phase:
             if k == name:
                 return v
         return default
+
+    def rate_override(self, replicas: int = 1) -> float | None:
+        """Per-replica producer rate this phase pins, or None for the base.
+
+        `rate=N` is a per-replica jobs/s value usable on any phase type.
+        `preload(jobs=N)` spreads N jobs evenly over the phase across all
+        replicas; `drain` always stops the producer.
+        """
+        if self.type is PhaseType.DRAIN:
+            return 0.0
+        if self.type is PhaseType.PRELOAD:
+            jobs = self.int_param("jobs", 0)
+            if jobs <= 0:
+                raise ValueError(
+                    f"phase {self.label!r}: preload requires jobs=<N> with N > 0"
+                )
+            return jobs / self.duration_s / max(replicas, 1)
+        raw = self.param("rate")
+        if raw is None:
+            return None
+        try:
+            rate = float(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"phase {self.label!r}: param 'rate' must be a number, got {raw!r}"
+            ) from exc
+        if rate < 0:
+            raise ValueError(f"phase {self.label!r}: param 'rate' must be >= 0")
+        return rate
+
+    def float_param(self, name: str, default: float) -> float:
+        raw = self.param(name)
+        if raw is None:
+            return default
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"phase {self.label!r}: param {name!r} must be a number, "
+                f"got {raw!r}"
+            ) from exc
 
     def int_param(self, name: str, default: int) -> int:
         raw = self.param(name)
@@ -302,6 +378,45 @@ SCENARIOS: dict[str, list[str]] = {
         "warmup=warmup:30s",
         "clean_1=clean:5m",
     ],
+    # Many low-traffic queues vs one queue at the same total rate. Run once
+    # with `--queue-count 1` and once with e.g. `--queue-count 500` at the
+    # same `--producer-rate`; compare backend counts, xacts/s, CPU and
+    # NOTIFY load. The idle tail isolates per-queue polling cost.
+    "queue_fanout": [
+        "warmup=warmup:2m",
+        "clean_1=clean:20m",
+        "idle_1=idle-background(rate=0):10m",
+    ],
+    # Large payloads at a moderate fixed rate. Run once per size with
+    # `--job-payload-bytes {16384,65536,262144} --job-payload-kind random`;
+    # the drain tail shows what the tables (and TOAST) look like once
+    # the queue is empty again.
+    "large_payload": [
+        "warmup=warmup:2m",
+        "clean_1=clean:20m",
+        "drain_1=drain:10m",
+    ],
+    # Long-running jobs. Pair with `--job-work-ms 120000` and >= 500 total
+    # workers (e.g. `--replicas 2 --worker-count 250`). The preload parks
+    # 500 jobs behind the consumer gate; `hold` opens it so every job is
+    # running and none can complete yet (pure heartbeat / lease cost).
+    # `steady` then runs continuous long jobs at `--producer-rate`.
+    "long_jobs": [
+        "warmup=warmup(rate=0):1m",
+        "preload=preload(jobs=500):30s",
+        "hold=drain:100s",
+        "release=drain:60s",
+        "steady=clean:30m",
+        "tail=drain:5m",
+    ],
+    # Preload a large backlog with consumers gated, then drain it at full
+    # speed and watch table/index sizes settle back towards baseline.
+    "backlog_drain": [
+        "warmup=warmup(rate=0):1m",
+        "preload=preload(jobs=1000000):10m",
+        "drain=drain:30m",
+        "settle=idle-background(rate=0):30m",
+    ],
     # Replaces the legacy chaos.py `scenario_crash_recovery`. Harsh kill
     # of replica 0, then restart and measure recovery. Pass/fail answers
     # (`jobs_lost`, `recovery_time`) are derived from the shared raw.csv
@@ -363,7 +478,89 @@ SCENARIOS: dict[str, list[str]] = {
         "exhaustion=pool-exhaustion(idle_conns=300):60s",
         "recovery=clean:60s",
     ],
+    # Does the queue starve unrelated OLTP on the same server? A fixed-rate
+    # pgbench neighbour runs in every phase; only the queue's offered load
+    # (`load` × --producer-rate) changes. baseline holds the producer at
+    # zero with workers still running.
+    "neighbour_oltp": [
+        "warmup=warmup:5m",
+        "baseline=neighbour-oltp(load=0):10m",
+        "moderate=neighbour-oltp(load=1):15m",
+        "saturation=neighbour-oltp(load=4):15m",
+        "recovery=neighbour-oltp(load=1):15m",
+    ],
+    # Does the queue coexist with logical replication? clean_1 has no slot
+    # (wal_level=logical overhead only); stream_1 adds a FOR ALL TABLES
+    # publication, a pgoutput slot and a streaming consumer, which persist
+    # for the rest of the run. stall_1 is the "CDC sink is down" case:
+    # retained WAL and catalog bloat grow until the consumer resumes.
+    "logical_replication": [
+        "warmup=warmup:5m",
+        "clean_1=clean:10m",
+        "stream_1=logical-stream:15m",
+        "pressure_1=high-load:15m",
+        "stall_1=logical-stall:15m",
+        "catchup_1=logical-stream:15m",
+    ],
+    # Scheduled-job thundering herd. The preload phase enqueues `count`
+    # jobs all due at the end of the phase (delay defaults to the phase
+    # duration) while the steady immediate stream keeps flowing; `due`
+    # observes the herd coming due and draining. Adapters report
+    # schedule_lateness_* for the herd; claim_* stays immediate-only.
+    "scheduled_burst": [
+        "warmup=warmup:5m",
+        "baseline=clean:5m",
+        "preload=schedule-preload(count=100000):5m",
+        "due=clean:10m",
+        "after=clean:5m",
+    ],
+    # Steady promotion accuracy: the herd is spread uniformly over a
+    # window instead of sharing one instant.
+    "scheduled_spread": [
+        "warmup=warmup:5m",
+        "preload=schedule-preload(count=60000,delay=2m,spread=10m):2m",
+        "spread=clean:10m",
+        "after=clean:5m",
+    ],
+    # Failure churn: a share of jobs fail transiently and retry with each
+    # system's own backoff, a small share are poison (always fail until
+    # max attempts), then injection stops and the retry backlog drains.
+    # Runs with JOB_MAX_ATTEMPTS=5 unless the environment overrides it.
+    "retry_storm": [
+        "warmup=warmup:5m",
+        "baseline=clean:10m",
+        "storm=retry-storm(transient_pct=30,poison_pct=1):20m",
+        "recovery=recovery:20m",
+    ],
+    # Mass abandonment. Every job preloaded while the gate is closed is
+    # tagged; `claim` opens the gate and workers hold their tagged jobs
+    # instead of running them. `kill` SIGKILLs the whole fleet at once,
+    # tells the next fleet to run tagged jobs normally and starts it.
+    # `rescue` measures how long the system takes to notice the abandoned
+    # claims and finish them, alongside a fresh stream at --producer-rate.
+    # Size --worker-count (or the batch knobs) so the fleet can hold every
+    # preloaded job, and set each system's claim timeout above `claim`.
+    "mass_abandon": [
+        "warmup=warmup(rate=0):1m",
+        "preload=preload(jobs=1000000):10m",
+        "claim=drain:5m",
+        "kill=abandon-kill:30s",
+        "rescue=clean:30m",
+        "settle=idle-background(rate=0):5m",
+    ],
 }
+
+# Phase types whose hooks create a logical replication slot. The harness
+# starts Postgres with wal_level=logical when any of them is scheduled.
+LOGICAL_REPLICATION_PHASE_TYPES = frozenset(
+    {PhaseType.LOGICAL_STREAM, PhaseType.LOGICAL_STALL}
+)
+
+
+def required_wal_level(phases: list[Phase]) -> str:
+    if any(p.type in LOGICAL_REPLICATION_PHASE_TYPES for p in phases):
+        return "logical"
+    return "replica"
 
 
 def resolve_scenario(
@@ -388,6 +585,16 @@ def resolve_scenario(
         if phase.label in labels_seen:
             raise ValueError(f"Duplicate phase label: {phase.label!r}")
         labels_seen.add(phase.label)
+    drained = False
+    for phase in phases:
+        phase.rate_override()
+        if phase.type is PhaseType.DRAIN:
+            drained = True
+        elif phase.type is PhaseType.PRELOAD and drained:
+            raise ValueError(
+                f"preload phase {phase.label!r} follows a drain phase; the "
+                "consumer gate is one-shot, so all preloads must come first"
+            )
     if phases[0].type is not PhaseType.WARMUP:
         raise ValueError(
             "First phase must be type warmup so samples can be excluded "
@@ -421,21 +628,54 @@ class PhaseRuntime:
     state: dict[str, object]
 
 
+RunHook = Callable[[dict[str, object]], None]
+
+
 class HookRegistry:
     def __init__(self) -> None:
         self._enter: dict[PhaseType, PhaseHook] = {}
         self._exit: dict[PhaseType, PhaseHook] = {}
+        self._prepare: dict[PhaseType, RunHook] = {}
+        self._teardown: dict[PhaseType, RunHook] = {}
 
     def register(
         self,
         phase_type: PhaseType,
         enter: PhaseHook | None = None,
         exit: PhaseHook | None = None,
+        prepare: RunHook | None = None,
+        teardown: RunHook | None = None,
     ) -> None:
+        """`prepare` runs once per system before the first phase when the
+        phase list contains `phase_type`; `teardown` runs once after the
+        last phase (also on abort). Both receive the shared phase state."""
         if enter:
             self._enter[phase_type] = enter
         if exit:
             self._exit[phase_type] = exit
+        if prepare:
+            self._prepare[phase_type] = prepare
+        if teardown:
+            self._teardown[phase_type] = teardown
+
+    def _run_hooks_for(
+        self,
+        hooks: dict[PhaseType, RunHook],
+        phases: list[Phase],
+        state: dict[str, object],
+    ) -> None:
+        seen: set[RunHook] = set()
+        for phase in phases:
+            hook = hooks.get(phase.type)
+            if hook and hook not in seen:
+                seen.add(hook)
+                hook(state)
+
+    def prepare(self, phases: list[Phase], state: dict[str, object]) -> None:
+        self._run_hooks_for(self._prepare, phases, state)
+
+    def teardown(self, phases: list[Phase], state: dict[str, object]) -> None:
+        self._run_hooks_for(self._teardown, phases, state)
 
     def enter(self, runtime: PhaseRuntime) -> None:
         hook = self._enter.get(runtime.phase.type)
@@ -484,6 +724,27 @@ def default_registry() -> HookRegistry:
     registry.register(PhaseType.REPEATED_KILL,
                       enter=hooks.enter_repeated_kill,
                       exit=hooks.exit_repeated_kill)
-    # warmup, clean, recovery — no extra runtime action; the adapter's
+    registry.register(PhaseType.DRAIN, enter=hooks.enter_drain)
+    registry.register(PhaseType.NEIGHBOUR_OLTP,
+                      enter=hooks.enter_neighbour_oltp,
+                      exit=hooks.exit_neighbour_oltp,
+                      prepare=hooks.prepare_neighbour_oltp)
+    # Both logical phase types share one slot/consumer whose lifetime is
+    # the whole system run, so they share prepare/teardown.
+    registry.register(PhaseType.LOGICAL_STREAM,
+                      enter=hooks.enter_logical_stream,
+                      teardown=hooks.teardown_logical_replication)
+    registry.register(PhaseType.LOGICAL_STALL,
+                      enter=hooks.enter_logical_stall,
+                      exit=hooks.exit_logical_stall,
+                      teardown=hooks.teardown_logical_replication)
+    registry.register(PhaseType.RETRY_STORM,
+                      enter=hooks.enter_retry_storm,
+                      exit=hooks.exit_retry_storm)
+    registry.register(PhaseType.SCHEDULE_PRELOAD,
+                      enter=hooks.enter_schedule_preload)
+    registry.register(PhaseType.ABANDON_KILL,
+                      enter=hooks.enter_abandon_kill)
+    # warmup, clean, recovery, preload — no extra runtime action; the adapter's
     # steady workload carries the load.
     return registry

@@ -95,6 +95,34 @@ test("static build includes every profile, relative navigation and the canonical
   assert.ok(!fs.existsSync(path.join(out, "data/benchmark-cells.csv")));
 });
 
+test("published results: every scenario with data renders charts with table views", () => {
+  const out = path.join(__dirname, "dist");
+  const results = JSON.parse(fs.readFileSync(path.join(__dirname, "data/results.json"), "utf8"));
+  const notes = JSON.parse(fs.readFileSync(path.join(__dirname, "data/results-notes.json"), "utf8"));
+  const html = fs.readFileSync(path.join(out, "benchmarks/index.html"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "assets/style.css"), "utf8");
+  for (const id of results.systems) {
+    assert.ok(catalog.systems.some((s) => s.id === id && s.hasAdapter), `${id} has no adapter profile`);
+    assert.match(css, new RegExp(`--sys-${id}:\\s*#[0-9a-f]{6}`), `${id} has no colour`);
+  }
+  for (const section of results.sections) {
+    const spec = notes.sections.find((n) => n.id === section.id);
+    assert.ok(spec, `${section.id} has no notes`);
+    assert.ok(spec.question && spec.setup && spec.title, section.id);
+    assert.ok(html.includes(`id="${section.id}"`), `${section.id} not rendered`);
+  }
+  const figures = html.match(/<figure class="chart/g) || [];
+  const tables = html.match(/<details class="table-view">/g) || [];
+  assert.ok(figures.length >= results.sections.length);
+  assert.equal(figures.length, tables.length, "every chart has a table view");
+  assert.ok(html.includes(results.run.harness_commit.slice(0, 10)));
+  for (const s of results.systems)
+    assert.ok(
+      fs.readFileSync(path.join(out, "systems", s, "index.html"), "utf8").includes("Measured in the"),
+      `${s} profile lacks measured results`,
+    );
+});
+
 test("build removes stale generated results rather than accidentally publishing them", () => {
   const stale = path.join(__dirname, "dist/old-report.html");
   fs.writeFileSync(stale, "stale report");

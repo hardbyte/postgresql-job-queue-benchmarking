@@ -1,0 +1,122 @@
+{
+  "run_id": "custom-20261012T111726Z-2067ea",
+  "scenario": null,
+  "started_at": "2026-10-12T11:29:40+00:00",
+  "cli": [
+    "/tmp/pgbench-local-venv/bin/bench",
+    "run",
+    "--systems",
+    "pgque",
+    "--producer-rate",
+    "200",
+    "--worker-count",
+    "16",
+    "--phase",
+    "warmup=warmup:60s",
+    "--phase",
+    "baseline=clean:2m",
+    "--phase",
+    "preload=schedule-preload(count=20000):3m",
+    "--phase",
+    "due=clean:4m",
+    "--phase",
+    "after=clean:2m"
+  ],
+  "systems": [
+    "pgque"
+  ],
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 60
+    },
+    {
+      "label": "baseline",
+      "type": "clean",
+      "duration_s": 120
+    },
+    {
+      "label": "preload",
+      "type": "schedule-preload",
+      "duration_s": 180
+    },
+    {
+      "label": "due",
+      "type": "clean",
+      "duration_s": 240
+    },
+    {
+      "label": "after",
+      "type": "clean",
+      "duration_s": 120
+    }
+  ],
+  "engine": "postgres",
+  "pg_image": "postgres:18.6-alpine",
+  "postgres": {
+    "version": "PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "settings": {
+      "shared_buffers": "256MB",
+      "work_mem": "8MB",
+      "maintenance_work_mem": "128MB",
+      "autovacuum": "on",
+      "autovacuum_naptime": "1min",
+      "autovacuum_vacuum_cost_delay": "2ms",
+      "autovacuum_vacuum_cost_limit": "200",
+      "autovacuum_vacuum_scale_factor": "0.2",
+      "autovacuum_analyze_scale_factor": "0.1",
+      "max_connections": "400",
+      "synchronous_commit": "on",
+      "wal_level": "replica",
+      "shared_preload_libraries": ""
+    }
+  },
+  "host": {
+    "os": "Linux-6.8.0-139-generic-x86_64-with-glibc2.39",
+    "kernel": "6.8.0-139-generic",
+    "cpu": "x86_64",
+    "cpu_count": 24,
+    "memory_bytes": 67326742528,
+    "python": "3.14.5",
+    "docker": "Docker version 26.1.4, build 5650f9b",
+    "docker_compose": "Docker Compose version v2.27.1"
+  },
+  "adapters": {
+    "pgque": {
+      "kind": "descriptor",
+      "system": "pgque",
+      "event_tables": [
+        "pgque.config",
+        "pgque.consumer",
+        "pgque.dead_letter",
+        "pgque.event_1",
+        "pgque.event_1_0",
+        "pgque.event_1_1",
+        "pgque.event_1_2",
+        "pgque.event_template",
+        "pgque.queue",
+        "pgque.retry_queue",
+        "pgque.subscription",
+        "pgque.tick"
+      ],
+      "extensions": [],
+      "version": "0.2.0",
+      "schema_version": "v0.2.0",
+      "db_name": "pgque_bench",
+      "started_at": "2026-10-12T11:17:38.270Z",
+      "scheduled_jobs": "unsupported",
+      "instance_id": 0,
+      "revision": {
+        "source": "benchmark repo + pgque submodule",
+        "git_sha": "b957194ed62d9a52843f470ee5538e6278072583",
+        "git_short": "b957194",
+        "git_branch": "brian/awa-perf-programme",
+        "git_tag": null,
+        "dirty": true,
+        "pgque_submodule_sha": "95d5c3c12bccab8f917167659cfe0ba4d64e38ca",
+        "pgque_submodule_describe": "v0.3.0-alpha.1-19-g95d5c3c"
+      }
+    }
+  }
+}

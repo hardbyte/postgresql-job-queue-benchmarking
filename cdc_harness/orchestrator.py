@@ -45,7 +45,7 @@ from bench_harness.writers import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RECEIVER_CRATE = REPO_ROOT / "cdc-receiver"
-DEFAULT_PG_URL = "postgres://bench:bench@localhost:15555"
+DEFAULT_PG_URL = f"postgres://bench:bench@localhost:{os.environ.get('BENCH_PG_PORT', '15555')}"
 
 
 def receiver_binary(build: bool = True) -> Path:
@@ -289,7 +289,7 @@ def ensure_postgres(compose: bool) -> None:
     log("starting postgres (docker compose + cdc overlay)…")
     subprocess.run(
         ["docker", "compose", "-f", "docker-compose.yml",
-         "-f", "docker-compose.cdc.yml", "up", "-d", "--wait", "postgres"],
+         "-f", "docker-compose.cdc.yml", "up", "-d", "--wait", "--force-recreate", "--renew-anon-volumes", "postgres"],
         cwd=REPO_ROOT, check=True,
     )
 

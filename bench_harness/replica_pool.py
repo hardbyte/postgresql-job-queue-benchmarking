@@ -57,6 +57,16 @@ class ReplicaState(str, enum.Enum):
     CRASHED = "crashed"
 
 
+def _docker_container_name(proc: "subprocess.Popen | None") -> str | None:
+    args = getattr(proc, "args", None)
+    if not isinstance(args, (list, tuple)) or list(args[:2]) != ["docker", "run"]:
+        return None
+    for flag, value in zip(args, args[1:]):
+        if flag == "--name":
+            return str(value)
+    return None
+
+
 @dataclass
 class ReplicaSlot:
     """One instance slot. Tracks handle + intended state.
@@ -211,6 +221,23 @@ class ReplicaPool:
         slot.state = ReplicaState.KILLED
         self._terminate_slot(slot, signal_type=_signal.SIGKILL, timeout_s=timeout_s)
 
+    def kill_all(self, *, timeout_s: float = 30.0) -> list[int]:
+        """SIGKILL every RUNNING replica at once; returns their ids.
+
+        All signals go out before any wait, so the fleet dies within one
+        signalling pass rather than one replica after another."""
+        import time as _time
+
+        targets = [s for s in self._slots if s.state is ReplicaState.RUNNING]
+        for slot in targets:
+            slot.state = ReplicaState.KILLED
+        for slot in targets:
+            self._signal_slot(slot, _signal.SIGKILL)
+        deadline = _time.monotonic() + timeout_s
+        for slot in targets:
+            self._reap_slot(slot, deadline=deadline)
+        return [slot.instance_id for slot in targets]
+
     def restart_worker(
         self,
         instance_id: int,
@@ -330,6 +357,22 @@ class ReplicaPool:
                 # Already gone between our poll() check and the signal —
                 # not a fault, just racy teardown.
                 pass
+        container = _docker_container_name(proc)
+        if container is not None and signal_type == _signal.SIGKILL:
+            # The docker CLI cannot proxy SIGKILL, so the container would keep
+            # running (and consuming jobs) after its client dies.
+            try:
+                subprocess.run(
+                    ["docker", "kill", "--signal=SIGKILL", container],
+                    capture_output=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                print(
+                    f"[{self.system}] docker kill {container} timed out; "
+                    "leaving it for the end-of-run container sweep",
+                    file=sys.stderr,
+                )
 
     def _reap_slot(
         self,
@@ -355,8 +398,15 @@ class ReplicaPool:
                     f"within shared grace; escalating to SIGKILL",
                     file=sys.stderr,
                 )
-                proc.kill()
-                proc.wait()
+                self._signal_slot(slot, _signal.SIGKILL)
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    print(
+                        f"[{self.system}] replica {slot.instance_id} still "
+                        "running after SIGKILL; abandoning its process handle",
+                        file=sys.stderr,
+                    )
         if slot.tailer is not None:
             slot.tailer.join(timeout=2.0)
         # Clear the handle so subsequent checks don't see a stale pid.

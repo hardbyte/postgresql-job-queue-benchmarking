@@ -16,5 +16,11 @@
     "awa.dlq_entries"
   ],
   "event_indexes": [],
-  "extensions": []
+  "extensions": [],
+  "state_queries": {
+    "scheduled": "SELECT count(*) FROM awa.deferred_jobs WHERE state = 'scheduled'",
+    "retryable": "SELECT count(*) FROM awa.deferred_jobs WHERE state = 'retryable'",
+    "dead": "SELECT (SELECT count(*) FROM awa.done_entries WHERE state = 'failed') + (SELECT count(*) FROM awa.dlq_entries)",
+    "running": "SELECT (SELECT count(*) FROM awa.leases WHERE state = 'running') + (SELECT count(*) FROM awa.lease_claims c WHERE c.closed_at IS NULL AND NOT EXISTS (SELECT 1 FROM awa.lease_claim_closures x WHERE x.claim_slot = c.claim_slot AND x.job_id = c.job_id AND x.run_lease = c.run_lease) AND NOT EXISTS (SELECT 1 FROM awa.lease_claim_closure_batches b WHERE b.claim_slot = c.claim_slot AND b.receipt_ranges @> c.receipt_id) AND NOT EXISTS (SELECT 1 FROM awa.done_entries d WHERE d.job_id = c.job_id AND d.run_lease = c.run_lease) AND NOT EXISTS (SELECT 1 FROM awa.deferred_jobs d WHERE d.job_id = c.job_id AND d.run_lease = c.run_lease) AND NOT EXISTS (SELECT 1 FROM awa.dlq_entries d WHERE d.job_id = c.job_id AND d.run_lease = c.run_lease) AND NOT EXISTS (SELECT 1 FROM awa.leases l WHERE l.job_id = c.job_id AND l.run_lease = c.run_lease))"
+  }
 }

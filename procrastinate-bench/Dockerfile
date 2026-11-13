@@ -8,6 +8,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 
 WORKDIR /app
+COPY adapter_common ./adapter_common
 COPY procrastinate-bench ./procrastinate-bench
 
 WORKDIR /app/procrastinate-bench

@@ -32,7 +32,7 @@ import sys
 import threading
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 import psycopg
@@ -87,7 +87,34 @@ FROM pg_stat_activity
 WHERE pid <> pg_backend_pid()
   AND state IS NOT NULL
   AND state <> 'idle'
+  AND application_name NOT LIKE 'bench-harness%%'
 """
+
+# Heavyweight lock waits right now, cluster-wide: one row per lock type with
+# the number of ungranted requests and the longest current wait (`waitstart`,
+# PostgreSQL 14+).
+_PG_LOCK_WAITS_SQL = """
+SELECT
+    locktype,
+    count(*)::bigint,
+    COALESCE(max(EXTRACT(EPOCH FROM (clock_timestamp() - waitstart))), 0)::float8
+FROM pg_locks
+WHERE NOT granted
+GROUP BY locktype
+"""
+
+
+@dataclass
+class LockWaitStats:
+    """Per-phase heavyweight lock-wait accumulator (one entry per tick)."""
+
+    ticks: int = 0
+    # Sum over ticks of ungranted lock requests: lock-waiter seconds when
+    # ticks are one second apart.
+    waiter_samples: int = 0
+    peak_waiters: int = 0
+    max_wait_s: float = 0.0
+    by_locktype: Counter[str] = field(default_factory=Counter)
 
 
 def aggregate_rows(
@@ -157,6 +184,9 @@ class WaitEventSampler:
         # Total non-idle backend observations per phase (sum of per-tick
         # active backend counts). The denominator for percentages.
         self._total_active_samples: dict[str, int] = {}
+        # Sampler ticks per phase (the AAS denominator) and lock waits.
+        self._ticks: dict[str, int] = {}
+        self._lock_waits: dict[str, LockWaitStats] = {}
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -181,9 +211,16 @@ class WaitEventSampler:
             self._thread = None
 
     # ── data ingestion (worker thread) ─────────────────────────────────
+    def _connect(self) -> "psycopg.Connection":
+        return psycopg.connect(
+            self.database_url,
+            autocommit=True,
+            application_name="bench-harness-wait-events",
+        )
+
     def _run(self) -> None:
         try:
-            conn = psycopg.connect(self.database_url, autocommit=True)
+            conn = self._connect()
         except psycopg.Error as exc:
             print(
                 f"[wait-events] failed to connect to "
@@ -191,37 +228,41 @@ class WaitEventSampler:
                 file=sys.stderr,
             )
             return
+        self._poll_loop(conn)
+
+    def _poll_loop(self, conn: "psycopg.Connection") -> None:
         try:
-            self._poll_loop(conn)
+            while not self._stop_event.is_set():
+                tick_start = time.time()
+                try:
+                    if conn.closed:
+                        conn = self._connect()
+                    self._poll_once(conn)
+                except psycopg.Error as exc:
+                    # Don't kill the sampler on a transient PG error — the
+                    # bench can outlive a brief connection blip. Log once and
+                    # keep going; a hard, persistent failure will keep raising
+                    # and just produce empty counters, which is the right
+                    # observable behaviour ("no wait-event data") rather than
+                    # crashing the whole orchestrator.
+                    print(f"[wait-events] poll error: {exc}", file=sys.stderr)
+                elapsed = time.time() - tick_start
+                remaining = self.sample_every_s - elapsed
+                if remaining > 0:
+                    # Wake early on stop.
+                    self._stop_event.wait(timeout=remaining)
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
 
-    def _poll_loop(self, conn: "psycopg.Connection") -> None:
-        while not self._stop_event.is_set():
-            tick_start = time.time()
-            try:
-                self._poll_once(conn)
-            except psycopg.Error as exc:
-                # Don't kill the sampler on a transient PG error — the
-                # bench can outlive a brief connection blip. Log once and
-                # keep going; a hard, persistent failure will keep raising
-                # and just produce empty counters, which is the right
-                # observable behaviour ("no wait-event data") rather than
-                # crashing the whole orchestrator.
-                print(f"[wait-events] poll error: {exc}", file=sys.stderr)
-            elapsed = time.time() - tick_start
-            remaining = self.sample_every_s - elapsed
-            if remaining > 0:
-                # Wake early on stop.
-                self._stop_event.wait(timeout=remaining)
-
     def _poll_once(self, conn: "psycopg.Connection") -> None:
         with conn.cursor() as cur:
             cur.execute(_PG_STAT_ACTIVITY_SQL)
             raw_rows = cur.fetchall()
+            cur.execute(_PG_LOCK_WAITS_SQL)
+            lock_rows = cur.fetchall()
         rows = [
             ActivityRow(
                 pid=row[0],
@@ -232,19 +273,10 @@ class WaitEventSampler:
             for row in raw_rows
         ]
         counts = aggregate_rows(rows)
-        if not counts:
-            # No active backends this tick — still record the phase so we
-            # get a bucket entry, but with zero samples; otherwise a phase
-            # that runs fully idle would never appear in `_per_phase` and
-            # the orchestrator's snapshot() would silently emit nothing.
-            phase_label, phase_type = self.get_phase()
-            with self._lock:
-                self._per_phase.setdefault(phase_label, Counter())
-                self._phase_types.setdefault(phase_label, phase_type)
-                # Total stays at 0 for this tick — no sample increment.
-            return
         phase_label, phase_type = self.get_phase()
         with self._lock:
+            # A phase that runs fully idle still gets a (zero) bucket, or
+            # snapshot() would silently emit nothing for it.
             bucket = self._per_phase.setdefault(phase_label, Counter())
             self._phase_types.setdefault(phase_label, phase_type)
             bucket.update(counts)
@@ -252,6 +284,16 @@ class WaitEventSampler:
                 self._total_active_samples.get(phase_label, 0)
                 + sum(counts.values())
             )
+            self._ticks[phase_label] = self._ticks.get(phase_label, 0) + 1
+            locks = self._lock_waits.setdefault(phase_label, LockWaitStats())
+            locks.ticks += 1
+            waiters = 0
+            for locktype, count, max_wait_s in lock_rows:
+                waiters += int(count)
+                locks.by_locktype[str(locktype)] += int(count)
+                locks.max_wait_s = max(locks.max_wait_s, float(max_wait_s or 0.0))
+            locks.waiter_samples += waiters
+            locks.peak_waiters = max(locks.peak_waiters, waiters)
 
     # ── data egress (orchestrator thread) ──────────────────────────────
     def snapshot(self, phase_label: str) -> tuple[list[WaitEventCount], int]:
@@ -280,6 +322,14 @@ class WaitEventSampler:
             for (event_type, event), count in counts.most_common()
         ]
         return rows, total
+
+    def snapshot_load(self, phase_label: str) -> tuple[int, LockWaitStats]:
+        """Drain one phase's sampler tick count and lock-wait stats."""
+        with self._lock:
+            return (
+                self._ticks.pop(phase_label, 0),
+                self._lock_waits.pop(phase_label, LockWaitStats()),
+            )
 
     def peek(self, phase_label: str) -> tuple[Counter[tuple[str, str]], int]:
         """Read-only view of one phase's accumulated counts.

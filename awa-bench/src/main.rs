@@ -17,6 +17,7 @@
 //! before measuring.
 
 mod long_horizon;
+mod scenario_controls;
 
 use async_trait::async_trait;
 use awa_macros::JobArgs;
@@ -236,7 +237,7 @@ async fn count_by_state(
     queue_name: &str,
 ) -> HashMap<String, i64> {
     let schema = store.schema();
-    let rows: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    let rows: Vec<(String, i64)> = sqlx::query_as(&format!(
         r#"
         SELECT state, sum(count)::bigint AS count
         FROM (
@@ -292,7 +293,7 @@ async fn count_by_state(
         ) counts
         GROUP BY state
         "#,
-    )))
+    ))
     .bind(queue_name)
     .fetch_all(pool)
     .await
@@ -592,11 +593,18 @@ async fn scenario_worker_only() {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
+    let mut env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    if std::env::var_os("JOB_FAILURE_CONTROL_FILE").is_some() {
+        // Injected failures would otherwise log a WARN line per attempt.
+        env_filter = env_filter.add_directive(
+            "awa_worker::executor=error"
+                .parse()
+                .expect("valid tracing directive"),
+        );
+    }
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
+        .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
         .init();
     let _meter_provider = maybe_install_otlp_metrics();

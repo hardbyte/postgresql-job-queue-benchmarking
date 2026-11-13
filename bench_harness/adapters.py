@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import uuid
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import Callable
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = SCRIPT_DIR
 
-PG_PORT = 15555
+PG_PORT = int(os.environ.get("BENCH_PG_PORT", "15555"))
 PG_USER = "bench"
 PG_PASS = "bench"
 
@@ -82,6 +83,10 @@ class AdapterManifest:
     # slow-drain shutdown paths (e.g. pgmq archive, absurd fail-task-run)
     # can override via `adapter.json -> shutdown_grace_s`.
     shutdown_grace_s: float = 10.0
+    # Optional `{state: SQL}` map of single-value count queries (scheduled,
+    # retryable, dead, ...). Polled by the metrics daemon only for runs whose
+    # phases need DB-side job-state counts (retry-storm, schedule-preload).
+    state_queries: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Sensible defaults: standalone systems are their own family and
@@ -105,6 +110,7 @@ class AdapterManifest:
             family=data.get("family", "") or "",
             display_name=data.get("display_name", "") or "",
             shutdown_grace_s=float(data.get("shutdown_grace_s", 10.0)),
+            state_queries=dict(data.get("state_queries", {})),
         )
 
 
@@ -154,9 +160,17 @@ def build_awa(skip: bool) -> None:
     )
 
 
+def adapter_image(image: str) -> str:
+    """Docker image reference for an adapter. ``BENCH_IMAGE_TAG`` gives a
+    worktree its own adapter images instead of the shared ``latest``."""
+    tag = os.environ.get("BENCH_IMAGE_TAG")
+    return f"{image}:{tag}" if tag else image
+
+
 def _docker_build(image_tag: str, dockerfile: Path, context: Path, skip: bool) -> None:
     if skip:
         return
+    image_tag = adapter_image(image_tag)
     print(f"[harness] docker build {image_tag}...", file=sys.stderr)
     subprocess.run(
         ["docker", "build", "-f", str(dockerfile), "-t", image_tag, "."],
@@ -296,6 +310,7 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         "PGQUE_VERSION",
         "PGQUE_SCHEMA_VERSION",
         "AWA_COMPLETION_FLUSH_MS",
+        "AWA_QS_PRODUCER_PATH",
         "AWA_COMPLETION_SHARDS",
         "AWA_QUEUE_CLAIMERS",
         "AWA_CLAIM_BATCH_SIZE",
@@ -310,9 +325,46 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         "LEASE_ROTATE_MS",
         "BENCH_QUEUE_COUNT",
         "BENCH_DLQ_ENABLED",
+        "JOB_PAYLOAD_KIND",
+        # Per-system lease / timeout / batching knobs. Long-running-job
+        # scenarios need them above the job duration.
+        "RESCUE_AFTER_SECS",
+        "VISIBILITY_TIMEOUT_S",
+        "CONSUMER_BATCH_SIZE",
+        "SUBSCRIBER_BATCH_SIZE",
+        "CLAIM_TIMEOUT_SECS",
+        "STALLED_AFTER_SECS",
+        "EXPIRE_IN_SECS",
+        "SUPERVISE_INTERVAL_SECS",
+        "REPO_TIMEOUT_MS",
+        "MAX_CONNECTIONS",
+        "POLL_INTERVAL_MS",
+        # Per-system tuning knobs; unset keeps each adapter's default.
+        "RIVER_FETCH_COOLDOWN_MS",
+        "RIVER_FETCH_POLL_INTERVAL_MS",
+        "OBAN_DISPATCH_COOLDOWN_MS",
+        "PGBOSS_POLLING_INTERVAL_S",
+        "PGBOSS_BURST_WHEN_BATCH_FULL",
+        "PGBOSS_LISTEN_NOTIFY",
+        "ABSURD_CLIENTS_PER_QUEUE",
+        "ABSURD_SHARED_CONNECTIONS",
+        "ABSURD_POLL_INTERVAL_MS",
+        "PGMQ_ACK",
+        "PGMQ_CONSUMER_SWEEP",
+        "PGMQ_NOTIFY_INSERT_MS",
+        "PGQUE_SUBCONSUMERS",
+        "PGQUE_CONSUMER_CONNS",
+        "PGQUE_SHARED_LISTEN",
+        "PGQUE_TICKER_MODE",
+        "PGQUE_TICK_MS",
+        "PGQUE_IDLE_POLL_MS",
     ):
         if key in os.environ:
             env[key] = os.environ[key]
+    # Awa's own runtime and experiment knobs are all `AWA_`-prefixed.
+    for key, value in os.environ.items():
+        if key.startswith("AWA_"):
+            env[key] = value
     # Default PRODUCER_PACING=harness — the orchestrator emits
     # `ENQUEUE <n>` tokens on the adapter's stdin in fixed-rate mode.
     # Adapters that haven't been ported to read stdin tokens fall back
@@ -346,6 +398,42 @@ def launch_awa_canonical(manifest: AdapterManifest, overrides: dict[str, str]) -
     return launch_awa(manifest, merged)
 
 
+# Control files the orchestrator creates next to the producer-rate file
+# (same directory, so the existing /control mount covers them).
+SCENARIO_CONTROL_FILE_KEYS = (
+    "JOB_FAILURE_CONTROL_FILE",
+    "SCHEDULE_CONTROL_FILE",
+    "JOB_ABANDON_CONTROL_FILE",
+)
+
+
+ADAPTER_CONTAINER_LABEL = "bench.pg_port"
+
+
+def remove_adapter_containers() -> None:
+    """Remove adapter containers launched against this harness's Postgres.
+
+    SIGKILL to a `docker run` client leaves its container running, still
+    connected to the bench database; scoping by port keeps parallel harnesses
+    on other ports untouched."""
+    try:
+        listed = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", f"label={ADAPTER_CONTAINER_LABEL}={PG_PORT}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return
+    for container_id in listed.stdout.split():
+        # One container at a time with a bound: a container whose runtime shim
+        # never reported its exit makes `docker rm` block indefinitely.
+        try:
+            subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            print(f"[harness] docker rm -f {container_id} timed out; leaving it", file=sys.stderr)
+
+
 def _docker_launch(
     image: str,
     manifest: AdapterManifest,
@@ -360,17 +448,32 @@ def _docker_launch(
         container_dir = str(Path(container_control).parent)
         mounts.append((host_dir, container_dir))
         env["PRODUCER_RATE_CONTROL_FILE"] = container_control
+        gate_file = env.get("CONSUMER_GATE_FILE")
+        if gate_file:
+            env["CONSUMER_GATE_FILE"] = str(
+                Path(container_dir) / Path(gate_file).name
+            )
+        for key in SCENARIO_CONTROL_FILE_KEYS:
+            if key in env:
+                env[key] = str(Path(container_dir) / Path(env[key]).name)
     # Docker containers reach PG via host networking.
     # `-i` keeps stdin open so the harness pacer can write ENQUEUE tokens
     # to the container's stdin (without it, `docker run` closes stdin
     # immediately and the in-container adapter sees EOF on its first
     # readline()).
-    argv = ["docker", "run", "--rm", "-i", "--network", "host"]
+    argv = [
+        "docker", "run", "--rm", "-i", "--network", "host",
+        "--label", f"{ADAPTER_CONTAINER_LABEL}={PG_PORT}",
+        "--name", f"bench-{PG_PORT}-{image}-{uuid.uuid4().hex[:8]}",
+    ]
+    cidfile = overrides.get("DOCKER_CIDFILE_HOST")
+    if cidfile:
+        argv.extend(["--cidfile", cidfile])
     for host_path, container_path in mounts:
         argv.extend(["-v", f"{host_path}:{container_path}"])
     for k, v in env.items():
         argv.extend(["-e", f"{k}={v}"])
-    argv.append(image)
+    argv.append(adapter_image(image))
     return LaunchSpec(argv=argv, env={}, mounts=mounts)
 
 

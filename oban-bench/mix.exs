@@ -21,7 +21,7 @@ defmodule ObanBench.MixProject do
 
   defp deps do
     [
-      {:oban, "~> 2.24.1"},
+      {:oban, "~> 2.24.2"},
       {:postgrex, "~> 0.22.4"},
       {:ecto_sql, "~> 3.12"},
       {:jason, "~> 1.4"}

@@ -12,10 +12,12 @@ defmodule ObanBench.LongHorizon do
   """
 
   import Ecto.Query
-  alias ObanBench.{Repo, LongHorizonWorker}
+  alias ObanBench.{Repo, LongHorizonWorker, ScenarioControls}
 
-  @queue :long_horizon_bench
   @latency_window_s 30.0
+  # Oban claims `limit - running` jobs in one UPDATE; above this the limit
+  # tracks `running + @max_claim` so no single fetch claims more.
+  @max_claim 10_000
 
   # Adapter metrics that describe a *global* observation (queue depth,
   # total backlog) rather than this replica's per-instance behaviour.
@@ -66,6 +68,7 @@ defmodule ObanBench.LongHorizon do
       version: "0.1.0",
       schema_version: System.get_env("OBAN_SCHEMA_VERSION", "current"),
       db_name: db_name,
+      abandon_rescue: "Lifeline stuck-job rescuer (RESCUE_AFTER_SECS)",
       started_at: now_iso()
     })
 
@@ -75,23 +78,51 @@ defmodule ObanBench.LongHorizon do
     :ets.insert(:long_horizon_state, {:work_ms, work_ms})
     :ets.insert(:long_horizon_state, {:queue_depth, 0})
     :ets.insert(:long_horizon_state, {:producer_target_rate, producer_rate * 1.0})
-    :ets.new(:long_horizon_lat, [:public, :named_table, :duplicate_bag])
+    # Keyed by {monotonic ms, unique} so trimming old samples is one ranged
+    # select_delete rather than a scan per deleted object.
+    :ets.new(:long_horizon_lat, [:public, :named_table, :ordered_set, write_concurrency: true])
+    ScenarioControls.init()
 
-    Oban.scale_queue(queue: @queue, limit: worker_count)
+    queues = queue_names()
+    per_queue_limit = max(1, div(worker_count, length(queues)))
+    :ets.insert(:long_horizon_state, {:queues, List.to_tuple(queues)})
+    start_queues = fn -> Enum.each(queues, &start_queue(&1, per_queue_limit)) end
 
-    padding = String.duplicate("x", max(0, payload_bytes - 32))
+    case System.get_env("CONSUMER_GATE_FILE") do
+      nil ->
+        start_queues.()
 
+      gate_file ->
+        spawn(fn ->
+          wait_for_consumer_gate(gate_file)
+          IO.puts(:stderr, "[oban] consumer gate open; starting queues")
+          start_queues.()
+        end)
+    end
+
+    padding = payload_padding(payload_bytes - 32)
+
+    # Only instance 0 observes depth, so only it produces in depth-target mode.
     _producer =
+      if producer_mode != "depth-target" or observer_enabled?() do
+        spawn(fn ->
+          producer_loop(
+            producer_mode,
+            producer_rate,
+            target_depth,
+            padding,
+            producer_rate_control_file,
+            producer_batch_max,
+            producer_batch_ms
+          )
+        end)
+      end
+
+    _herd =
       spawn(fn ->
-        producer_loop(
-          producer_mode,
-          producer_rate,
-          target_depth,
-          padding,
-          producer_rate_control_file,
-          producer_batch_max,
-          producer_batch_ms
-        )
+        ScenarioControls.herd_loop(fn seq, size, run_at_ms ->
+          insert_herd(seq, size, run_at_ms, padding)
+        end)
       end)
 
     _sampler = spawn(fn -> sampler_loop(sample_every_s) end)
@@ -99,6 +130,82 @@ defmodule ObanBench.LongHorizon do
 
     # Block forever — the harness SIGTERMs the container.
     Process.sleep(:infinity)
+  end
+
+  # BENCH_QUEUE_COUNT queues; queue 0 keeps the legacy name.
+  defp queue_names do
+    count = max(1, env_int("BENCH_QUEUE_COUNT", 1))
+    ["long_horizon_bench" | Enum.map(1..(count - 1)//1, &"long_horizon_bench_#{&1}")]
+  end
+
+  defp start_queue(name, limit) when limit <= @max_claim do
+    Oban.start_queue(queue: name, limit: limit, local_only: true)
+  end
+
+  defp start_queue(name, limit) do
+    Oban.start_queue(queue: name, limit: @max_claim, local_only: true)
+    spawn(fn -> follow_running(name, limit, @max_claim) end)
+  end
+
+  defp follow_running(name, target, limit) do
+    Process.sleep(500)
+
+    next_limit =
+      try do
+        %{running: running} = Oban.check_queue(queue: name)
+        wanted = min(target, length(running) + @max_claim)
+        if wanted != limit, do: Oban.scale_queue(queue: name, limit: wanted, local_only: true)
+        wanted
+      rescue
+        _ -> limit
+      catch
+        :exit, _ -> limit
+      end
+
+    follow_running(name, target, next_limit)
+  end
+
+  # JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s.
+  defp payload_padding(length) do
+    length = max(0, length)
+
+    if System.get_env("JOB_PAYLOAD_KIND") == "random" do
+      length |> :crypto.strong_rand_bytes() |> Base.encode64() |> binary_part(0, length)
+    else
+      String.duplicate("x", length)
+    end
+  end
+
+  defp wait_for_consumer_gate(path) do
+    case File.read(path) do
+      {:ok, contents} ->
+        if String.trim(contents) == "open" do
+          :ok
+        else
+          Process.sleep(200)
+          wait_for_consumer_gate(path)
+        end
+
+      _ ->
+        Process.sleep(200)
+        wait_for_consumer_gate(path)
+    end
+  end
+
+  # Jobs are spread over the queues by sequence number; with one queue the
+  # worker's default queue is used.
+  defp new_job(seq, padding, abandon_tag) do
+    LongHorizonWorker.new(job_args(seq, padding, abandon_tag), job_opts() ++ queue_opts(seq))
+  end
+
+  defp queue_opts(seq) do
+    case :ets.lookup(:long_horizon_state, :queues) do
+      [{:queues, queues}] when tuple_size(queues) > 1 ->
+        [queue: elem(queues, rem(seq, tuple_size(queues)))]
+
+      _ ->
+        []
+    end
   end
 
   defp producer_loop("fixed", rate, _target_depth, _padding, _control_file, _batch_max, _batch_ms)
@@ -249,12 +356,17 @@ defmodule ObanBench.LongHorizon do
   # batch_max == 1 → preserve the original Oban.insert/1 wire path.
   # batch_max > 1 → Oban.insert_all/2 (documented bulk path).
   defp insert_batch(seq, 1, padding, batch_max) when batch_max <= 1 do
+    abandon_tag = ScenarioControls.abandon_tag()
+
     try do
-      case Oban.insert(LongHorizonWorker.new(%{seq: seq, padding: padding})) do
-        {:ok, _} -> :ok
+      case Oban.insert(new_job(seq, padding, abandon_tag)) do
+        {:ok, _} -> record_abandon_enqueued(abandon_tag, 1)
         _ -> :error
       end
     rescue
+      # A pool checkout that times out under load: skip this batch.
+      DBConnection.ConnectionError -> :error
+      Postgrex.Error -> :error
       ArgumentError -> :stopping
       RuntimeError -> :stopping
     catch
@@ -263,9 +375,11 @@ defmodule ObanBench.LongHorizon do
   end
 
   defp insert_batch(seq, batch_count, padding, _batch_max) do
+    abandon_tag = ScenarioControls.abandon_tag()
+
     changesets =
       for i <- 0..(batch_count - 1) do
-        LongHorizonWorker.new(%{seq: seq + i, padding: padding})
+        new_job(seq + i, padding, abandon_tag)
       end
 
     try do
@@ -273,14 +387,56 @@ defmodule ObanBench.LongHorizon do
       # https://hexdocs.pm/oban/Oban.html#insert_all/2 — issues a single
       # multi-row INSERT for the supplied changesets.
       case Oban.insert_all(changesets) do
-        jobs when is_list(jobs) -> :ok
+        jobs when is_list(jobs) -> record_abandon_enqueued(abandon_tag, batch_count)
         _ -> :error
       end
     rescue
+      # A pool checkout that times out under load: skip this batch.
+      DBConnection.ConnectionError -> :error
+      Postgrex.Error -> :error
       ArgumentError -> :stopping
       RuntimeError -> :stopping
     catch
       :exit, _reason -> :stopping
+    end
+  end
+
+  defp record_abandon_enqueued(abandon_tag, count) do
+    if map_size(abandon_tag) > 0, do: ScenarioControls.record_abandon_enqueued(count)
+    :ok
+  end
+
+  defp job_args(seq, padding, abandon_tag) do
+    %{seq: seq, padding: padding}
+    |> Map.merge(ScenarioControls.tag(seq))
+    |> Map.merge(abandon_tag)
+  end
+
+  # [] keeps the worker's defaults; JOB_MAX_ATTEMPTS overrides max attempts.
+  defp job_opts do
+    case ScenarioControls.max_attempts() do
+      nil -> []
+      n -> [max_attempts: n]
+    end
+  end
+
+  defp insert_herd(seq, size, run_at_ms, padding) do
+    opts = [scheduled_at: DateTime.from_unix!(run_at_ms, :millisecond)] ++ job_opts()
+
+    changesets =
+      for i <- 0..(size - 1) do
+        LongHorizonWorker.new(%{seq: seq + i, padding: padding, run_at_ms: run_at_ms}, opts)
+      end
+
+    try do
+      case Oban.insert_all(changesets) do
+        jobs when is_list(jobs) -> :ok
+        _ -> :error
+      end
+    rescue
+      _ -> :error
+    catch
+      :exit, _reason -> :error
     end
   end
 
@@ -297,12 +453,7 @@ defmodule ObanBench.LongHorizon do
 
       depth =
         try do
-          case Repo.one(
-                 from(j in "oban_jobs",
-                   where: j.state == "available" and j.queue == "long_horizon_bench",
-                   select: count(j.id)
-                 )
-               ) do
+          case Repo.one(depth_query()) do
             n when is_integer(n) -> n
             _ -> 0
           end
@@ -318,6 +469,24 @@ defmodule ObanBench.LongHorizon do
           :ets.insert(:long_horizon_state, {:queue_depth, value})
           depth_loop()
       end
+    end
+  end
+
+  defp depth_query do
+    case :ets.lookup(:long_horizon_state, :queues) do
+      [{:queues, queues}] when tuple_size(queues) > 1 ->
+        names = Tuple.to_list(queues)
+
+        from(j in "oban_jobs",
+          where: j.state == "available" and j.queue in ^names,
+          select: count(j.id)
+        )
+
+      _ ->
+        from(j in "oban_jobs",
+          where: j.state == "available" and j.queue == "long_horizon_bench",
+          select: count(j.id)
+        )
     end
   end
 
@@ -361,7 +530,7 @@ defmodule ObanBench.LongHorizon do
         {"completion_rate", cmp_rate, sample_every_s},
         {"queue_depth", depth * 1.0, 0},
         {"producer_target_rate", producer_target_rate, 0}
-      ],
+      ] ++ ScenarioControls.metrics(dt_s, sample_every_s),
       fn {name, value, window_s} ->
         if MapSet.member?(@observer_metrics, name) and not observer_enabled?() do
           :ok
@@ -387,10 +556,9 @@ defmodule ObanBench.LongHorizon do
     cutoff = System.monotonic_time(:millisecond) - trunc(window_s * 1000)
 
     values =
-      :ets.tab2list(:long_horizon_lat)
-      |> Enum.flat_map(fn {_, ts_ms, lat_ms} ->
-        if ts_ms >= cutoff, do: [lat_ms], else: []
-      end)
+      :ets.select(:long_horizon_lat, [
+        {{{:"$1", :_}, :"$2"}, [{:>=, :"$1", cutoff}], [:"$2"]}
+      ])
 
     case values do
       [] ->
@@ -469,27 +637,58 @@ end
 defmodule ObanBench.LongHorizonWorker do
   use Oban.Worker, queue: :long_horizon_bench, max_attempts: 3
 
+  alias ObanBench.ScenarioControls
+
   @impl Oban.Worker
-  def perform(%Oban.Job{inserted_at: inserted_at}) do
+  def perform(%Oban.Job{args: args, attempt: attempt, max_attempts: max_attempts} = job) do
+    if ScenarioControls.tagged?(args) do
+      perform_tagged(args, attempt, max_attempts)
+    else
+      perform_untagged(job)
+    end
+  end
+
+  defp perform_tagged(args, attempt, max_attempts) do
+    if Map.has_key?(args, "abandon") and ScenarioControls.hold?() do
+      ScenarioControls.hold_forever()
+    end
+
+    ScenarioControls.on_start(args)
+
+    case ScenarioControls.failure_outcome(args, attempt, max_attempts) do
+      nil ->
+        work_ms =
+          case :ets.lookup(:long_horizon_state, :work_ms) do
+            [{:work_ms, v}] -> v
+            _ -> 1
+          end
+
+        if work_ms > 0, do: Process.sleep(work_ms)
+        ScenarioControls.on_complete(args)
+
+        unless Map.has_key?(args, "run_at_ms") or Map.has_key?(args, "abandon") do
+          :ets.update_counter(:long_horizon_state, :completed, 1)
+        end
+
+        :ok
+
+      outcome ->
+        ScenarioControls.record_failure(args, outcome)
+        {:error, "injected #{args["fail"]} failure (attempt #{attempt})"}
+    end
+  end
+
+  defp perform_untagged(%Oban.Job{inserted_at: inserted_at}) do
     now = DateTime.utc_now()
     latency_ms = max(0, DateTime.diff(now, inserted_at, :millisecond))
     ts_ms = System.monotonic_time(:millisecond)
 
-    :ets.insert(:long_horizon_lat, {:lat, ts_ms, latency_ms * 1.0})
+    :ets.insert(:long_horizon_lat, {{ts_ms, :erlang.unique_integer()}, latency_ms * 1.0})
 
-    # Coarse trim: when the ETS bag gets too large, drop everything older than
-    # the rolling window. Cheap enough at this frequency.
+    # Drop samples older than the rolling window now and then.
     if :rand.uniform(200) == 1 do
       cutoff = ts_ms - 30_000
-
-      :ets.foldl(
-        fn {_, t, _} = obj, acc ->
-          if t < cutoff, do: [obj | acc], else: acc
-        end,
-        [],
-        :long_horizon_lat
-      )
-      |> Enum.each(&:ets.delete_object(:long_horizon_lat, &1))
+      :ets.select_delete(:long_horizon_lat, [{{{:"$1", :_}, :_}, [{:<, :"$1", cutoff}], [true]}])
     end
 
     work_ms =

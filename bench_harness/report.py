@@ -40,7 +40,33 @@ DEFAULT_TIMELINE_METRICS = [
     "pg_wal_bytes",
     "relfilenode_churn_total",
     "pg_db_xacts_total",
+    "catalog_n_dead_tup",
+    # Neighbour-impact scenarios (neighbour_oltp, logical_replication).
+    "neighbour_tps",
+    "neighbour_latency_p99_ms",
+    "slot_confirmed_lag_bytes",
+    "slot_retained_wal_bytes",
+    # Resources and mass abandonment.
+    "pg_memory_anon_mb",
+    "adapter_memory_anon_mb",
+    "rescued_completion_rate",
 ]
+
+# Non-adapter timeline metrics: which subject_kind carries them and how to
+# reduce several subjects at one tick. Anything unlisted is an adapter metric.
+TIMELINE_SUBJECT_KINDS: dict[str, tuple[str, str]] = {
+    "n_dead_tup": ("table", "sum"),
+    "catalog_n_dead_tup": ("catalog", "sum"),
+    "pg_wal_bytes": ("cluster", "last"),
+    "relfilenode_churn_total": ("cluster", "last"),
+    "pg_db_xacts_total": ("cluster", "last"),
+    "neighbour_tps": ("neighbour", "last"),
+    "neighbour_latency_p99_ms": ("neighbour", "last"),
+    "slot_confirmed_lag_bytes": ("replication_slot", "max"),
+    "slot_retained_wal_bytes": ("replication_slot", "max"),
+    "pg_memory_anon_mb": ("cluster", "last"),
+    "adapter_memory_anon_mb": ("cluster", "sum"),
+}
 
 DEFAULT_PHASE_FILTER = "steady"
 
@@ -64,6 +90,11 @@ METRIC_LABELS = {
     "pg_wal_bytes": "WAL bytes (cumulative)",
     "relfilenode_churn_total": "Relfilenode churn (cumulative TRUNCATE/rewrite)",
     "pg_db_xacts_total": "Background transactions (cumulative)",
+    "catalog_n_dead_tup": "Catalog dead tuples (pg_class/attribute/depend/type)",
+    "neighbour_tps": "Neighbour pgbench TPS",
+    "neighbour_latency_p99_ms": "Neighbour pgbench latency p99",
+    "slot_confirmed_lag_bytes": "Logical slot lag (bytes)",
+    "slot_retained_wal_bytes": "Logical slot retained WAL (bytes)",
 }
 
 TIMELINE_PRESETS = [
@@ -128,55 +159,35 @@ def _timeline_series(rows: list[dict], systems: list[str]) -> dict[str, dict[str
             if not selected:
                 continue
 
-            # Adapter metrics are one value per tick. Table metrics such as
-            # n_dead_tup need summing across subjects for each timestamp.
-            if metric == "n_dead_tup":
-                per_elapsed: dict[tuple[float, str, str], float] = {}
-                for row in selected:
-                    if row["subject_kind"] != "table":
-                        continue
-                    key = (
-                        float(row["elapsed_s"]),
-                        row["phase_label"],
-                        row["phase_type"],
-                    )
-                    per_elapsed[key] = per_elapsed.get(key, 0.0) + float(row["value"])
-                points = [
+            subject_kind, reduce = TIMELINE_SUBJECT_KINDS.get(
+                metric, ("adapter", "")
+            )
+            per_elapsed: dict[tuple[float, str, str], list[float]] = {}
+            for row in selected:
+                if row["subject_kind"] != subject_kind:
+                    continue
+                key = (
+                    float(row["elapsed_s"]),
+                    row["phase_label"],
+                    row["phase_type"],
+                )
+                per_elapsed.setdefault(key, []).append(float(row["value"]))
+            points = []
+            for (elapsed, phase_label, phase_type), values in sorted(per_elapsed.items()):
+                if reduce == "sum" or metric in RATE_METRICS:
+                    value = float(sum(values))
+                elif reduce == "max" or metric in LATENCY_METRICS or metric in DEPTH_METRICS:
+                    value = float(max(values))
+                else:
+                    value = float(values[-1])
+                points.append(
                     {
                         "elapsed_s": elapsed,
                         "phase_label": phase_label,
                         "phase_type": phase_type,
                         "value": value,
                     }
-                    for (elapsed, phase_label, phase_type), value in sorted(per_elapsed.items())
-                ]
-            else:
-                per_elapsed: dict[tuple[float, str, str], list[float]] = {}
-                for row in selected:
-                    if row["subject_kind"] != "adapter":
-                        continue
-                    key = (
-                        float(row["elapsed_s"]),
-                        row["phase_label"],
-                        row["phase_type"],
-                    )
-                    per_elapsed.setdefault(key, []).append(float(row["value"]))
-                points = []
-                for (elapsed, phase_label, phase_type), values in sorted(per_elapsed.items()):
-                    if metric in RATE_METRICS:
-                        value = float(sum(values))
-                    elif metric in LATENCY_METRICS or metric in DEPTH_METRICS:
-                        value = float(max(values))
-                    else:
-                        value = float(values[-1])
-                    points.append(
-                        {
-                            "elapsed_s": elapsed,
-                            "phase_label": phase_label,
-                            "phase_type": phase_type,
-                            "value": value,
-                        }
-                    )
+                )
 
             if points:
                 out[metric][system] = points
@@ -312,6 +323,154 @@ def _phase_table(summary: dict, systems: list[str], phases: list[Phase], system_
     )
 
 
+def _fmt(value: object, digits: int = 1) -> str:
+    if value is None:
+        return "–"
+    return f"{float(value):,.{digits}f}"
+
+
+def _neighbour_table(
+    summary: dict,
+    systems: list[str],
+    phases: list[Phase],
+    system_meta: dict[str, dict[str, str]],
+) -> str | None:
+    """Neighbour-impact rows (pgbench neighbour, logical slot, catalog).
+    None when the run has no neighbour or logical phases."""
+    headers = [
+        "System", "Phase", "Type", "Queue throughput/s",
+        "Neighbour TPS", "Neighbour p50 ms", "Neighbour p99 ms",
+        "p99 vs baseline", "Neighbour service p99 ms", "Slot lag peak MB", "Retained WAL peak MB",
+        "catalog_xmin age peak", "Catalog dead tup peak", "WAL/job bytes",
+    ]
+    rows: list[str] = []
+    for system in systems:
+        phase_map = summary["systems"].get(system, {}).get("phases", {})
+        for phase in phases:
+            block = phase_map.get(phase.label)
+            if not block or not (block.get("neighbour") or block.get("logical")):
+                continue
+            neighbour = block.get("neighbour") or {}
+            logical = block.get("logical") or {}
+            catalog = block.get("catalog") or {}
+            mb = 1024 * 1024
+            lag_peak = logical.get("slot_lag_bytes_peak")
+            retained_peak = logical.get("retained_wal_bytes_peak")
+            cells = [
+                html.escape(system_meta[system]["display_name"]),
+                html.escape(phase.label),
+                html.escape(block.get("phase_type", "")),
+                _fmt(block.get("median_throughput_per_s")),
+                _fmt(neighbour.get("tps")),
+                _fmt(neighbour.get("latency_p50_ms"), 2),
+                _fmt(neighbour.get("latency_p99_ms"), 2),
+                _fmt(neighbour.get("latency_p99_ms_vs_baseline"), 2),
+                _fmt(neighbour.get("service_p99_ms"), 2),
+                _fmt(lag_peak / mb if lag_peak is not None else None, 2),
+                _fmt(retained_peak / mb if retained_peak is not None else None, 1),
+                _fmt(logical.get("catalog_xmin_age_peak"), 0),
+                _fmt(catalog.get("dead_tup_peak"), 0),
+                # Cluster WAL includes the neighbour's own writes.
+                _fmt(None if neighbour else block.get("wal_bytes_per_completed_job"), 0),
+            ]
+            rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+    if not rows:
+        return None
+    head = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    return (
+        "<table id='neighbour-summary-table'>"
+        f"<thead><tr>{head}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
+def _resource_table(
+    summary: dict,
+    systems: list[str],
+    phases: list[Phase],
+    system_meta: dict[str, dict[str, str]],
+) -> str | None:
+    """CPU, memory, database load and lock waits per phase."""
+    headers = [
+        "System", "Phase", "PG cores", "PG cores peak", "Worker cores",
+        "Host busy cores", "PG anon MB peak", "Worker MB peak", "AAS",
+        "AAS CPU", "AAS Lock", "AAS advisory", "AAS LWLock", "AAS IO", "Lock waiters",
+        "Lock waiters peak", "Max lock wait s", "Deadlocks",
+    ]
+    rows: list[str] = []
+    for system in systems:
+        phase_map = summary["systems"].get(system, {}).get("phases", {})
+        for phase in phases:
+            block = phase_map.get(phase.label)
+            if not block:
+                continue
+            load = block.get("db_load") or {}
+            cells = [
+                html.escape(system_meta[system]["display_name"]),
+                html.escape(phase.label),
+                _fmt(block.get("pg_cpu_cores"), 2),
+                _fmt(block.get("pg_cpu_cores_peak"), 2),
+                _fmt(block.get("adapter_cpu_cores"), 2),
+                _fmt(block.get("host_cpu_busy_cores"), 2),
+                _fmt(block.get("peak_pg_memory_anon_mb"), 0),
+                _fmt(block.get("peak_adapter_memory_anon_mb"), 0),
+                _fmt(load.get("aas"), 2),
+                _fmt(load.get("aas_cpu"), 2),
+                _fmt(load.get("aas_lock"), 2),
+                _fmt(load.get("aas_lock_advisory"), 2),
+                _fmt(load.get("aas_lwlock"), 2),
+                _fmt(load.get("aas_io"), 2),
+                _fmt(load.get("lock_waiters_mean"), 2),
+                _fmt(load.get("lock_waiters_peak"), 0),
+                _fmt(load.get("lock_wait_max_s"), 2),
+                _fmt(block.get("pg_deadlocks_delta"), 0),
+            ]
+            rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+    if not rows:
+        return None
+    head = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    return (
+        "<table id='resource-summary-table'>"
+        f"<thead><tr>{head}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
+def _abandon_table(
+    summary: dict, systems: list[str], system_meta: dict[str, dict[str, str]]
+) -> str | None:
+    headers = [
+        "System", "Tagged", "Claimed at kill (DB)", "Held at kill", "First rescue s",
+        "50% s", "99% s", "100% s", "Rescue/s 10–90%", "Missing", "Duplicates",
+        "DB claims cleared s",
+    ]
+    rows: list[str] = []
+    for system in systems:
+        block = summary["systems"].get(system, {}).get("abandon")
+        if not block:
+            continue
+        cells = [html.escape(system_meta[system]["display_name"])] + [
+            _fmt(block.get(key), 0)
+            for key in (
+                "tagged_enqueued", "running_before_kill", "held_at_kill",
+                "first_rescued_s", "rescued_50_s", "rescued_99_s", "rescued_all_s",
+                "rescue_rate_10_90_per_s", "missing", "excess", "running_cleared_s",
+            )
+        ]
+        rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+    if not rows:
+        return None
+    head = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    return (
+        "<table id='abandon-summary-table'>"
+        f"<thead><tr>{head}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+
+
 def _replica_table(summary: dict, systems: list[str], phases: list[Phase], system_meta: dict[str, dict[str, str]]) -> str:
     headers = [
         "System",
@@ -402,6 +561,39 @@ def _build_html(
         [{"label": label, "primary": primary, "secondary": secondary} for label, primary, secondary in TIMELINE_PRESETS]
     )
     outliers = _timeline_outliers(timeline_data, systems, phases)
+    neighbour_table = _neighbour_table(summary, systems, phases, system_meta)
+    neighbour_section = (
+        "<section class='panel' id='neighbour-summary'>"
+        "<h2>Postgres Neighbours</h2>"
+        "<div class='card-sub'>Unrelated pgbench traffic and logical replication "
+        "on the same server, per phase. Catalog and WAL figures are "
+        "cluster-wide.</div>"
+        f"{neighbour_table}</section>"
+        if neighbour_table
+        else ""
+    )
+    resource_table = _resource_table(summary, systems, phases, system_meta)
+    resource_section = (
+        "<section class='panel' id='resource-summary'>"
+        "<h2>Resources and Database Load</h2>"
+        "<div class='card-sub'>CPU from cgroup/proc counters; memory is private "
+        "(anon) memory, Postgres shared buffers excluded. AAS is non-idle "
+        "backends per second by wait-event type; lock waiters are ungranted "
+        "pg_locks requests per second.</div>"
+        f"{resource_table}</section>"
+        if resource_table
+        else ""
+    )
+    abandon_table = _abandon_table(summary, systems, system_meta)
+    abandon_section = (
+        "<section class='panel' id='abandon-summary'>"
+        "<h2>Mass Abandonment</h2>"
+        "<div class='card-sub'>Times are from the fleet kill. Percentages are of "
+        "all tagged jobs.</div>"
+        f"{abandon_table}</section>"
+        if abandon_table
+        else ""
+    )
     summary_cards = []
     for system in systems:
         phase_map = summary["systems"].get(system, {}).get("phases", {})
@@ -848,6 +1040,9 @@ init();
         {_phase_table(summary, systems, phases, system_meta)}
       </section>
 
+      {neighbour_section}
+      {abandon_section}
+      {resource_section}
       <section class="panel" id="replica-summary">
         <h2>Per-replica Summary</h2>
         <div class="card-sub">Replica-scoped adapter metrics for presented phases, excluding warmup. This is the primary view for multi-replica load distribution.</div>

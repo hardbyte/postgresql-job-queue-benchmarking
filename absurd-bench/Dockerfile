@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-ARG ABSURD_VERSION=0.5.0
+ARG ABSURD_VERSION=0.5.1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates postgresql-client \
@@ -12,6 +12,7 @@ ENV PATH="/root/.local/bin:${PATH}"
 ENV ABSURD_SQL_PATH="/opt/absurd.sql"
 
 WORKDIR /app
+COPY adapter_common ./adapter_common
 COPY absurd-bench ./absurd-bench
 
 WORKDIR /app/absurd-bench

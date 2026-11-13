@@ -22,17 +22,17 @@ A closed-loop harness: producers enqueue at a controlled rate, workers claim and
 
 ### What the latest run found
 
-Eight Postgres-backed queues, same hardware, same harness. Three contracts in the lineup — event bus, job queue, visibility-timeout queue — so the throughput list isn't a single ranking. The [2026-05-09 sweep](results/2026-05-09-full-sweep/SUMMARY.md) has the per-cell numbers, chaos behaviour, and bloat resistance.
+Eight Postgres-backed queues, same hardware, same harness. Three contracts in the lineup — event bus, job queue, visibility-timeout queue — so the throughput list isn't a single ranking. The [2026-05-09 sweep](results/archive/2026-05-09-full-sweep/SUMMARY.md) has the per-cell numbers, chaos behaviour, and bloat resistance.
 
-![Peak throughput by queue contract](results/2026-05-09-full-sweep/plots/headline_throughput.png)
+![Peak throughput by queue contract](results/archive/2026-05-09-full-sweep/plots/headline_throughput.png)
 
-![Tail latency at each system's peak throughput](results/2026-05-09-full-sweep/plots/latency_at_peak.png)
+![Tail latency at each system's peak throughput](results/archive/2026-05-09-full-sweep/plots/latency_at_peak.png)
 
 | System | Contract | Peak (jobs/s) | Chaos recovery | Pressure cells | Notable caveat |
 |---|---|---:|---:|---:|---|
 | **pgque** *(single-consumer mode)* | event bus | **39,898** | 5/5 | 4/4 | Batched success ack is a different contract (see below). |
 | **awa** | job queue | **14,158** | 5/5 | 4/4 | Full job-queue feature surface; fastest job queue in this run. |
-| pgmq | visibility-timeout | 11,277 | 3/5 | 2/4 | Anti-scales past 16 workers; active-readers cliff ([audit](results/2026-05-09-full-sweep/audit_pgmq.md)). |
+| pgmq | visibility-timeout | 11,277 | 3/5 | 2/4 | Anti-scales past 16 workers; active-readers cliff ([audit](results/archive/2026-05-09-full-sweep/audit_pgmq.md)). |
 | pg-boss | job queue | 2,387 | 3/5 | 2/4 | Postgres-level chaos exits the worker; times out in two pressure cells. |
 | river | job queue | 501 | 5/5 | 2/4 | Times out in two sustained-pressure cells. |
 | absurd | job queue | 410 | 3/5 | 2/4 | Shutdown timeout under pressure. |
@@ -113,7 +113,7 @@ uv run bench run \
 uv run bench compare results/<run-id>
 ```
 
-Scenarios, phase types, chaos definitions, and Postgres-side diagnostics are in [`docs/method.md`](docs/method.md). Earlier reference runs: [awa vs pgque deep-dive](results/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md) · [alpha.3 sweep](results/2026-05-02-alpha3-sweep/SUMMARY.md) · [awa under a 10-minute held transaction](results/2026-05-01-awa-longtx-pg-ash/SUMMARY.md) · [awa extended scaling](results/2026-05-01-awa-extended-scaling/SUMMARY.md).
+Scenarios, phase types, chaos definitions, and Postgres-side diagnostics are in [`docs/method.md`](docs/method.md). Earlier reference runs: [awa vs pgque deep-dive](results/archive/2026-05-08-awa-pgque-comparison-v2/SUMMARY.md) · [alpha.3 sweep](results/archive/2026-05-02-alpha3-sweep/SUMMARY.md) · [awa under a 10-minute held transaction](results/archive/2026-05-01-awa-longtx-pg-ash/SUMMARY.md) · [awa extended scaling](results/archive/2026-05-01-awa-extended-scaling/SUMMARY.md) · [2026-10-10 programme sweep](results/archive/2026-10-10-programme-sweep/SUMMARY.md).
 
 ---
 

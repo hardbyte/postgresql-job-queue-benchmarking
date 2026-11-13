@@ -95,6 +95,16 @@ The harness sets these before launch. Your adapter reads them:
 | `JOB_PAYLOAD_BYTES` | rough payload size (default 256) |
 | `JOB_WORK_MS` | synthetic job work time (default 1 ms) |
 | `SAMPLE_EVERY_S` | emission cadence in seconds (default 5) |
+| `PRODUCER_RATE_CONTROL_FILE` | file holding the current per-replica target rate; re-read every producer tick and overrides `PRODUCER_RATE`. A value of `0` must stop the producer (no catch-up burst when it rises again). Harness-paced adapters discard `ENQUEUE` tokens while it reads `0`. |
+
+Optional knobs. Unset means the legacy behaviour, unchanged:
+
+| Var | Meaning |
+|---|---|
+| `CONSUMER_GATE_FILE` | Don't start consuming until this file reads `open` (poll it every ~200 ms). The producer, depth observer and sampler run as normal. Set only for runs with a `preload` phase; one-shot. Start workers late, or start them paused and resume, whichever the library supports. |
+| `JOB_PAYLOAD_KIND` | `random`: pad payloads with incompressible base64 noise (generated once at startup) so total size ≈ `JOB_PAYLOAD_BYTES`. |
+| `BENCH_QUEUE_COUNT` | Spread jobs across N logical queues (queue 0 may keep the legacy name) and consume all of them, splitting `WORKER_COUNT` evenly (min 1 per queue). Use the library's native multi-queue model. Keep the depth observer to one statement per tick where possible. |
+| `BENCH_DEPTH_ROTATE` | `1` (set with `--queue-count` > 1): an observer that can only probe one queue per query refreshes one queue per tick and reports the sum of the last known values. |
 
 ### JSONL out
 
@@ -159,6 +169,113 @@ The harness orchestrator is the long-term home for fixed-rate
 pacing — emitting dispatch tokens to adapters over stdin so the
 math lives in one place — but until that lands, every adapter is
 responsible for getting this loop right.
+
+### Scenario controls (optional, default-off)
+
+Two workload controls used by `scheduled_burst` / `scheduled_spread` and
+`retry_storm`. The harness sets these variables only when the phase list
+contains the matching phase type; an adapter that never sees them must
+behave exactly as before. Both point at JSON files the adapter re-reads at
+most once per second (the harness replaces them atomically); `{}` means
+"nothing to do". Docker adapters see them under the `/control` mount.
+
+| Var | Meaning |
+|---|---|
+| `JOB_FAILURE_CONTROL_FILE` | Failure plan `{"transient_pct": 30, "poison_pct": 1, "transient_failures": 1}`. |
+| `SCHEDULE_CONTROL_FILE` | Herd command `{"id": "...", "count": N, "run_at_ms": T, "spread_ms": S}`. Act once per new `id`. |
+| `JOB_MAX_ATTEMPTS` | Total attempts per job (first run included), mapped to the system's own setting (`max_attempts`, `retryLimit = N-1`, `queue_max_retries = N-1`, ...). Unset = system default. |
+
+Failure injection. While a plan is active the producer tags job `seq` by
+`bucket = (seq mod 10000) * 7919 mod 10000`: `bucket < poison_pct*100` →
+`{"fail": "poison"}`, else `bucket < (poison_pct+transient_pct)*100` →
+`{"fail": "transient", "fail_attempts": transient_failures}`; untagged jobs
+keep their exact payload. The worker fails a tagged attempt (`poison`:
+always; `transient`: while attempt ≤ `fail_attempts`) using the system's
+normal failure path, so its own retry, backoff and dead-letter handling
+apply. Emit, every tick:
+
+| Metric | Meaning |
+|---|---|
+| `injected_failure_rate` | injected failing attempts per second |
+| `retried_completion_rate` | transient jobs completed (after retrying) per second |
+| `poison_exhausted_rate` | poison failures on the job's final attempt per second |
+
+Scheduled herd. Instance 0 enqueues `count` jobs through the system's
+documented delayed-execution API, in batches from `herd_batches()` (≤500
+jobs, one run_at per batch; a spread herd uses batches covering ≤100 ms of
+the window), each payload carrying `"run_at_ms"`. Workers record
+`lateness = start − run_at_ms` (clamped at 0, early starts counted).
+Emit, once herd work has started:
+
+| Metric | Meaning |
+|---|---|
+| `schedule_lateness_{p50,p95,p99,max}_ms` | cumulative over herd jobs started by this replica |
+| `schedule_started_total`, `schedule_enqueued_total`, `schedule_early_total` | cumulative counts |
+| `schedule_preload_s` | seconds the last herd took to enqueue |
+| `scheduled_completion_rate` | herd jobs completed per second |
+
+Tagged and herd jobs stay out of the `claim_*` / `subscriber_*` /
+`end_to_end_*` windows; herd jobs also stay out of `completion_rate`. If the
+system has no delayed execution, ignore the herd command and add
+`"scheduled_jobs": "unsupported"` to the descriptor (`"native"` is implied;
+`"durable-sleep"` or similar names an emulation). The Python adapters share
+`adapter_common/bench_controls.py`, which is also the reference
+implementation for the other languages.
+
+Optionally declare `state_queries` in `adapter.json`: `{"scheduled": "SELECT
+count(*) ...", "retryable": "...", "dead": "...", "running": "..."}`. The
+harness polls them during these scenarios for DB-side job-state counts.
+`running` counts jobs claimed by a worker and not yet finished, in whatever
+state the system uses for that (`running`, `active`, `executing`, invisible
+pgmq messages, an open pgque batch).
+
+### Mass abandonment (optional, default-off)
+
+Used by the `mass_abandon` scenario: a fleet claims a large backlog, every
+replica is SIGKILLed at once while holding its claims, and a fresh fleet
+starts. The scenario measures how the system notices the abandoned claims
+and works them off.
+
+| Var | Meaning |
+|---|---|
+| `JOB_ABANDON_CONTROL_FILE` | JSON `{"tag": bool, "hold": bool}`; `{}` means both false. Read once at startup, before any consumer starts, then at most once per second. |
+
+- Producer: while `tag` is true, every job it enqueues carries
+  `"abandon": 1` in its payload. Other payload fields are unchanged.
+- Worker, tagged job, `hold` true: count it in `abandon_held_jobs`, then
+  block until the process dies. Do not complete, fail, snooze or return,
+  and ignore the system's own cancellation (job timeouts, context
+  cancellation): the job must stay claimed exactly as a handler stuck in a
+  dead process would leave it. Batch handlers (one handler call for many
+  jobs) hold the whole batch.
+- Worker, tagged job, `hold` false: run normally and complete. Count it in
+  `rescued_completed_total`; keep it out of `completion_rate` and the
+  `claim_*` / `subscriber_*` / `end_to_end_*` windows, like herd jobs.
+- The harness writes `{"tag": true, "hold": true}` before the run, SIGKILLs
+  every replica in the `abandon-kill` phase, writes `{"tag": false,
+  "hold": false}` and only then starts fresh replicas, so a live process
+  never sees `hold` flip.
+
+Emit every tick while the variable is set:
+
+| Metric | Meaning | Window |
+|---|---|---|
+| `abandon_held_jobs` | jobs this process is holding right now | 0 |
+| `abandon_tagged_enqueued_total` | tagged jobs this process enqueued (cumulative) | 0 |
+| `rescued_completed_total` | tagged jobs this process completed (cumulative) | 0 |
+| `rescued_completion_rate` | tagged jobs completed per second | `SAMPLE_EVERY_S` |
+
+Add `"abandon_rescue": "<mechanism (knob)>"` to the descriptor, naming how
+the system recovers a claim whose worker died and the setting that bounds
+it, e.g. `"heartbeat + deadline (LEASE_DEADLINE_MS)"`, `"visibility timeout
+(VISIBILITY_TIMEOUT_S)"`, `"stuck-job rescuer (RESCUE_AFTER_SECS)"`, or
+`"none"` when the system leaves abandoned claims for an operator. Declare
+`state_queries.running` (above).
+
+A process must be able to hold a large number of claims for this to be a
+mass abandonment: honour a large `WORKER_COUNT` (or, for batch handlers,
+`CONSUMER_BATCH_SIZE` / `SUBSCRIBER_BATCH_SIZE`) without opening a
+connection per held job.
 
 ### Shutdown
 

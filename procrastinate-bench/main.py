@@ -7,12 +7,20 @@ import os
 import signal
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from time import monotonic
 from urllib.parse import urlparse
 
 import procrastinate
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter_common"))
+from bench_controls import (  # noqa: E402
+    ScenarioControls,
+    herd_preload_loop,
+    silence_injected_failures,
+)
 
 
 @dataclass
@@ -40,6 +48,31 @@ def env_int(key: str, default: int) -> int:
 def env_str(key: str, default: str) -> str:
     value = os.environ.get(key)
     return value if value is not None else default
+
+
+def payload_padding(length: int) -> str:
+    """JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s."""
+    length = max(0, length)
+    if os.environ.get("JOB_PAYLOAD_KIND") == "random":
+        import base64
+
+        return base64.b64encode(os.urandom(length))[:length].decode()
+    return "x" * length
+
+
+async def wait_for_consumer_gate(shutdown: asyncio.Event) -> None:
+    """Return once CONSUMER_GATE_FILE reads `open` (immediately if unset)."""
+    path = os.environ.get("CONSUMER_GATE_FILE")
+    if not path:
+        return
+    while not shutdown.is_set():
+        try:
+            with open(path) as fh:
+                if fh.read().strip() == "open":
+                    return
+        except OSError:
+            pass
+        await asyncio.sleep(0.2)
 
 
 def read_producer_rate(default: int) -> int:
@@ -151,7 +184,6 @@ def build_worker(queue: str, worker_count: int, *, wait: bool):
         concurrency=worker_count,
         wait=wait,
         fetch_job_polling_interval=0.05,
-        abort_job_polling_interval=0.05,
         listen_notify=True,
         delete_jobs="never",
         install_signal_handlers=False,
@@ -285,7 +317,25 @@ async def scenario_long_horizon() -> None:
     producer_batch_max = max(1, env_int("PRODUCER_BATCH_MAX", 1))
     producer_batch_ms = max(1, env_int("PRODUCER_BATCH_MS", 10))
 
+    # Rescue for jobs left in `doing` by a SIGKILLed worker. Procrastinate
+    # retries them only through application code: this is the documented
+    # "retry stalled jobs" periodic task, enabled when the knob is set.
+    stalled_after_s = env_int("STALLED_AFTER_SECS", 0)
+    stalled_sweep_cron = "* * * * * */10"
+
     queue = "procrastinate_longhorizon_bench"
+    # BENCH_QUEUE_COUNT queues (queue 0 keeps the legacy name). One worker
+    # serves all of them, procrastinate's native multi-queue model.
+    queues = [queue] + [
+        f"{queue}_{i}" for i in range(1, max(1, env_int("BENCH_QUEUE_COUNT", 1)))
+    ]
+    # Jobs carry JOB_PAYLOAD_BYTES of padding only with the opt-in random
+    # payload kind; otherwise they hold just seq and timestamp.
+    padding = (
+        payload_padding(env_int("JOB_PAYLOAD_BYTES", 256) - 96)
+        if os.environ.get("JOB_PAYLOAD_KIND") == "random"
+        else None
+    )
     # Parse the URL path so query params like ?sslmode=disable don't leak
     # into the descriptor's reported db_name.
     db_name = (urlparse(database_url()).path or "/").lstrip("/") or "procrastinate_bench"
@@ -302,6 +352,12 @@ async def scenario_long_horizon() -> None:
             "version": "0.1.0",
             "schema_version": os.environ.get("PROCRASTINATE_SCHEMA_VERSION", "current"),
             "db_name": db_name,
+            "abandon_rescue": (
+                "retry-stalled-jobs periodic task every 10 s: get_stalled_jobs + "
+                "retry_job, worker heartbeat 5 s (STALLED_AFTER_SECS)"
+                if stalled_after_s > 0
+                else "none"
+            ),
             "started_at": _now_iso(),
         }
     )
@@ -318,42 +374,132 @@ async def scenario_long_horizon() -> None:
     # procrastinate discovers tasks by name, so we can shadow the module-level
     # `bench_job` with a queue-scoped handler. We use a fresh App to avoid
     # cross-scenario leakage.
+    # MAX_CONNECTIONS caps the psycopg pool. Unset keeps psycopg_pool's
+    # default of 4.
+    pool_size = env_int("MAX_CONNECTIONS", 0)
+    pool_kwargs = {"min_size": min(4, pool_size), "max_size": pool_size} if pool_size > 0 else {}
     lh_app = procrastinate.App(
-        connector=procrastinate.PsycopgConnector(conninfo=database_url()),
+        connector=procrastinate.PsycopgConnector(
+            conninfo=database_url(), **pool_kwargs
+        ),
     )
+    controls = ScenarioControls()
+    if controls.failure_enabled:
+        silence_injected_failures("procrastinate.worker")
+    # JOB_MAX_ATTEMPTS counts total attempts; procrastinate's
+    # RetryStrategy.max_attempts counts retries after the first run.
+    task_retry: procrastinate.RetryStrategy | bool = False
+    if controls.max_attempts is not None and controls.max_attempts > 1:
+        task_retry = procrastinate.RetryStrategy(max_attempts=controls.max_attempts - 1)
 
-    @lh_app.task(queue=queue, name="long_horizon_job", pass_context=True)
+    @lh_app.task(
+        queue=queue, name="long_horizon_job", pass_context=True, retry=task_retry
+    )
     async def long_horizon_task(
-        context, seq: int, created_at_iso: str, padding: str = ""
+        context,
+        seq: int,
+        created_at_iso: str,
+        padding: str = "",
+        fail: str | None = None,
+        fail_attempts: int = 1,
+        run_at_ms: int | None = None,
+        abandon: int | None = None,
     ) -> None:
         nonlocal completed
-        try:
-            created = _dt.datetime.fromisoformat(created_at_iso)
-            now = _dt.datetime.now(_dt.timezone.utc)
-            latency_ms = max(0.0, (now - created).total_seconds() * 1000.0)
-        except Exception:
-            latency_ms = 0.0
-        latencies_ms.append((time.monotonic(), latency_ms))
+        tags = {
+            key: value
+            for key, value in (
+                ("fail", fail),
+                ("fail_attempts", fail_attempts),
+                ("run_at_ms", run_at_ms),
+                ("abandon", abandon),
+            )
+            if value is not None
+        }
+        tagged = fail is not None or run_at_ms is not None or abandon is not None
+        if abandon is not None:
+            await controls.hold_if_abandoning()
+        if tagged:
+            controls.on_start(tags)
+            controls.check_failure(tags, attempt=context.job.attempts + 1)
+        else:
+            try:
+                created = _dt.datetime.fromisoformat(created_at_iso)
+                now = _dt.datetime.now(_dt.timezone.utc)
+                latency_ms = max(0.0, (now - created).total_seconds() * 1000.0)
+            except Exception:
+                latency_ms = 0.0
+            latencies_ms.append((time.monotonic(), latency_ms))
         if work_ms:
             await asyncio.sleep(work_ms / 1000.0)
-        completed += 1
+        if controls.counts_as_completion(tags):
+            completed += 1
+        if tagged:
+            controls.on_complete(tags)
+
+    worker_queues = list(queues)
+    if stalled_after_s > 0:
+        maint_queue = f"{queue}_maint"
+        worker_queues.append(maint_queue)
+
+        # Documented recipe (howto/production/retry_stalled_jobs). The `lock`
+        # serialises sweeps so a slow sweep never overlaps the next one and
+        # re-retries a job that has since been picked up again.
+        @lh_app.periodic(cron=stalled_sweep_cron, periodic_id="retry_stalled_jobs")
+        @lh_app.task(
+            queue=maint_queue,
+            name="retry_stalled_jobs",
+            queueing_lock="retry_stalled_jobs",
+            lock="retry_stalled_jobs",
+            pass_context=True,
+        )
+        async def retry_stalled_jobs(context, timestamp: int) -> None:
+            stalled_jobs = await lh_app.job_manager.get_stalled_jobs(
+                seconds_since_heartbeat=stalled_after_s
+            )
+            for job in stalled_jobs:
+                await lh_app.job_manager.retry_job(job)
 
     async with lh_app.open_async():
         worker = lh_app._worker(
-            queues=[queue],
+            queues=worker_queues,
             concurrency=worker_count,
             wait=True,
             fetch_job_polling_interval=0.05,
-            abort_job_polling_interval=0.05,
             listen_notify=True,
             delete_jobs="never",
             install_signal_handlers=False,
             update_heartbeat_interval=5,
-            stalled_worker_timeout=15,
+            stalled_worker_timeout=stalled_after_s if stalled_after_s > 0 else 15,
         )
-        worker_task = asyncio.create_task(worker.run())
-
         shutdown = asyncio.Event()
+
+        worker_started = False
+
+        # The worker stops itself when a side task such as the LISTEN
+        # listener loses its connection. Restart it, as a process supervisor
+        # would restart `procrastinate worker`.
+        async def run_worker() -> None:
+            nonlocal worker_started
+            await wait_for_consumer_gate(shutdown)
+            while not shutdown.is_set():
+                worker_started = True
+                try:
+                    await worker.run()
+                except Exception as exc:
+                    reason = repr(exc)
+                else:
+                    reason = "stopped"
+                if shutdown.is_set():
+                    return
+                print(
+                    f"[procrastinate] worker exited ({reason}); restarting in 1 s",
+                    file=sys.stderr,
+                )
+                await asyncio.sleep(1)
+
+        worker_task = asyncio.create_task(run_worker())
+
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -363,8 +509,14 @@ async def scenario_long_horizon() -> None:
 
         async def producer() -> None:
             nonlocal enqueued, current_producer_target_rate
+            if producer_mode == "depth-target" and not _observer_enabled():
+                # Only instance 0 sees the depth signal, so only it produces.
+                await shutdown.wait()
+                return
             seq = 0
-            deferrer = long_horizon_task.configure(queue=queue)
+            deferrers = [long_horizon_task.configure(queue=q) for q in queues]
+            batch_index = 0
+            extra = {} if padding is None else {"padding": padding}
             next_t = loop.time()
             rate_credit = 0.0
             last_credit_tick = loop.time()
@@ -404,22 +556,30 @@ async def scenario_long_horizon() -> None:
                             continue
                         batch_count = min(producer_batch_max, int(rate_credit))
                         rate_credit -= batch_count
+                deferrer = deferrers[batch_index % len(deferrers)]
+                batch_index += 1
+                kwargs_list = [
+                    {
+                        "seq": seq + i,
+                        "created_at_iso": _now_iso(),
+                        **extra,
+                        **controls.failure_tag(seq + i),
+                        **controls.abandon_tag(),
+                    }
+                    for i in range(batch_count)
+                ]
                 try:
                     if batch_count == 1:
-                        await deferrer.defer_async(
-                            seq=seq,
-                            created_at_iso=_now_iso(),
-                        )
+                        await deferrer.defer_async(**kwargs_list[0])
                     else:
                         # Documented bulk path: `Task.batch_defer_async`
                         # (procrastinate.tasks.Task line 143). Issues a single
                         # multi-row INSERT via JobManager.batch_defer_jobs_async.
                         # Docs: https://procrastinate.readthedocs.io/en/stable/howto/advanced/batch.html
-                        kwargs_list = [
-                            {"seq": seq + i, "created_at_iso": _now_iso()}
-                            for i in range(batch_count)
-                        ]
                         await deferrer.batch_defer_async(*kwargs_list)
+                    controls.record_abandon_tagged(
+                        sum("abandon" in kwargs for kwargs in kwargs_list)
+                    )
                     enqueued += batch_count
                     seq += batch_count
                 except Exception as exc:
@@ -427,6 +587,24 @@ async def scenario_long_horizon() -> None:
                         f"[procrastinate] producer insert failed: {exc}",
                         file=sys.stderr,
                     )
+
+        async def enqueue_herd(first_seq: int, size: int, run_at_ms: int) -> None:
+            herd_deferrer = long_horizon_task.configure(
+                queue=queue,
+                schedule_at=_dt.datetime.fromtimestamp(
+                    run_at_ms / 1000.0, tz=_dt.timezone.utc
+                ),
+            )
+            await herd_deferrer.batch_defer_async(
+                *(
+                    {
+                        "seq": first_seq + i,
+                        "created_at_iso": _now_iso(),
+                        "run_at_ms": run_at_ms,
+                    }
+                    for i in range(size)
+                )
+            )
 
         async def depth_poller() -> None:
             nonlocal queue_depth
@@ -437,23 +615,35 @@ async def scenario_long_horizon() -> None:
                 while not shutdown.is_set():
                     await asyncio.sleep(0.25)
                 return
-            while not shutdown.is_set():
-                try:
-                    async with await connect() as conn:
+            conn: AsyncConnection | None = None
+            try:
+                while not shutdown.is_set():
+                    try:
+                        if conn is None or conn.closed:
+                            conn = await connect()
                         async with conn.cursor() as cur:
                             await cur.execute(
                                 "SELECT count(*)::bigint AS cnt "
                                 "FROM procrastinate_jobs "
-                                "WHERE queue_name = %s AND status = 'todo'",
-                                (queue,),
+                                + (
+                                    "WHERE queue_name = ANY(%s) AND status = 'todo'"
+                                    if len(queues) > 1
+                                    else "WHERE queue_name = %s AND status = 'todo'"
+                                ),
+                                (queues if len(queues) > 1 else queue,),
                             )
                             row = await cur.fetchone()
                             queue_depth = int(row["cnt"]) if row else 0
-                except Exception:
-                    pass
-                # Fast poll so the producer's depth-target backoff
-                # sees fresh values.
-                await asyncio.sleep(0.2)
+                    except Exception:
+                        if conn is not None:
+                            await conn.close()
+                        conn = None
+                    # Fast poll so the producer's depth-target backoff
+                    # sees fresh values.
+                    await asyncio.sleep(0.2)
+            finally:
+                if conn is not None:
+                    await conn.close()
 
         async def sampler() -> None:
             now_epoch = int(time.time())
@@ -484,6 +674,7 @@ async def scenario_long_horizon() -> None:
                     ("completion_rate", cmp_rate, float(sample_every_s)),
                     ("queue_depth", float(queue_depth), 0.0),
                     ("producer_target_rate", current_producer_target_rate, 0.0),
+                    *controls.metrics(dt, float(sample_every_s)),
                 ]:
                     if metric in _OBSERVER_METRICS and not _observer_enabled():
                         continue
@@ -504,14 +695,22 @@ async def scenario_long_horizon() -> None:
             asyncio.create_task(producer(), name="producer"),
             asyncio.create_task(depth_poller(), name="depth"),
             asyncio.create_task(sampler(), name="sampler"),
+            asyncio.create_task(
+                herd_preload_loop(
+                    controls, shutdown, enqueue_herd, log_prefix="procrastinate"
+                ),
+                name="herd",
+            ),
         ]
         try:
             await shutdown.wait()
         finally:
             shutdown.set()
+            controls.exit_if_holding()
             for t in tasks:
                 t.cancel()
-            worker.stop()
+            if worker_started:
+                worker.stop()
             try:
                 await asyncio.wait_for(
                     asyncio.gather(worker_task, *tasks, return_exceptions=True),
@@ -614,6 +813,13 @@ async def main() -> None:
     worker_count = env_int("WORKER_COUNT", 50)
     latency_iterations = env_int("LATENCY_ITERATIONS", 100)
 
+    if scenario == "long_horizon":
+        # long_horizon opens its own app; don't hold this app's pool open.
+        async with app.open_async():
+            await ensure_schema_applied()
+        await scenario_long_horizon()
+        return
+
     async with app.open_async():
         await ensure_schema_applied()
         if scenario == "migrate_only":
@@ -621,9 +827,6 @@ async def main() -> None:
             return
         if scenario == "worker_only":
             await scenario_worker_only()
-            return
-        if scenario == "long_horizon":
-            await scenario_long_horizon()
             return
 
         results: list[dict] = []

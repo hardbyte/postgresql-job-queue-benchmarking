@@ -1,6 +1,6 @@
 # Postgres Queue Field Guide
 
-A responsive, data-driven static comparison website for selected PostgreSQL-backed job and queue systems. It distinguishes documented behavior, repository adapter coverage and teaching simulations. The site publishes no old point-in-time benchmark reports or numerical leaderboard; existing repository results/history are preserved.
+A responsive, data-driven static comparison website for selected PostgreSQL-backed job and queue systems. It distinguishes documented behavior, measured results from one dated benchmark run of the repository's adapters, and teaching simulations. Results are grouped by scenario with their run context; there is no single score or leaderboard. Older runs stay in `results/archive/` and are not published.
 
 ## Coverage
 
@@ -25,10 +25,17 @@ Open `http://127.0.0.1:8765/`. The output uses relative paths and directory inde
 
 `build.cjs` replaces only the ignored, generated `website/dist` directory on each build. Do not store manual work in that directory. It emits 14 profile pages, directory/filter UI, comparison, methodology, primary sources, benchmark methodology, the direct-action job/worker/mailbox model, a 404 page and static assets. The lab bytes are copied from `simulations/awa-failure-windows/index.html`, which remains their only canonical source.
 
+## Benchmark results
+
+`data/results.json` is generated, not edited: run `uv run python scripts/export_site_results.py results/<sweep> [results/<rerun> ...] --cells-dir results/<sweep>/cells` from the repository root after a programme sweep (`scripts/run_programme_sweep.sh`). It carries the run context (host, PostgreSQL, settings, harness commit, versions), curated metrics per scenario and system, and downsampled recovery curves; local paths are never exported. `--cells-dir` copies each cell's `summary.json` and `manifest.json` into the repository so every chart links to its raw summary.
+
+`data/results-notes.json` is the editorial layer: per scenario, the question, the exact setup, reading notes, findings and which charts to draw. Findings are written against a specific run; update them with the data. `charts.cjs` renders every chart as static SVG at build time, each with a table view and keyboard-reachable marks. Every measured system has a fixed colour (`--sys-<id>` in `assets/style.css`), validated for colour-vision separation; identity is always also carried by the system's name.
+
 ## Architecture and maintenance
 
 - `data/catalog.json`: curated system records, inspected source revisions, release metadata, dated primary evidence, seven capability fields, unknown/qualified statuses, operational tradeoffs and coverage labels. `hasAdapter` means only that an adapter exists locally.
 - `build.cjs`: escaped HTML templates and a deterministic static build. No framework or backend runtime.
+- `charts.cjs`: dependency-free SVG bar, dumbbell and small-multiple charts with table views.
 - `assets/app.js`: directory filters, four-system comparison selection, query links, accessible menu and optional localStorage persistence. No analytics or external runtime requests.
 - `lint.cjs` / `test.cjs`: JavaScript/schema/source-reference checks, contract distinctions, adapter identity, generated link/base-path checks, canonical lab identity and publication-surface checks.
 - `browser.test.cjs`: browser interactions and WCAG 2.1 AA axe checks, desktop and narrow-screen QA. Generated screenshots/reports are ignored under `artifacts/`.

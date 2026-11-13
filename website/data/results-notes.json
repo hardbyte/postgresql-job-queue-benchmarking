@@ -1,0 +1,642 @@
+{
+  "intro": "Every system ran the same scenarios, one after another, against a fresh PostgreSQL 18.6 cluster capped at 4 CPUs, on one host. Each section says what it asks, how it was run, and what to watch for when reading it. Absolute numbers depend on this host; the comparisons within a section are the point.",
+  "contracts": [
+    {
+      "systems": [
+        "awa",
+        "oban",
+        "pg-boss",
+        "procrastinate",
+        "river"
+      ],
+      "label": "Job frameworks",
+      "text": "A job is claimed by one worker, retried with backoff and completed or failed individually."
+    },
+    {
+      "systems": [
+        "absurd"
+      ],
+      "label": "Durable workflow",
+      "text": "Tasks run as checkpointed steps that replay after an interruption; driven here as one-step jobs through its worker.",
+      "short": "workflow"
+    },
+    {
+      "systems": [
+        "pgmq"
+      ],
+      "label": "Visibility queue",
+      "text": "A message becomes invisible when read and reappears unless deleted; no per-job retry policy, scheduling or dead-letter handling beyond its archive.",
+      "short": "visibility queue"
+    },
+    {
+      "systems": [
+        "pgque"
+      ],
+      "label": "Event queue (PgQ lineage)",
+      "text": "Consumers read batches cut by a ticker and acknowledge a whole batch in one statement. Driven here as competing consumers; batch acknowledgement is a lighter contract than per-job completion.",
+      "short": "event batches"
+    }
+  ],
+  "sections": [
+    {
+      "id": "saturation",
+      "title": "Throughput at saturation",
+      "question": "How many 1 ms jobs per second does one worker process complete as it gets more workers?",
+      "setup": "Out of the box: the producer keeps 4,000 jobs queued; one worker process with 4, 16, 64 or 128 workers and a pool of workers + 8 connections; 30 s warmup, then 150 s measured. Tuned: each system at the settings its own documentation points to, within one budget for all: at most 4 processes, 128 handlers and 200 connections, the same 1 ms jobs, measured at one queue and at its recommended number of queues.",
+      "read": [
+        "PgQue and PGMQ provide lighter contracts than the job frameworks; compare them with each other, not with job frameworks.",
+        "Queue wait dominates claim latency here by design, so throughput is the figure to compare.",
+        "The tuned settings are listed below with their sources in each system's proposal; corrections from maintainers are welcome."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "sat_w4",
+          "metric": "jobs_per_s",
+          "title": "4 workers",
+          "group": "grid"
+        },
+        {
+          "type": "bars",
+          "cell": "sat_w16",
+          "metric": "jobs_per_s",
+          "title": "16 workers",
+          "group": "grid"
+        },
+        {
+          "type": "bars",
+          "cell": "sat_w64",
+          "metric": "jobs_per_s",
+          "title": "64 workers",
+          "group": "grid"
+        },
+        {
+          "type": "bars",
+          "cell": "sat_w128",
+          "metric": "jobs_per_s",
+          "title": "128 workers",
+          "group": "grid"
+        },
+        {
+          "type": "bars",
+          "cell": "sat_tuned_best",
+          "metric": "jobs_per_s",
+          "title": "Tuned: completed jobs/s",
+          "caption": "Each system at its recommended queue count."
+        },
+        {
+          "type": "dumbbell",
+          "cellA": "sat_tuned",
+          "cellB": "sat_tuned_best",
+          "a": "jobs_per_s",
+          "b": "jobs_per_s",
+          "aLabel": "1 queue",
+          "bLabel": "Recommended queues",
+          "title": "What sharding across queues adds"
+        },
+        {
+          "type": "settings",
+          "title": "Tuned settings",
+          "caption": "Processes × handlers, queues and connections, plus each system's documented knobs.",
+          "rows": [
+            {
+              "system": "absurd",
+              "text": "4 × 32 handlers; 1 or 4 queues; producer batches of 256."
+            },
+            {
+              "system": "awa",
+              "text": "1 × 128 handlers; 1 or 4 queues; 64 connections; lease rotation 1 s (the default); producer batches of 1,000."
+            },
+            {
+              "system": "oban",
+              "text": "4 × 32 handlers; 1 queue; 40 connections each; dispatch_cooldown 1 ms (default 5 ms); producer batches of 1,000."
+            },
+            {
+              "system": "pg-boss",
+              "text": "4 × 32 handlers; 1 queue; pool of 40 each; batchSize 32, burstWhenBatchFull, LISTEN/NOTIFY; producer batches of 1,000."
+            },
+            {
+              "system": "pgmq",
+              "text": "4 × 32 consumers; 1 or 16 queues, every consumer sweeping all queues; read batches of 32; ack with pgmq.delete; producer batches of 1,000."
+            },
+            {
+              "system": "pgque",
+              "text": "4 processes × 4 cooperative subconsumers, 32 handlers each; 1 queue; ticker_loop every 10 ms; producer batches of 1,000."
+            },
+            {
+              "system": "procrastinate",
+              "text": "4 × 32 handlers; 1 queue; pool of 33 each (concurrency + 1, as its docs advise); producer batches of 500."
+            },
+            {
+              "system": "river",
+              "text": "1 × 128 handlers; 1 or 4 queues; 32 connections; FetchCooldown 2 ms and FetchPollInterval 20 ms (River's own benchmark settings); producer batches of 1,000."
+            }
+          ]
+        },
+        {
+          "type": "bars",
+          "cell": "sat_w64",
+          "metric": "peak_dead_tup",
+          "log": true,
+          "title": "Peak dead tuples at 64 workers",
+          "caption": "Rows waiting for vacuum in the queue's tables while saturated."
+        }
+      ]
+    },
+    {
+      "id": "ref800",
+      "title": "Latency at a steady 800 jobs/s",
+      "question": "At a rate every system should sustain, how quickly does a job go from insert to completion?",
+      "setup": "800 jobs/s offered, 32 workers, one process; 60 s warmup, then 300 s measured.",
+      "read": [
+        "A system that cannot keep up builds a backlog, and its latency grows for the whole run; those are marked with the rate they reached."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "ref800",
+          "metric": "claim_p99",
+          "log": true,
+          "title": "Pickup latency, p99",
+          "caption": "Insert to a worker starting the job.",
+          "behindMetric": "jobs_per_s",
+          "behindTarget": 800
+        },
+        {
+          "type": "bars",
+          "cell": "ref800",
+          "metric": "wal_per_job",
+          "title": "WAL written per job"
+        }
+      ]
+    },
+    {
+      "id": "idle",
+      "title": "Cost of doing nothing",
+      "question": "With workers running and no jobs, how much does each system cost the database?",
+      "setup": "One process with 8 workers after a short warmup; 10 minutes with nothing enqueued.",
+      "read": [
+        "Background polling, heartbeats and maintenance all show up here; they are paid on every deployment, busy or not."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "idle",
+          "metric": "xacts_per_s",
+          "title": "Transactions per second while idle"
+        },
+        {
+          "type": "bars",
+          "cell": "idle",
+          "metric": "wal_per_s",
+          "title": "WAL written while idle"
+        },
+        {
+          "type": "bars",
+          "cell": "idle",
+          "metric": "pg_mem",
+          "title": "Postgres private memory while idle",
+          "caption": "Backend-local memory in the Postgres container (shared buffers excluded)."
+        }
+      ]
+    },
+    {
+      "id": "chaos",
+      "title": "PostgreSQL restart under load",
+      "question": "When the database restarts mid-run, does the system come back and work off what accumulated?",
+      "setup": "Two processes, 400 jobs/s each, 16 workers each. 90 s baseline; Postgres stopped for 45 s and started again; 120 s recovery.",
+      "read": [
+        "Awa, Oban, pg-boss and River reconnect inside the running worker. PGMQ and PgQue are consumed by the adapters’ own loops, which reconnect.",
+        "Absurd's Python worker loop and Procrastinate's worker both stop when they lose the database, and expect a process supervisor (systemd, Kubernetes) to start them again. Their adapters restart the worker after 1 s, as a supervisor would. Without a supervisor, these workers stay stopped.",
+        "Zero after the restart means no jobs completed for the rest of the run."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "pg_restart",
+          "metric": "recovery_jobs",
+          "title": "Completed jobs/s after the restart",
+          "zeroNote": "never recovered"
+        },
+        {
+          "type": "bars",
+          "cell": "pg_restart",
+          "metric": "recovery_depth",
+          "title": "Queue depth after the restart",
+          "log": true
+        }
+      ]
+    },
+    {
+      "id": "neighbour",
+      "title": "Impact on a neighbouring application",
+      "question": "Does a busy queue slow down unrelated transactions on the same server?",
+      "setup": "pgbench runs a TPC-B-like workload at a fixed 300 TPS on a separate database throughout. The queue runs at 0, 400, 1,600, then 400 jobs/s.",
+      "read": [
+        "Latency is measured from each pgbench transaction's scheduled start, so it includes any queueing."
+      ],
+      "charts": [
+        {
+          "type": "dumbbell",
+          "cell": "neighbour",
+          "a": "p99_baseline",
+          "b": "p99_4x",
+          "aLabel": "Queue idle",
+          "bLabel": "Queue at 1,600 jobs/s",
+          "title": "Neighbour transaction latency, p99"
+        }
+      ]
+    },
+    {
+      "id": "logical",
+      "title": "Logical replication alongside the queue",
+      "question": "Does the queue coexist with CDC on the same database, including when the CDC consumer stops?",
+      "setup": "A FOR ALL TABLES publication, a pgoutput slot and a streaming consumer; 400 jobs/s. The consumer is frozen for 4 minutes, then resumes.",
+      "read": [
+        "A table without a replica identity rejects UPDATE and DELETE while a FOR ALL TABLES publication exists.",
+        "Dead catalog tuples pile up when a system creates or truncates tables while a stalled slot holds back catalog cleanup."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "logical",
+          "metric": "no_replica_identity",
+          "title": "Published tables without a replica identity"
+        },
+        {
+          "type": "bars",
+          "cell": "logical",
+          "metric": "catalog_dead",
+          "log": true,
+          "title": "Dead catalog tuples while the consumer was stalled"
+        },
+        {
+          "type": "bars",
+          "cell": "logical",
+          "metric": "retained_wal",
+          "title": "WAL retained by the stalled slot"
+        }
+      ]
+    },
+    {
+      "id": "scheduled",
+      "title": "A herd of scheduled jobs",
+      "question": "When 20,000 jobs come due at the same instant, how late do they start, and do immediate jobs suffer?",
+      "setup": "20,000 jobs scheduled for one instant while a 200 jobs/s stream of immediate jobs keeps flowing; 16 workers.",
+      "read": [
+        "PgQue has no delayed delivery and is omitted from the herd figures."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "scheduled_burst",
+          "metric": "lateness_p99",
+          "log": true,
+          "title": "Herd lateness, p99"
+        },
+        {
+          "type": "bars",
+          "cell": "scheduled_burst",
+          "metric": "immediate_claim_p99",
+          "log": true,
+          "title": "Immediate jobs while the herd drains, claim p99"
+        }
+      ]
+    },
+    {
+      "id": "retry",
+      "title": "A storm of failing jobs",
+      "question": "When a third of jobs start failing, does useful work keep flowing?",
+      "setup": "200 jobs/s, 16 workers. For 6 minutes 30% of new jobs fail once and 1% always fail; at most 5 attempts; each system's own backoff applies.",
+      "read": [
+        "Backoff policies differ by orders of magnitude between systems; that difference is part of what this measures."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "retry_storm",
+          "metric": "storm_good_jobs",
+          "title": "Good jobs completed per second during the storm"
+        },
+        {
+          "type": "bars",
+          "cell": "retry_storm",
+          "metric": "storm_claim_p99",
+          "log": true,
+          "title": "Claim latency during the storm, p99"
+        }
+      ]
+    },
+    {
+      "id": "fanout",
+      "title": "Many queues",
+      "question": "What does spreading the same load over 200 queues cost, and how does each system serve many queues?",
+      "setup": "One process. 200 jobs/s in total, round-robin over 1 queue and then over 200 queues (1 job/s per queue); 16 handlers and 24 connections requested; each system uses its own idiomatic way of serving many queues, the same in both runs; 4 minutes busy, then 3 minutes idle.",
+      "read": [
+        "Awa (weighted workers), Procrastinate (one worker over every queue), PGMQ and PgQue share 16 handlers across all 200 queues.",
+        "River, Oban, pg-boss and Absurd need at least one worker per queue, so they run 200 at 200 queues. That is part of the result.",
+        "Per-queue polling and listening connections multiply with the queue count."
+      ],
+      "charts": [
+        {
+          "type": "dumbbell",
+          "cellA": "fanout_q1",
+          "cellB": "fanout_q200",
+          "a": "claim_p99",
+          "b": "claim_p99",
+          "aLabel": "1 queue",
+          "bLabel": "200 queues",
+          "log": true,
+          "title": "Claim latency, p99"
+        },
+        {
+          "type": "dumbbell",
+          "cellA": "fanout_q1",
+          "cellB": "fanout_q200",
+          "a": "idle_xacts",
+          "b": "idle_xacts",
+          "aLabel": "1 queue",
+          "bLabel": "200 queues",
+          "title": "Transactions per second once idle"
+        },
+        {
+          "type": "dumbbell",
+          "cellA": "fanout_q1",
+          "cellB": "fanout_q200",
+          "a": "backends",
+          "b": "backends",
+          "aLabel": "1 queue",
+          "bLabel": "200 queues",
+          "title": "Postgres connections"
+        },
+        {
+          "type": "settings",
+          "title": "How each system serves 200 queues",
+          "rows": [
+            {
+              "system": "absurd",
+              "text": "One client per queue (200 handler slots), sharing 16 connections; 250 ms poll (the SDK default)."
+            },
+            {
+              "system": "awa",
+              "text": "Weighted mode: one pool of 16 workers across every queue; one LISTEN connection."
+            },
+            {
+              "system": "oban",
+              "text": "One producer per queue with limit 1 (200 slots); idle queues don't poll."
+            },
+            {
+              "system": "pg-boss",
+              "text": "One worker per queue (200); LISTEN/NOTIFY wakes idle workers."
+            },
+            {
+              "system": "pgmq",
+              "text": "16 consumers sweeping their share of the queues; insert NOTIFY on one LISTEN connection; 500 ms fallback poll."
+            },
+            {
+              "system": "pgque",
+              "text": "Shared consumer over 16 connections; one LISTEN connection; ticker_loop every 50 ms."
+            },
+            {
+              "system": "procrastinate",
+              "text": "One worker over all 200 queues with concurrency 16; one LISTEN connection."
+            },
+            {
+              "system": "river",
+              "text": "One producer per queue with MaxWorkers 1 (200); River's default 100 ms cooldown and 1 s poll; one notifier connection."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "large_args",
+      "title": "Large job arguments",
+      "question": "What happens with 64 KiB and 1 MiB arguments, and does the database shrink back afterwards?",
+      "setup": "Incompressible arguments. Saturation: one process, 64 workers, 2,000 jobs queued, 120 s. Backlog: about 8 GiB of 1 MiB jobs preloaded by four processes, then drained by 4 × 16 workers.",
+      "read": [
+        "The saturation cells are bound by one producer connection, so they compare insert paths as much as workers.",
+        "PostgreSQL keeps a table's disk space after its rows are deleted; only systems that truncate or drop storage give it back without VACUUM FULL."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "sat_1048576",
+          "metric": "jobs_per_s",
+          "title": "1 MiB args: MiB/s completed",
+          "unit": "MiB/s",
+          "scale": 1
+        },
+        {
+          "type": "bars",
+          "cell": "sat_65536",
+          "metric": "jobs_per_s",
+          "title": "64 KiB args: MiB/s completed",
+          "unit": "MiB/s",
+          "scale": 0.0625
+        },
+        {
+          "type": "bars",
+          "cell": "backlog_1m",
+          "metric": "db_final",
+          "log": true,
+          "title": "Database size after draining the 1 MiB backlog"
+        },
+        {
+          "type": "bars",
+          "cell": "backlog_1m",
+          "metric": "drain_worker_mem",
+          "log": true,
+          "title": "Worker memory while draining, all four processes"
+        }
+      ]
+    },
+    {
+      "id": "payload",
+      "title": "Moderate payloads over time",
+      "question": "At a gentle rate with 64 KiB arguments, how much WAL is written and how much space is left behind?",
+      "setup": "64 KiB incompressible arguments at 50 jobs/s for 5 minutes, then 3 minutes of draining.",
+      "read": [],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "payload_64k",
+          "metric": "toast_after",
+          "log": true,
+          "title": "TOAST storage after draining"
+        },
+        {
+          "type": "bars",
+          "cell": "payload_64k",
+          "metric": "wal_per_job",
+          "title": "WAL written per job"
+        }
+      ]
+    },
+    {
+      "id": "long_jobs",
+      "title": "Long-running jobs",
+      "question": "What does it cost to keep jobs running for 40 seconds each?",
+      "setup": "Two processes × 100 workers; 40 s jobs; 150 held, then a steady stream for 6 minutes.",
+      "read": [
+        "Heartbeats and lease extensions are writes. A timeout shorter than the job causes duplicate execution."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "long_jobs",
+          "metric": "wal_per_s",
+          "title": "WAL written per second at steady state"
+        },
+        {
+          "type": "bars",
+          "cell": "long_jobs",
+          "metric": "duplicates",
+          "title": "Duplicate completions"
+        }
+      ]
+    },
+    {
+      "id": "drain",
+      "title": "Draining a backlog",
+      "question": "How fast does a 200,000-job backlog drain, and how big is the database afterwards?",
+      "setup": "200,000 jobs preloaded behind a gate, then drained by 64 workers, then 4 minutes idle.",
+      "read": [],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "backlog_drain",
+          "metric": "drain_jobs",
+          "title": "Drain rate"
+        },
+        {
+          "type": "bars",
+          "cell": "backlog_drain",
+          "metric": "db_final",
+          "log": true,
+          "title": "Database size after draining"
+        }
+      ]
+    },
+    {
+      "id": "abandon",
+      "title": "A million abandoned claims",
+      "question": "When an entire fleet dies holding about a million claimed jobs, how long until those jobs have run?",
+      "setup": "Four processes preload 1,000,000 jobs and claim them all while their handlers hold instead of running. All four are killed at once (SIGKILL); a fresh fleet of 4 × 128 workers starts, with 80 new jobs/s arriving. Every claim timeout is 300 s.",
+      "read": [
+        "Timeout-based systems cannot release a claim before its timeout, which has to exceed the longest job; the first rescue is mostly configuration. The rate after that is the system.",
+        "PgQue is a different contract, not a faster rescue. A consumer's claim is one open batch (here about 200,000 events each). The restarted consumer gets the same batch back at once, reads it in one query, runs the handlers and acknowledges the whole batch with one statement. The job frameworks write a state change for every one of the million jobs.",
+        "The completion curves include working the jobs off again, so the fresh fleet's speed bounds them.",
+        "River held no claims to abandon: with 250,000 workers per process its fetches (up to 5,500 jobs per queue) hit River's 10 s fetch timeout on the million-job table, so this setup measures nothing for River."
+      ],
+      "charts": [
+        {
+          "type": "multiples",
+          "title": "Abandoned jobs completed again",
+          "caption": "% of the abandoned jobs completed, by minutes since the fleet was killed."
+        },
+        {
+          "type": "bars",
+          "cell": "abandon",
+          "metric": "all_s",
+          "title": "Time until every abandoned job had completed",
+          "missingNote": "not all done in 30 min"
+        },
+        {
+          "type": "bars",
+          "cell": "abandon",
+          "metric": "cleared_s",
+          "title": "Time until the database released the dead fleet's claims"
+        }
+      ]
+    }
+  ],
+  "overview": [
+    {
+      "section": "saturation",
+      "cell": "sat_w64",
+      "metric": "jobs_per_s",
+      "label": "Jobs/s, 64 workers"
+    },
+    {
+      "section": "ref800",
+      "cell": "ref800",
+      "metric": "claim_p99",
+      "label": "Pickup p99 at 800 jobs/s",
+      "log": true
+    },
+    {
+      "section": "idle",
+      "cell": "idle",
+      "metric": "xacts_per_s",
+      "label": "Idle transactions/s",
+      "log": true
+    },
+    {
+      "section": "chaos",
+      "cell": "pg_restart",
+      "metric": "recovery_jobs",
+      "label": "Jobs/s after a Postgres restart"
+    },
+    {
+      "section": "neighbour",
+      "cell": "neighbour",
+      "metric": "p99_4x",
+      "label": "Neighbour p99, queue at 4×"
+    },
+    {
+      "section": "logical",
+      "cell": "logical",
+      "metric": "catalog_dead",
+      "label": "Dead catalog tuples, stalled CDC",
+      "log": true
+    },
+    {
+      "section": "scheduled",
+      "cell": "scheduled_burst",
+      "metric": "lateness_p99",
+      "label": "Scheduled herd lateness p99",
+      "log": true
+    },
+    {
+      "section": "retry",
+      "cell": "retry_storm",
+      "metric": "storm_good_jobs",
+      "label": "Good jobs/s in a failure storm"
+    },
+    {
+      "section": "fanout",
+      "cell": "fanout_q200",
+      "metric": "claim_p99",
+      "label": "Pickup p99 over 200 queues",
+      "log": true
+    },
+    {
+      "section": "large_args",
+      "cell": "backlog_1m",
+      "metric": "db_final",
+      "label": "Database after an 8 GiB drain",
+      "log": true
+    },
+    {
+      "section": "long_jobs",
+      "cell": "long_jobs",
+      "metric": "wal_per_s",
+      "label": "WAL/s with 40 s jobs",
+      "log": true
+    },
+    {
+      "section": "drain",
+      "cell": "backlog_drain",
+      "metric": "drain_jobs",
+      "label": "Backlog drain rate"
+    },
+    {
+      "section": "abandon",
+      "cell": "abandon",
+      "metric": "all_s",
+      "label": "1M abandoned jobs, all done again",
+      "missing": "not done in 30 min"
+    }
+  ]
+}

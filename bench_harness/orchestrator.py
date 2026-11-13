@@ -27,6 +27,7 @@ from typing import Iterable
 import psycopg
 
 from . import adapters as adapters_mod
+from . import cpu as cpu_mod
 from . import writers as writers_mod
 from .adapters import (
     ADAPTERS,
@@ -34,15 +35,20 @@ from .adapters import (
     DEFAULT_SYSTEMS,
     ENGINES,
     AdapterEntry,
+    PG_PORT,
     AdapterManifest,
     pg_url,
+    remove_adapter_containers,
 )
+from .hooks import write_control_json
 from .metrics import MetricsDaemon, PollTargets, parse_adapter_record
+from .hooks import ABANDON_HOLD, CONSUMER_GATE_CLOSED, write_control_file
 from .phases import (
     Phase,
     PhaseType,
     PhaseRuntime,
     default_registry,
+    required_wal_level,
     resolve_scenario,
 )
 from .plots import render_all
@@ -63,6 +69,7 @@ from .writers import (
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 RESULTS_ROOT = SCRIPT_DIR / "results"
 COMPOSE_FILE = SCRIPT_DIR / "docker-compose.yml"
+RETRY_STORM_DEFAULT_MAX_ATTEMPTS = 5
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -90,6 +97,19 @@ class PhaseTracker:
 # Postgres lifecycle
 # ────────────────────────────────────────────────────────────────────────
 
+# postgres.conf sets max_connections = 400; the harness's own samplers and
+# the commit probe keep a few of them.
+PG_MAX_CONNECTIONS = 400
+HARNESS_CONNECTION_RESERVE = 40
+POOL_OVERHEAD = 8
+
+
+def default_max_connections(worker_count: int, replicas: int) -> int:
+    """Pool size per adapter process when a cell doesn't set MAX_CONNECTIONS:
+    one connection per worker plus a small fixed overhead, the same rule for
+    every system, capped so all replicas fit under Postgres' max_connections."""
+    per_process_cap = (PG_MAX_CONNECTIONS - HARNESS_CONNECTION_RESERVE) // max(1, replicas)
+    return max(POOL_OVERHEAD, min(worker_count + POOL_OVERHEAD, per_process_cap))
 
 def _run_cmd(
     argv: list[str],
@@ -107,8 +127,72 @@ def _run_cmd(
     )
 
 
-def _compose_env(pg_image: str) -> dict[str, str]:
-    return {"POSTGRES_IMAGE": pg_image}
+def _pg_stat_statements_enabled() -> bool:
+    return os.environ.get("BENCH_PG_STAT_STATEMENTS", "") in {"1", "true", "yes", "on"}
+
+
+def _compose_env(pg_image: str, wal_level: str | None = None) -> dict[str, str]:
+    env = {"POSTGRES_IMAGE": pg_image}
+    if _pg_stat_statements_enabled():
+        env["PG_SHARED_PRELOAD_LIBRARIES"] = "pg_stat_statements"
+    if wal_level is not None:
+        env["BENCH_PG_WAL_LEVEL"] = wal_level
+    return env
+
+
+def _postgres_container_id(pg_image: str, engine: str = DEFAULT_ENGINE) -> str | None:
+    result = subprocess.run(
+        [*_compose_prefix(engine), "ps", "-q", "postgres"],
+        cwd=str(SCRIPT_DIR),
+        env={**os.environ, **_compose_env(pg_image)},
+        capture_output=True,
+        text=True,
+    )
+    container_id = result.stdout.strip().splitlines()
+    return container_id[0] if result.returncode == 0 and container_id else None
+
+
+def _pg_data_dir() -> Path | None:
+    """Host directory for this harness's Postgres data, from
+    BENCH_PG_DATA_DIR (one subdirectory per port). Unset keeps Docker's
+    anonymous volume under the Docker root."""
+    raw = os.environ.get("BENCH_PG_DATA_DIR")
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve() / f"pg-{PG_PORT}"
+
+
+def _pg_data_override() -> Path | None:
+    data = _pg_data_dir()
+    if data is None:
+        return None
+    path = SCRIPT_DIR / ".bench" / f"pgdata-{PG_PORT}.compose.yml"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(
+        "services:\n  postgres:\n    volumes:\n"
+        f"      - {data}:/var/lib/postgresql\n"
+    )
+    return path
+
+
+def _reset_pg_data_dir(pg_image: str) -> None:
+    """Empty the bind-mounted data directory so every start runs initdb on
+    a fresh cluster, as the anonymous volume does. Postgres owns the files,
+    so the wipe runs as root in a throwaway container."""
+    data = _pg_data_dir()
+    if data is None:
+        return
+    data.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "docker", "run", "--rm", "--user", "0", "--entrypoint", "sh",
+            "-v", f"{data}:/d", pg_image,
+            "-c", "rm -rf /d/* /d/.[!.]* 2>/dev/null; chmod 0777 /d",
+        ],
+        check=True,
+        capture_output=True,
+        timeout=600,
+    )
 
 
 def _compose_prefix(engine: str) -> list[str]:
@@ -119,19 +203,36 @@ def _compose_prefix(engine: str) -> list[str]:
     (the tuning-matrix workflow relies on it). For an engine with an
     override we pass explicit ``-f`` files — which also disables the
     implicit merge, giving a reproducible, engine-pinned compose project.
+    BENCH_PG_DATA_DIR adds a generated file that bind-mounts the data
+    directory.
     """
     override = ENGINES[engine].compose_override if engine in ENGINES else None
-    if override is None:
+    pg_data = _pg_data_override()
+    if override is None and pg_data is None:
         return ["docker", "compose"]
-    return ["docker", "compose", "-f", "docker-compose.yml", "-f", override]
+    files = ["docker-compose.yml"]
+    if override is not None:
+        files.append(override)
+    elif (SCRIPT_DIR / "docker-compose.override.yml").exists():
+        files.append("docker-compose.override.yml")
+    if pg_data is not None:
+        files.append(str(pg_data))
+    return ["docker", "compose", *(arg for f in files for arg in ("-f", f))]
 
 
-def start_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
+def start_postgres(
+    pg_image: str,
+    engine: str = DEFAULT_ENGINE,
+    wal_level: str = "replica",
+) -> None:
     prefix = _compose_prefix(engine)
+    if _pg_data_dir() is not None:
+        _run_cmd([*prefix, "down", "-v"], cwd=SCRIPT_DIR, env=_compose_env(pg_image), check=False)
+        _reset_pg_data_dir(pg_image)
     _run_cmd(
-        [*prefix, "up", "-d", "--wait"],
+        [*prefix, "up", "-d", "--wait", "--force-recreate", "--renew-anon-volumes"],
         cwd=SCRIPT_DIR,
-        env=_compose_env(pg_image),
+        env=_compose_env(pg_image, wal_level),
     )
     # Readiness probe. Omni initdb + engine bring-up is slower than the
     # alpine image, so allow a generous window.
@@ -235,6 +336,80 @@ def stop_postgres(pg_image: str, engine: str = DEFAULT_ENGINE) -> None:
         env=_compose_env(pg_image),
         check=False,
     )
+    _reset_pg_data_dir(pg_image)
+
+
+def commit_latency_probe(commits: int = 200) -> dict[str, float] | None:
+    """Time single-row autocommit INSERTs (each a synchronous WAL flush)
+    against `SELECT 1` round trips on an otherwise idle server, so a slow
+    or drifting disk shows up next to the results it affected."""
+
+    def percentile(values: list[float], q: float) -> float:
+        ordered = sorted(values)
+        return ordered[min(len(ordered) - 1, int(round(q * (len(ordered) - 1))))]
+
+    try:
+        with psycopg.connect(
+            pg_url("postgres"), autocommit=True, application_name="bench-harness-probe"
+        ) as conn:
+            conn.execute("DROP TABLE IF EXISTS bench_commit_probe")
+            conn.execute("CREATE TABLE bench_commit_probe (id int)")
+            selects: list[float] = []
+            inserts: list[float] = []
+            for i in range(commits):
+                started = time.perf_counter()
+                conn.execute("SELECT 1")
+                selects.append((time.perf_counter() - started) * 1000)
+                started = time.perf_counter()
+                conn.execute("INSERT INTO bench_commit_probe VALUES (%s)", (i,))
+                inserts.append((time.perf_counter() - started) * 1000)
+            conn.execute("DROP TABLE bench_commit_probe")
+    except psycopg.Error as exc:
+        print(f"[harness] commit latency probe failed: {exc}", file=sys.stderr)
+        return None
+    return {
+        "commit_p50_ms": percentile(inserts, 0.50),
+        "commit_p99_ms": percentile(inserts, 0.99),
+        "roundtrip_p50_ms": percentile(selects, 0.50),
+    }
+
+
+def _emit_probe(
+    probe: dict[str, float] | None,
+    *,
+    when: str,
+    phase: Phase,
+    run_id: str,
+    system: str,
+    bench_start: float,
+    out_queue: "queue.Queue[Sample]",
+) -> None:
+    from .sample import now_iso
+
+    for metric, value in (probe or {}).items():
+        out_queue.put(
+            Sample(
+                run_id=run_id,
+                system=system,
+                instance_id=0,
+                elapsed_s=round(time.time() - bench_start, 3),
+                sampled_at=now_iso(),
+                phase_label=phase.label,
+                phase_type=phase.type.value,
+                subject_kind="probe",
+                subject=when,
+                metric=metric,
+                value=float(value),
+                window_s=0.0,
+            )
+        )
+    if probe:
+        print(
+            f"[{system}] commit probe {when}: p50 {probe['commit_p50_ms']:.2f} ms, "
+            f"p99 {probe['commit_p99_ms']:.2f} ms, round trip "
+            f"{probe['roundtrip_p50_ms']:.2f} ms",
+            file=sys.stderr,
+        )
 
 
 def preflight_database(manifest: AdapterManifest, *, recreate: bool = False) -> None:
@@ -266,6 +441,8 @@ def preflight_database(manifest: AdapterManifest, *, recreate: bool = False) -> 
 
     target_url = pg_url(manifest.db_name)
     required_exts = list(manifest.extensions) + ["pgstattuple"]
+    if _pg_stat_statements_enabled():
+        required_exts.append("pg_stat_statements")
     with psycopg.connect(target_url, autocommit=True) as conn:
         with conn.cursor() as cur:
             for ext in required_exts:
@@ -277,6 +454,12 @@ def preflight_database(manifest: AdapterManifest, *, recreate: bool = False) -> 
                         f"{exc}. Ensure the Postgres image provides this "
                         f"extension (e.g. via a custom Dockerfile)."
                     ) from exc
+            if _pg_stat_statements_enabled():
+                cur.execute(
+                    f'ALTER DATABASE "{manifest.db_name}" '
+                    "SET pg_stat_statements.track = 'all'"
+                )
+                cur.execute("SELECT pg_stat_statements_reset()")
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -289,6 +472,25 @@ def preflight_database(manifest: AdapterManifest, *, recreate: bool = False) -> 
 # on `ReplicaPool`. Orchestrator here builds the pool from a
 # `_launch_one_replica` closure and exposes the pool on phase_state so
 # destructive phase types can drive it.
+
+
+def die_with_parent() -> None:
+    """Child-side hook: have the kernel SIGKILL this adapter when the harness
+    process dies. A harness killed mid-run otherwise leaves native adapters
+    alive; they reconnect to the next cell's Postgres on the same port and
+    claim its jobs, so every later cell measures the wrong thing. Linux
+    only; a no-op elsewhere. ``docker run`` adapters are reaped separately
+    by ``remove_adapter_containers``."""
+    if sys.platform != "linux":
+        return
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        PR_SET_PDEATHSIG = 1
+        libc.prctl(PR_SET_PDEATHSIG, int(signal.SIGKILL), 0, 0, 0)
+    except (OSError, AttributeError):
+        pass
 
 
 def _tail_stdout(
@@ -349,6 +551,11 @@ def _launch_one_replica(
     # values carry through; stamp the id last so it can't be overridden.
     instance_overrides = dict(overrides)
     instance_overrides["BENCH_INSTANCE_ID"] = str(instance_id)
+    control_host = overrides.get("PRODUCER_RATE_CONTROL_FILE_HOST")
+    if control_host:
+        cidfile = _cidfile_path(Path(control_host).parent, instance_id)
+        cidfile.unlink(missing_ok=True)
+        instance_overrides["DOCKER_CIDFILE_HOST"] = str(cidfile)
     spec = entry.launcher(manifest, instance_overrides)
     env = {**os.environ, **spec.env}
     print(
@@ -369,6 +576,7 @@ def _launch_one_replica(
         stderr=sys.stderr,
         text=True,
         bufsize=1,  # line-buffered
+        preexec_fn=die_with_parent,
     )
     stop_event = threading.Event()
     # Start the harness pacer thread for fixed-rate, harness-paced runs.
@@ -388,7 +596,8 @@ def _launch_one_replica(
             target_rate = int(_pacer_setting("PRODUCER_RATE", "0"))
         except ValueError:
             target_rate = 0
-        if target_rate > 0 and proc.stdin is not None:
+        rate_file = instance_overrides.get("PRODUCER_RATE_CONTROL_FILE_HOST")
+        if (target_rate > 0 or rate_file) and proc.stdin is not None:
             try:
                 batch_max = int(_pacer_setting("PRODUCER_BATCH_MAX", "128"))
             except ValueError:
@@ -403,6 +612,7 @@ def _launch_one_replica(
                     target_rate=target_rate,
                     batch_max=batch_max,
                     batch_ms=batch_ms,
+                    rate_file=rate_file,
                 ),
                 stop_event=stop_event,
                 log_prefix=f"-{system}-{instance_id}",
@@ -469,6 +679,55 @@ def _launch_one_replica(
     except RuntimeError as exc:
         raise _abort(str(exc)) from exc
     return proc, tailer, stop_event, descriptor
+
+
+def _cidfile_path(control_dir: Path, instance_id: int) -> Path:
+    return control_dir / f"cid-{instance_id}"
+
+
+def _cpu_probe(
+    pool: ReplicaPool, control_dir: Path, postgres_container_id: str | None
+):
+    """Resource readings keyed by (subject, metric).
+
+    Subjects: "" → Postgres container, "replica-<i>" → adapter i, "host".
+    Metrics: cumulative `cpu_seconds`, and memory gauges `memory_<kind>_mb`
+    (current / anon / file / shmem). Docker-launched replicas are read
+    through the container ID docker writes to the per-replica cidfile;
+    native replicas through their pid.
+    """
+
+    def _probe() -> dict[tuple[str, str], float]:
+        out: dict[tuple[str, str], float] = {}
+        if postgres_container_id:
+            pg_seconds = cpu_mod.container_cpu_seconds(postgres_container_id)
+            if pg_seconds is not None:
+                out[("", "cpu_seconds")] = pg_seconds
+            for kind, mb in (cpu_mod.container_memory_mb(postgres_container_id) or {}).items():
+                out[("", f"memory_{kind}_mb")] = mb
+        host = cpu_mod.host_cpu_busy_seconds()
+        if host is not None:
+            out[("host", "cpu_seconds")] = host
+        for slot in pool.slots:
+            if slot.process is None or slot.process.poll() is not None:
+                continue
+            subject = f"replica-{slot.instance_id}"
+            container_id = cpu_mod.read_cidfile(
+                _cidfile_path(control_dir, slot.instance_id)
+            )
+            if container_id:
+                seconds = cpu_mod.container_cpu_seconds(container_id)
+                memory = cpu_mod.container_memory_mb(container_id)
+            else:
+                seconds = cpu_mod.process_cpu_seconds(slot.process.pid)
+                memory = cpu_mod.process_memory_mb(slot.process.pid)
+            if seconds is not None:
+                out[(subject, "cpu_seconds")] = seconds
+            for kind, mb in (memory or {}).items():
+                out[(subject, f"memory_{kind}_mb")] = mb
+        return out
+
+    return _probe
 
 
 def build_replica_pool(
@@ -624,23 +883,66 @@ def _emit_wait_event_snapshot(
                 window_s=float(phase.duration_s),
             )
         )
-    # Always emit the denominator — even if zero — so a zero-active phase
+    ticks, locks = sampler.snapshot_load(phase.label)
+
+    def put(subject_kind: str, subject: str, metric: str, value: float) -> None:
+        out_queue.put(
+            Sample(
+                run_id=run_id,
+                system=system,
+                instance_id=0,
+                elapsed_s=elapsed,
+                sampled_at=sampled_at,
+                phase_label=phase.label,
+                phase_type=phase.type.value,
+                subject_kind=subject_kind,
+                subject=subject,
+                metric=metric,
+                value=float(value),
+                window_s=float(phase.duration_s),
+            )
+        )
+
+    # Always emit the denominators — even if zero — so a zero-active phase
     # is recoverable from raw.csv (otherwise it would look identical to a
     # phase the sampler didn't observe at all).
+    put("wait_event", "__total__", "total_active_samples", total_active)
+    put("wait_event", "__total__", "sampler_ticks", ticks)
+    put("lock_wait", "__total__", "lock_waiter_samples", locks.waiter_samples)
+    put("lock_wait", "__total__", "lock_waiters_peak", locks.peak_waiters)
+    put("lock_wait", "__total__", "lock_wait_max_s", locks.max_wait_s)
+    for locktype, count in locks.by_locktype.most_common():
+        put("lock_wait", locktype, "lock_waiter_samples", count)
+
+
+def _emit_phase_start(
+    *,
+    phase: Phase,
+    run_id: str,
+    system: str,
+    bench_start: float,
+    out_queue: "queue.Queue[Sample]",
+) -> None:
+    """Record the exact elapsed_s a phase began so summaries can time
+    events (e.g. drain-to-empty) from the boundary instead of from the
+    first periodic sample that happens to land in the phase."""
+    from .sample import now_iso
+
+    elapsed = round(time.time() - bench_start, 3)
     out_queue.put(
         Sample(
             run_id=run_id,
             system=system,
             instance_id=0,
             elapsed_s=elapsed,
-            sampled_at=sampled_at,
+            sampled_at=now_iso(),
             phase_label=phase.label,
             phase_type=phase.type.value,
-            subject_kind="wait_event",
-            subject="__total__",
-            metric="total_active_samples",
-            value=float(total_active),
-            window_s=float(phase.duration_s),
+            subject_kind="phase",
+            subject=phase.label,
+            metric="phase_start_elapsed_s",
+            value=elapsed,
+            window_s=0.0,
         )
     )
 
@@ -682,6 +984,9 @@ def run_one_system(
     replicas: int = 1,
     wait_events_enabled: bool = True,
     wait_event_sample_every_s: float = 1.0,
+    adapter_env: dict[str, str] | None = None,
+    wal_level: str = "replica",
+    skip_build: bool = False,
 ) -> dict:
     entry = ADAPTERS[system]
     manifest = AdapterManifest.load(entry.bench_dir)
@@ -694,14 +999,15 @@ def run_one_system(
     # ahead of it (`pgboss-bench` was missing at hour 2 of a 4-system
     # consolidated run despite being built at startup, because docker
     # GC reclaimed it during the long pgque phase).
-    entry.builder(False)
+    entry.builder(skip_build)
 
     # Sequential per-system fresh-PG isolation is the default.
     if not fast:
         stop_postgres(pg_image, engine)
-        start_postgres(pg_image, engine)
+        start_postgres(pg_image, engine, wal_level)
 
     preflight_database(manifest, recreate=fast)
+    probe_before = commit_latency_probe()
 
     overrides: dict[str, str] = {
         "SAMPLE_EVERY_S": str(sample_every_s),
@@ -712,14 +1018,51 @@ def run_one_system(
     }
     if awa_completion_batch_size is not None:
         overrides["AWA_COMPLETION_BATCH_SIZE"] = str(awa_completion_batch_size)
+    if "MAX_CONNECTIONS" not in os.environ:
+        overrides["MAX_CONNECTIONS"] = str(default_max_connections(worker_count, replicas))
+    overrides.update(adapter_env or {})
     control_dir = Path(tempfile.mkdtemp(prefix=f"bench-control-{system}-"))
     control_file = control_dir / "producer_rate.txt"
-    control_file.write_text(str(producer_rate))
+    initial_rate = phases[0].rate_override(replicas)
+    write_control_file(control_file, producer_rate if initial_rate is None else initial_rate)
+    consumer_gate_file: Path | None = None
+    if any(p.type is PhaseType.PRELOAD for p in phases):
+        consumer_gate_file = control_dir / "consumer_gate.txt"
+        write_control_file(consumer_gate_file, CONSUMER_GATE_CLOSED)
+        overrides["CONSUMER_GATE_FILE"] = str(consumer_gate_file)
     overrides["PRODUCER_RATE_CONTROL_FILE"] = str(control_file)
     overrides["PRODUCER_RATE_CONTROL_FILE_HOST"] = str(control_file)
     overrides["PRODUCER_RATE_CONTROL_FILE_CONTAINER"] = "/control/producer_rate.txt"
+    phase_types = {phase.type for phase in phases}
+    job_failure_control_file: Path | None = None
+    schedule_control_file: Path | None = None
+    if PhaseType.RETRY_STORM in phase_types:
+        job_failure_control_file = control_dir / "job_failure.json"
+        write_control_json(job_failure_control_file, {})
+        overrides["JOB_FAILURE_CONTROL_FILE"] = str(job_failure_control_file)
+        overrides["JOB_MAX_ATTEMPTS"] = os.environ.get(
+            "JOB_MAX_ATTEMPTS", str(RETRY_STORM_DEFAULT_MAX_ATTEMPTS)
+        )
+    if PhaseType.SCHEDULE_PRELOAD in phase_types:
+        schedule_control_file = control_dir / "schedule.json"
+        write_control_json(schedule_control_file, {})
+        overrides["SCHEDULE_CONTROL_FILE"] = str(schedule_control_file)
+    abandon_control_file: Path | None = None
+    if PhaseType.ABANDON_KILL in phase_types:
+        abandon_control_file = control_dir / "abandon.json"
+        write_control_json(abandon_control_file, ABANDON_HOLD)
+        overrides["JOB_ABANDON_CONTROL_FILE"] = str(abandon_control_file)
+    poll_state_queries = (
+        job_failure_control_file is not None
+        or schedule_control_file is not None
+        or abandon_control_file is not None
+    )
 
     bench_start = time.time()
+    _emit_probe(
+        probe_before, when="before", phase=phases[0], run_id=run_id,
+        system=system, bench_start=bench_start, out_queue=out_queue,
+    )
     # Stamp the tracker to the first phase before tailers start ingesting.
     # Without this, early samples land under the *previous* system's final
     # phase (or "pre-run" for the first system), skewing per-phase aggregates
@@ -755,11 +1098,16 @@ def run_one_system(
         targets=PollTargets(
             event_tables=runtime_event_tables,
             event_indexes=runtime_event_indexes,
+            state_queries=manifest.state_queries if poll_state_queries else {},
+            state_query_every_s=30.0 if abandon_control_file is not None else 0.0,
         ),
         output_queue=out_queue,
         bench_start=bench_start,
         get_phase=tracker.get,
         period_s=sample_every_s,
+        cpu_probe=_cpu_probe(
+            pool, control_dir, _postgres_container_id(pg_image, engine)
+        ),
     )
     daemon.start()
 
@@ -776,6 +1124,44 @@ def run_one_system(
             sample_every_s=wait_event_sample_every_s,
         )
         wait_sampler.start()
+
+    from .sample import now_iso
+
+    def _emit_sample(
+        subject_kind: str,
+        subject: str,
+        metric: str,
+        value: float,
+        *,
+        window_s: float = 0.0,
+        at_epoch: float | None = None,
+    ) -> None:
+        """Queue a harness-side sample under the current phase. `at_epoch`
+        backdates it (e.g. per-window stats parsed from a pgbench log)."""
+        label, phase_type = tracker.get()
+        when = time.time() if at_epoch is None else at_epoch
+        out_queue.put(
+            Sample(
+                run_id=run_id,
+                system=system,
+                instance_id=0,
+                elapsed_s=round(when - bench_start, 3),
+                sampled_at=(
+                    now_iso()
+                    if at_epoch is None
+                    else datetime.fromtimestamp(at_epoch, timezone.utc)
+                    .isoformat(timespec="milliseconds")
+                    .replace("+00:00", "Z")
+                ),
+                phase_label=label,
+                phase_type=phase_type,
+                subject_kind=subject_kind,
+                subject=subject,
+                metric=metric,
+                value=float(value),
+                window_s=float(window_s),
+            )
+        )
 
     registry = default_registry()
     phase_state: dict[str, object] = {
@@ -799,10 +1185,40 @@ def run_one_system(
         "admin_database_url": pg_url("postgres"),
         "system_database_url": pg_url(manifest.db_name),
         "system_database_name": manifest.db_name,
+        "consumer_gate_file": str(consumer_gate_file) if consumer_gate_file else None,
+        # Harness-side sample emission for hooks that measure something
+        # themselves (neighbour pgbench, logical consumer).
+        "emit_sample": _emit_sample,
+        "sample_every_s": sample_every_s,
+        "job_failure_control_file": (
+            str(job_failure_control_file) if job_failure_control_file else None
+        ),
+        "schedule_control_file": (
+            str(schedule_control_file) if schedule_control_file else None
+        ),
+        "abandon_control_file": (
+            str(abandon_control_file) if abandon_control_file else None
+        ),
+        "abandon_running_sql": manifest.state_queries.get("running"),
+        # The launch overrides every replica (re)start reads; abandon-kill
+        # rewrites them for the fresh fleet.
+        "replica_env_overrides": overrides,
     }
+    phase_rates = [
+        producer_rate if rate is None else rate
+        for rate in (p.rate_override(replicas) for p in phases)
+    ]
     try:
-        for phase in phases:
+        registry.prepare(phases, phase_state)
+        for phase_index, phase in enumerate(phases):
             tracker.set(phase.label, phase.type.value)
+            _emit_phase_start(
+                phase=phase,
+                run_id=run_id,
+                system=system,
+                bench_start=bench_start,
+                out_queue=out_queue,
+            )
             print(
                 f"[{system}] phase {phase.label} ({phase.type.value}) "
                 f"for {phase.duration_s}s",
@@ -813,11 +1229,17 @@ def run_one_system(
                 phase=phase,
                 state=phase_state,
             )
+            write_control_file(control_file, phase_rates[phase_index])
             registry.enter(runtime)
             try:
                 _sleep_or_abort(phase.duration_s, pool)
             finally:
                 registry.exit(runtime)
+                # Switch to the next phase's rate before the (possibly slow)
+                # boundary snapshots so e.g. a preload doesn't leak base-rate
+                # jobs into the following drain.
+                if phase_index + 1 < len(phases):
+                    write_control_file(control_file, phase_rates[phase_index + 1])
                 # Phase-boundary snapshot: pgstattuple / pgstatindex.
                 daemon.phase_boundary_snapshot()
                 # Wait-event histogram snapshot for this phase. Drains
@@ -833,6 +1255,10 @@ def run_one_system(
                         out_queue=out_queue,
                     )
     finally:
+        try:
+            registry.teardown(phases, phase_state)
+        except Exception as exc:
+            print(f"[{system}] phase teardown failed: {exc}", file=sys.stderr)
         daemon.stop()
         daemon.join(timeout=5.0)
         if wait_sampler is not None:
@@ -842,6 +1268,10 @@ def run_one_system(
         # with a documented slow-drain shutdown path can override.
         pool.stop_all(timeout_s=manifest.shutdown_grace_s)
         shutil.rmtree(control_dir, ignore_errors=True)
+        _emit_probe(
+            commit_latency_probe(), when="after", phase=phases[-1], run_id=run_id,
+            system=system, bench_start=bench_start, out_queue=out_queue,
+        )
 
     # Representative descriptor for manifest inclusion. Prefer replica 0's
     # if still available; otherwise any slot's (replica 0 may have been
@@ -913,14 +1343,17 @@ def drive(
     cli_args: list[str],
     wait_events_enabled: bool = True,
     wait_event_sample_every_s: float = 1.0,
+    adapter_env: dict[str, str] | None = None,
 ) -> Path:
     unknown = [s for s in systems if s not in ADAPTERS]
     if unknown:
         raise SystemExit(f"Unknown systems: {unknown}. Known: {sorted(ADAPTERS)}")
 
+    wal_level = required_wal_level(phases)
     run_dir = _new_run_dir(scenario, engine)
     run_id = run_dir.name
     print(f"[harness] run_id = {run_id}", file=sys.stderr)
+    remove_adapter_containers()
     raw_csv = run_dir / "raw.csv"
     writer = RawCsvWriter(raw_csv)
     out_queue: "queue.Queue[Sample]" = queue.Queue()
@@ -941,7 +1374,7 @@ def drive(
     try:
         # Start PG once upfront (needed for the initial build phase to connect;
         # also the --fast path keeps this same instance across systems).
-        start_postgres(pg_image, engine)
+        start_postgres(pg_image, engine, wal_level)
 
         if not skip_build:
             for system in systems:
@@ -1011,6 +1444,9 @@ def drive(
                 replicas=replicas,
                 wait_events_enabled=wait_events_enabled,
                 wait_event_sample_every_s=wait_event_sample_every_s,
+                adapter_env=adapter_env,
+                wal_level=wal_level,
+                skip_build=skip_build,
             )
             # Merge the runtime descriptor the adapter emitted with the
             # harness-proven revision block (git SHA / submodule SHA /
@@ -1039,6 +1475,7 @@ def drive(
         drain_stop.set()
         drain_thread.join(timeout=10)
         writer.close()
+        remove_adapter_containers()
         stop_postgres(pg_image, engine)
 
     # Final post-processing outputs. Recompute against the full
@@ -1189,6 +1626,32 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         "aggregate. Divide --producer-rate by --replicas to hold total "
         "offered load constant across replica counts.",
     )
+    parser.add_argument(
+        "--job-payload-bytes",
+        type=int,
+        default=None,
+        help="Approximate job payload size (JOB_PAYLOAD_BYTES; adapter default 256).",
+    )
+    parser.add_argument(
+        "--job-payload-kind",
+        choices=["random"],
+        default=None,
+        help="'random' pads payloads with incompressible base64 so TOAST "
+        "compression can't hide their size (JOB_PAYLOAD_KIND).",
+    )
+    parser.add_argument(
+        "--job-work-ms",
+        type=int,
+        default=None,
+        help="Synthetic per-job work time in ms (JOB_WORK_MS; adapter default 1).",
+    )
+    parser.add_argument(
+        "--queue-count",
+        type=int,
+        default=None,
+        help="Logical queues per adapter (BENCH_QUEUE_COUNT). Producers "
+        "round-robin across them; see docs/method.md for per-system support.",
+    )
     # Wait-event sampling — pg_ash-style ASH. ON by default; the overhead
     # is a single short SELECT against pg_stat_activity per second
     # (< 0.1% of one core). See docs/wait-events.md.
@@ -1298,6 +1761,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         cli_args=list(sys.argv),
         wait_events_enabled=config.wait_events,
         wait_event_sample_every_s=config.wait_event_sample_every,
+        adapter_env=config.adapter_env(),
     )
     return 0
 

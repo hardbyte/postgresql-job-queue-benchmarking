@@ -16,7 +16,8 @@ import re
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Callable
 
 import psycopg
 
@@ -29,6 +30,22 @@ class PollTargets:
 
     event_tables: list[str]  # schema.table
     event_indexes: list[str]  # schema.indexname
+    # {state: count SQL} from adapter.json -> state_queries; empty unless the
+    # run's phases need DB-side job-state counts.
+    state_queries: dict[str, str] = field(default_factory=dict)
+    # Minimum seconds between state-query polls; 0 polls every tick. Large
+    # backlogs make these counts expensive, so mass_abandon spaces them out.
+    state_query_every_s: float = 0.0
+
+
+def resource_metric_name(subject: str, reading: str) -> str:
+    """raw.csv metric for a resource reading: `pg_` for the Postgres
+    container (subject ""), `host_` for the host, `adapter_` for replicas.
+    Cumulative CPU becomes `<prefix>cpu_seconds_total`."""
+    prefix = "pg_" if not subject else "host_" if subject == "host" else "adapter_"
+    if reading == "cpu_seconds":
+        return f"{prefix}cpu_seconds_total"
+    return f"{prefix}{reading}"
 
 
 def _next_aligned_tick(now: float, period_s: int) -> float:
@@ -42,14 +59,61 @@ def _next_aligned_tick(now: float, period_s: int) -> float:
 
 _TABLE_STATS_SQL = """
 SELECT
-  n_dead_tup,
-  n_live_tup,
-  COALESCE(autovacuum_count, 0) AS autovacuum_count,
-  EXTRACT(EPOCH FROM (now() - last_autovacuum))::double precision AS last_autovacuum_age_s,
-  pg_total_relation_size(schemaname || '.' || relname)::double precision / (1024 * 1024) AS total_size_mb,
-  pg_relation_size(schemaname || '.' || relname)::double precision / (1024 * 1024) AS table_size_mb
-FROM pg_stat_user_tables
-WHERE schemaname = %s AND relname = %s
+  s.n_dead_tup,
+  s.n_live_tup,
+  COALESCE(s.autovacuum_count, 0) AS autovacuum_count,
+  EXTRACT(EPOCH FROM (now() - s.last_autovacuum))::double precision AS last_autovacuum_age_s,
+  pg_total_relation_size(s.relid)::double precision / (1024 * 1024) AS total_size_mb,
+  pg_relation_size(s.relid)::double precision / (1024 * 1024) AS table_size_mb,
+  COALESCE(pg_total_relation_size(NULLIF(c.reltoastrelid, 0)), 0)::double precision
+      / (1024 * 1024) AS toast_size_mb,
+  pg_indexes_size(s.relid)::double precision / (1024 * 1024) AS indexes_size_mb
+FROM pg_stat_user_tables s
+JOIN pg_class c ON c.oid = s.relid
+WHERE s.schemaname = %s AND s.relname = %s
+"""
+
+_TOAST_RELID_SQL = """
+SELECT NULLIF(c.reltoastrelid, 0)::oid
+FROM pg_class c
+WHERE c.oid = to_regclass(%s)
+  AND c.reltoastrelid <> 0
+  AND pg_relation_size(c.reltoastrelid) > 0
+"""
+
+# Client backends connected to the system database, excluding the harness's
+# own sampler connections (tagged via application_name). `listening` counts
+# backends whose most recent statement was a LISTEN — the dedicated-listener
+# connection pattern; a connection that LISTENs and then runs other queries
+# on the same session isn't counted.
+HARNESS_APPLICATION_NAME = "bench-harness"
+
+_BACKENDS_SQL = """
+SELECT
+  count(*)::double precision,
+  count(*) FILTER (WHERE state = 'active')::double precision,
+  count(*) FILTER (WHERE state = 'idle')::double precision,
+  count(*) FILTER (WHERE state LIKE 'idle in transaction%')::double precision,
+  count(*) FILTER (WHERE query ILIKE 'listen%')::double precision
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND backend_type = 'client backend'
+  AND pid <> pg_backend_pid()
+  AND application_name NOT LIKE 'bench-harness%'
+"""
+
+_DATABASE_SIZE_SQL = """
+SELECT pg_database_size(current_database())::double precision / (1024 * 1024)
+"""
+
+# Only answers when pg_stat_statements is preloaded and installed in the
+# system database (BENCH_PG_STAT_STATEMENTS=1); errors are skipped per tick.
+_PG_STAT_STATEMENTS_SQL = """
+SELECT
+  COALESCE(sum(calls), 0)::double precision,
+  COALESCE(sum(calls) FILTER (WHERE query ~* '\\m(pg_)?notify\\M'), 0)::double precision
+FROM pg_stat_statements
+WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 """
 
 _INDEX_SIZE_SQL = """
@@ -121,9 +185,65 @@ _PG_STAT_DATABASE_SQL = """
 SELECT
   (xact_commit + xact_rollback)::double precision AS xacts,
   tup_updated::double precision,
-  tup_deleted::double precision
+  tup_deleted::double precision,
+  tup_inserted::double precision,
+  deadlocks::double precision
 FROM pg_stat_database
 WHERE datname = current_database()
+"""
+
+# Logical slot health. Lag is measured against confirmed_flush_lsn (what
+# the consumer has acknowledged); retained WAL against restart_lsn (what the
+# server must keep on disk). catalog_xmin age is how far the slot holds back
+# vacuum of system catalogs. No rows when no logical slot exists.
+_REPLICATION_SLOTS_SQL = """
+SELECT
+  s.slot_name,
+  s.active,
+  COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), s.confirmed_flush_lsn), 0)::double precision,
+  COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), s.restart_lsn), 0)::double precision,
+  COALESCE(age(s.catalog_xmin), 0)::double precision,
+  COALESCE(st.spill_bytes, 0)::double precision,
+  COALESCE(st.total_bytes, 0)::double precision
+FROM pg_replication_slots s
+LEFT JOIN pg_stat_replication_slots st USING (slot_name)
+WHERE s.slot_type = 'logical'
+"""
+
+# Published tables that can't replicate UPDATE/DELETE: no replica identity
+# (none, or default without a primary key). Postgres rejects UPDATE/DELETE
+# on such tables when a publication publishes those actions, so a non-zero
+# count means the queue itself errors once a CDC publication covers it.
+PUBLISHED_TABLES_FROM = """
+FROM pg_publication p
+JOIN pg_publication_tables pt ON pt.pubname = p.pubname
+JOIN pg_namespace n ON n.nspname = pt.schemaname
+JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = pt.tablename
+"""
+NO_REPLICA_IDENTITY_PREDICATE = """(
+  c.relreplident = 'n'
+  OR (c.relreplident = 'd' AND NOT EXISTS (
+        SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary))
+)"""
+
+_PUBLICATION_REPLICA_IDENTITY_SQL = f"""
+SELECT p.pubname,
+       count(*) FILTER (WHERE {NO_REPLICA_IDENTITY_PREDICATE})::double precision
+{PUBLISHED_TABLES_FROM}
+WHERE p.pubupdate OR p.pubdelete
+GROUP BY p.pubname
+"""
+
+# Catalog bloat from DDL churn (TRUNCATE rotation, partition create/drop,
+# temp tables). These are the catalogs that churn rows per relation; a slot
+# holding catalog_xmin stops vacuum from reclaiming them.
+CATALOG_TABLES = ("pg_class", "pg_attribute", "pg_depend", "pg_type")
+
+_CATALOG_STATS_SQL = """
+SELECT relname, n_dead_tup::double precision,
+       pg_total_relation_size(relid)::double precision / (1024 * 1024)
+FROM pg_stat_sys_tables
+WHERE schemaname = 'pg_catalog' AND relname = ANY(%s)
 """
 
 _ACTIVE_XACT_SQL = """
@@ -220,6 +340,7 @@ class MetricsDaemon(threading.Thread):
         bench_start: float,
         get_phase: "callable",  # () -> (label, type)
         period_s: int = 10,
+        cpu_probe: "Callable[[], dict[tuple[str, str], float]] | None" = None,
     ) -> None:
         super().__init__(name=f"metrics-{system}", daemon=True)
         self.run_id = run_id
@@ -230,6 +351,9 @@ class MetricsDaemon(threading.Thread):
         self.bench_start = bench_start
         self.get_phase = get_phase
         self.period_s = period_s
+        # Resource readings keyed by (subject, reading); see
+        # orchestrator._cpu_probe and resource_metric_name.
+        self.cpu_probe = cpu_probe
         self.stop_event = threading.Event()
         # Per-tick timestamps captured once in _poll_once so all _emit calls
         # in the same tick share the same elapsed_s/sampled_at — downstream
@@ -241,6 +365,7 @@ class MetricsDaemon(threading.Thread):
         # its per-phase delta drops out of the existing counter-delta path.
         self._relfilenode_prev: dict[str, str] = {}
         self._relfilenode_churn_total = 0
+        self._state_polled_at = float("-inf")
 
     # ── one-shot boundary snapshots ─────────────────────────────────────
     def phase_boundary_snapshot(self) -> None:
@@ -260,7 +385,11 @@ class MetricsDaemon(threading.Thread):
 
     def _phase_boundary_snapshot_body(self) -> None:
         try:
-            with psycopg.connect(self.database_url, autocommit=True) as conn:
+            with psycopg.connect(
+                self.database_url,
+                autocommit=True,
+                application_name=HARNESS_APPLICATION_NAME,
+            ) as conn:
                 with conn.cursor() as cur:
                     for fq_table in self.targets.event_tables:
                         try:
@@ -290,6 +419,7 @@ class MetricsDaemon(threading.Thread):
                             metric="pgstattuple_free_pct",
                             value=float(free_pct),
                         )
+                        self._toast_boundary_snapshot(cur, fq_table)
                     for fq_index in self.targets.event_indexes:
                         try:
                             cur.execute(_PGSTATINDEX_SQL, (fq_index,))
@@ -320,10 +450,43 @@ class MetricsDaemon(threading.Thread):
                 detail=str(exc)[:120],
             )
 
+    def _toast_boundary_snapshot(self, cur: "psycopg.Cursor", fq_table: str) -> None:
+        try:
+            cur.execute(_TOAST_RELID_SQL, (fq_table,))
+            row = cur.fetchone()
+            if row is None or row[0] is None:
+                return
+            cur.execute(_PGSTATTUPLE_SQL, (row[0],))
+            stats = cur.fetchone()
+        except psycopg.Error:
+            return
+        if stats is None:
+            return
+        dead_pct, free_pct = stats
+        self._emit(
+            subject_kind="table",
+            subject=fq_table,
+            metric="toast_pgstattuple_dead_pct",
+            value=float(dead_pct),
+        )
+        self._emit(
+            subject_kind="table",
+            subject=fq_table,
+            metric="toast_pgstattuple_free_pct",
+            value=float(free_pct),
+        )
+
     # ── continuous polling ──────────────────────────────────────────────
+    def _connect(self) -> "psycopg.Connection":
+        return psycopg.connect(
+            self.database_url,
+            autocommit=True,
+            application_name=HARNESS_APPLICATION_NAME,
+        )
+
     def run(self) -> None:
         try:
-            conn = psycopg.connect(self.database_url, autocommit=True)
+            conn = self._connect()
         except psycopg.Error as exc:
             # Surface the failure instead of exiting silently: a daemon that
             # dies here leaves the run looking healthy with zero DB
@@ -336,13 +499,7 @@ class MetricsDaemon(threading.Thread):
             )
             self._emit_connect_error(exc)
             return
-        try:
-            self._poll_loop(conn)
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        self._poll_loop(conn)
 
     def _emit_connect_error(self, exc: Exception) -> None:
         # Best-effort error marker written into raw.csv so the
@@ -363,18 +520,31 @@ class MetricsDaemon(threading.Thread):
         period = self.period_s
         # Align to wall-clock boundary so cross-system timebases line up.
         next_tick = _next_aligned_tick(time.time(), period)
-        while not self.stop_event.is_set():
-            now = time.time()
-            if now < next_tick:
-                # Wake early if stop fires.
-                self.stop_event.wait(timeout=min(0.5, next_tick - now))
-                continue
-            self._poll_once(conn)
-            # Skip past any missed ticks after a slow poll so we resume on
-            # the next wall-clock boundary instead of replaying a burst of
-            # back-to-back polls to "catch up" (which would pile on the
-            # same DB we just stalled against).
-            next_tick = max(next_tick + period, _next_aligned_tick(time.time(), period))
+        try:
+            while not self.stop_event.is_set():
+                now = time.time()
+                if now < next_tick:
+                    # Wake early if stop fires.
+                    self.stop_event.wait(timeout=min(0.5, next_tick - now))
+                    continue
+                # A lost connection (a Postgres restart) skips ticks until a
+                # reconnect succeeds instead of ending the daemon.
+                try:
+                    if conn.closed:
+                        conn = self._connect()
+                    self._poll_once(conn)
+                except psycopg.OperationalError as exc:
+                    print(f"[{self.system}] metrics poll failed: {exc}", file=sys.stderr)
+                # Skip past any missed ticks after a slow poll so we resume on
+                # the next wall-clock boundary instead of replaying a burst of
+                # back-to-back polls to "catch up" (which would pile on the
+                # same DB we just stalled against).
+                next_tick = max(next_tick + period, _next_aligned_tick(time.time(), period))
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _poll_once(self, conn: "psycopg.Connection") -> None:
         # Capture one timestamp for every _emit in this tick so per-tick
@@ -436,6 +606,8 @@ class MetricsDaemon(threading.Thread):
                     last_autovac_age,
                     total_mb,
                     table_mb,
+                    toast_mb,
+                    indexes_mb,
                 ) = row
                 self._emit(
                     subject_kind="table",
@@ -473,6 +645,18 @@ class MetricsDaemon(threading.Thread):
                     subject=fq_table,
                     metric="table_size_mb",
                     value=float(table_mb),
+                )
+                self._emit(
+                    subject_kind="table",
+                    subject=fq_table,
+                    metric="toast_size_mb",
+                    value=float(toast_mb),
+                )
+                self._emit(
+                    subject_kind="table",
+                    subject=fq_table,
+                    metric="indexes_size_mb",
+                    value=float(indexes_mb),
                 )
             for fq_index in self.targets.event_indexes:
                 row = self._tick_query(conn, cur, _INDEX_SIZE_SQL, (fq_index,))
@@ -579,10 +763,71 @@ class MetricsDaemon(threading.Thread):
                     value=float(self._relfilenode_churn_total),
                 )
 
+            slot_rows = self._tick_query(
+                conn, cur, _REPLICATION_SLOTS_SQL, fetchall=True
+            ) or []
+            for (
+                slot_name,
+                active,
+                confirmed_lag,
+                retained,
+                catalog_xmin_age,
+                spill_bytes,
+                decoded_bytes,
+            ) in slot_rows:
+                for metric, value in (
+                    ("slot_active", 1.0 if active else 0.0),
+                    ("slot_confirmed_lag_bytes", confirmed_lag),
+                    ("slot_retained_wal_bytes", retained),
+                    ("slot_catalog_xmin_age", catalog_xmin_age),
+                    ("slot_spill_bytes_total", spill_bytes),
+                    ("slot_decoded_bytes_total", decoded_bytes),
+                ):
+                    self._emit(
+                        subject_kind="replication_slot",
+                        subject=slot_name,
+                        metric=metric,
+                        value=float(value),
+                    )
+
+            publication_rows = self._tick_query(
+                conn, cur, _PUBLICATION_REPLICA_IDENTITY_SQL, fetchall=True
+            ) or []
+            for pubname, missing in publication_rows:
+                self._emit(
+                    subject_kind="publication",
+                    subject=pubname,
+                    metric="publication_tables_without_replica_identity",
+                    value=float(missing),
+                )
+
+            catalog_rows = self._tick_query(
+                conn, cur, _CATALOG_STATS_SQL, (list(CATALOG_TABLES),), fetchall=True
+            ) or []
+            for relname, dead_tup, size_mb in catalog_rows:
+                self._emit(
+                    subject_kind="catalog",
+                    subject=f"pg_catalog.{relname}",
+                    metric="catalog_n_dead_tup",
+                    value=float(dead_tup),
+                )
+                self._emit(
+                    subject_kind="catalog",
+                    subject=f"pg_catalog.{relname}",
+                    metric="catalog_size_mb",
+                    value=float(size_mb),
+                )
+
             # Per-database transaction / tuple churn (background chattiness).
             row = self._tick_query(conn, cur, _PG_STAT_DATABASE_SQL)
             if row is not None:
-                db_xacts, db_tup_updated, db_tup_deleted = row
+                db_xacts, db_tup_updated, db_tup_deleted, db_tup_inserted, deadlocks = row
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_db_deadlocks_total",
+                    value=float(deadlocks),
+                )
                 self._emit(
                     subject_kind="cluster",
                     subject="",
@@ -600,6 +845,87 @@ class MetricsDaemon(threading.Thread):
                     subject="",
                     metric="pg_db_tup_deleted_total",
                     value=float(db_tup_deleted),
+                )
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_db_tup_inserted_total",
+                    value=float(db_tup_inserted),
+                )
+
+            row = self._tick_query(conn, cur, _BACKENDS_SQL)
+            if row is not None:
+                for metric, value in zip(
+                    (
+                        "pg_backends_total",
+                        "pg_backends_active",
+                        "pg_backends_idle",
+                        "pg_backends_idle_in_tx",
+                        "pg_backends_listening",
+                    ),
+                    row,
+                ):
+                    self._emit(
+                        subject_kind="cluster",
+                        subject="",
+                        metric=metric,
+                        value=float(value),
+                    )
+
+            row = self._tick_query(conn, cur, _DATABASE_SIZE_SQL)
+            if row is not None:
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_database_size_mb",
+                    value=float(row[0]),
+                )
+
+            row = self._tick_query(conn, cur, _PG_STAT_STATEMENTS_SQL)
+            if row is not None:
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_stmt_calls_total",
+                    value=float(row[0]),
+                )
+                self._emit(
+                    subject_kind="cluster",
+                    subject="",
+                    metric="pg_stmt_notify_calls_total",
+                    value=float(row[1]),
+                )
+
+            if self.cpu_probe is not None:
+                try:
+                    readings = self.cpu_probe()
+                except Exception:
+                    readings = {}
+                for (subject, reading), value in sorted(readings.items()):
+                    self._emit(
+                        subject_kind="cluster",
+                        subject=subject,
+                        metric=resource_metric_name(subject, reading),
+                        value=float(value),
+                    )
+
+            state_due = (
+                time.monotonic() - self._state_polled_at
+                >= self.targets.state_query_every_s
+            )
+            if state_due and self.targets.state_queries:
+                self._state_polled_at = time.monotonic()
+            for state, state_sql in (
+                self.targets.state_queries.items() if state_due else ()
+            ):
+                row = self._tick_query(conn, cur, state_sql)
+                if row is None or row[0] is None:
+                    continue
+                self._emit(
+                    subject_kind="job_state",
+                    subject=state,
+                    metric="job_state_count",
+                    value=float(row[0]),
                 )
 
             rows = self._tick_query(conn, cur, _ACTIVE_XACT_SQL, fetchall=True) or []

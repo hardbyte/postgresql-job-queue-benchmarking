@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from time import monotonic
@@ -18,12 +19,15 @@ import psycopg
 from psycopg import AsyncConnection, sql
 from psycopg.rows import dict_row
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter_common"))
+from bench_controls import ScenarioControls, herd_preload_loop  # noqa: E402
+
 
 ABSURD_SQL_PATH = Path(os.environ.get("ABSURD_SQL_PATH", "/opt/absurd.sql"))
 ABSURD_SDK_VERSION = importlib.metadata.version("absurd-sdk")
 QUEUE_NAME = "long_horizon_bench"
 TASK_NAME = "bench_job"
-POLL_INTERVAL_SECS = 0.05
+POLL_INTERVAL_SECS = int(os.environ.get("ABSURD_POLL_INTERVAL_MS", "50")) / 1000.0
 OBSERVER_METRICS = frozenset(
     {
         "queue_depth",
@@ -51,6 +55,37 @@ def env_int(key: str, default: int) -> int:
 def env_str(key: str, default: str) -> str:
     value = os.environ.get(key)
     return value if value is not None else default
+
+
+def queue_names() -> list[str]:
+    """BENCH_QUEUE_COUNT queues; queue 0 keeps the legacy name."""
+    count = max(1, env_int("BENCH_QUEUE_COUNT", 1))
+    return [QUEUE_NAME] + [f"{QUEUE_NAME}_{i}" for i in range(1, count)]
+
+
+def payload_padding(length: int) -> str:
+    """JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s."""
+    length = max(0, length)
+    if os.environ.get("JOB_PAYLOAD_KIND") == "random":
+        import base64
+
+        return base64.b64encode(os.urandom(length))[:length].decode()
+    return "x" * length
+
+
+async def wait_for_consumer_gate(shutdown: asyncio.Event) -> None:
+    """Return once CONSUMER_GATE_FILE reads `open` (immediately if unset)."""
+    path = os.environ.get("CONSUMER_GATE_FILE")
+    if not path:
+        return
+    while not shutdown.is_set():
+        try:
+            with open(path) as fh:
+                if fh.read().strip() == "open":
+                    return
+        except OSError:
+            pass
+        await asyncio.sleep(0.2)
 
 
 def read_producer_rate(default: int) -> int:
@@ -156,16 +191,40 @@ def ensure_schema() -> None:
 def build_app(
     queue_name: str,
     *,
+    conn: AsyncConnection | None = None,
     loop: asyncio.AbstractEventLoop,
     subscriber_latencies_ms,
     end_to_end_latencies_ms,
     completed_counter: list[int],
     work_ms: int,
+    controls: ScenarioControls | None = None,
 ) -> AsyncAbsurd:
-    app = AsyncAbsurd(database_url(), queue_name=queue_name)
+    app = AsyncAbsurd(
+        conn if conn is not None else database_url(), queue_name=queue_name
+    )
 
     @app.register_task(TASK_NAME)
     async def bench_job(params: dict, _ctx) -> None:
+        if controls is not None and controls.is_abandon(params):
+            await controls.hold_if_abandoning()
+        if controls is not None and controls.is_tagged(params):
+            run_at_ms = params.get("run_at_ms")
+            if run_at_ms is not None:
+                # Absurd has no delayed spawn; a durable sleep step is its
+                # documented way to defer work. The first run suspends here
+                # and the woken run continues past it.
+                await _ctx.sleep_until("run_at", run_at_ms / 1000.0)
+                controls.on_start(params)
+            claimed = _ctx._task
+            controls.check_failure(
+                params, int(claimed["attempt"]), claimed.get("max_attempts")
+            )
+            if work_ms > 0:
+                await asyncio.sleep(work_ms / 1000.0)
+            controls.on_complete(params)
+            if controls.counts_as_completion(params):
+                completed_counter[0] += 1
+            return
         started_at_ms = int(time.time() * 1000)
         enqueued_at_ms = params.get("enqueued_at_ms")
         if enqueued_at_ms is not None:
@@ -191,7 +250,7 @@ async def installed_schema_version() -> str:
     return row[0]
 
 
-async def recreate_queue(queue_name: str) -> None:
+async def recreate_queue(queue_name: str, *, keep_existing: bool = False) -> None:
     loop = asyncio.get_running_loop()
     app = build_app(
         queue_name,
@@ -202,30 +261,68 @@ async def recreate_queue(queue_name: str) -> None:
         work_ms=0,
     )
     try:
-        await app.drop_queue()
+        if not keep_existing:
+            await app.drop_queue()
         await app.create_queue()
     finally:
         await app.close()
 
 
-async def count_by_state(conn: AsyncConnection, queue_name: str) -> dict[str, int]:
+LIVE_RUN_STATES = ["pending", "running", "sleeping"]
+
+
+async def count_live_runs(conn: AsyncConnection, queue_names: list[str]) -> dict[str, int]:
+    # Unfinished runs only, through the r_ (state, available_at) index, so the
+    # probe doesn't scan completed history.
+    union = sql.SQL(" UNION ALL ").join(
+        sql.SQL("SELECT state FROM absurd.{} WHERE state = ANY(%s)").format(
+            sql.Identifier(f"r_{q}")
+        )
+        for q in queue_names
+    )
     async with conn.cursor() as cur:
         await cur.execute(
             sql.SQL(
                 "SELECT state::text AS state, count(*)::bigint AS count "
-                "FROM absurd.{} GROUP BY state"
-            ).format(sql.Identifier(f"t_{queue_name}"))
+                "FROM ({}) AS r GROUP BY state"
+            ).format(union),
+            [LIVE_RUN_STATES] * len(queue_names),
         )
         rows = await cur.fetchall()
     return {row["state"]: int(row["count"]) for row in rows}
 
 
-async def enqueue_batch(conn: AsyncConnection, queue_name: str, items: list[dict]) -> None:
+async def count_by_state(conn: AsyncConnection, queue_names: list[str]) -> dict[str, int]:
+    # One statement across every queue table so observer load doesn't
+    # scale with BENCH_QUEUE_COUNT.
+    union = sql.SQL(" UNION ALL ").join(
+        sql.SQL("SELECT state FROM absurd.{}").format(sql.Identifier(f"t_{q}"))
+        for q in queue_names
+    )
+    async with conn.cursor() as cur:
+        await cur.execute(
+            sql.SQL(
+                "SELECT state::text AS state, count(*)::bigint AS count "
+                "FROM ({}) AS t GROUP BY state"
+            ).format(union)
+            if len(queue_names) > 1
+            else sql.SQL(
+                "SELECT state::text AS state, count(*)::bigint AS count "
+                "FROM absurd.{} GROUP BY state"
+            ).format(sql.Identifier(f"t_{queue_names[0]}"))
+        )
+        rows = await cur.fetchall()
+    return {row["state"]: int(row["count"]) for row in rows}
+
+
+async def enqueue_batch(
+    conn: AsyncConnection, queue_name: str, items: list[dict], options: str = "{}"
+) -> None:
     query = "SELECT task_id FROM absurd.spawn_task(%s, %s, %s::jsonb, %s::jsonb)"
     async with conn.cursor() as cur:
         await cur.executemany(
             query,
-            [(queue_name, TASK_NAME, json.dumps(item), "{}") for item in items],
+            [(queue_name, TASK_NAME, json.dumps(item), options) for item in items],
         )
 
 
@@ -240,25 +337,42 @@ async def scenario_long_horizon() -> None:
     producer_batch_ms = env_int("PRODUCER_BATCH_MS", 25)
     producer_batch_max = env_int("PRODUCER_BATCH_MAX", 128)
     latency_window_s = env_int("LATENCY_WINDOW_MS", 30_000) / 1000.0
-    payload_padding = "x" * max(0, payload_bytes - 96)
+    padding = payload_padding(payload_bytes - 96)
+    queues = queue_names()
 
     ensure_schema()
     schema_version = await installed_schema_version()
-    await recreate_queue(QUEUE_NAME)
+    controls = ScenarioControls()
+    for queue in queues:
+        # A replacement fleet must find the claims the killed fleet held, and
+        # replicas after the first must not drop the queue it is already using.
+        await recreate_queue(
+            queue, keep_existing=controls.abandon_enabled or instance_id() != 0
+        )
 
     db_name = database_url().rsplit("/", 1)[-1]
-    emit(
-        {
-            "kind": "descriptor",
-            "system": "absurd",
-            "event_tables": [f"absurd.t_{QUEUE_NAME}"],
-            "extensions": [],
-            "version": f"absurd-sdk {ABSURD_SDK_VERSION}",
-            "schema_version": schema_version,
-            "db_name": db_name,
-            "started_at": now_iso(),
-        }
+    spawn_options = (
+        json.dumps({"max_attempts": controls.max_attempts})
+        if controls.max_attempts is not None
+        else "{}"
     )
+    descriptor = {
+        "kind": "descriptor",
+        "system": "absurd",
+        "event_tables": [f"absurd.t_{QUEUE_NAME}"],
+        "extensions": [],
+        "version": f"absurd-sdk {ABSURD_SDK_VERSION}",
+        "schema_version": schema_version,
+        "db_name": db_name,
+        "abandon_rescue": (
+            "claim timeout, expired claims failed and retried by the next "
+            "claim_task (CLAIM_TIMEOUT_SECS)"
+        ),
+        "started_at": now_iso(),
+    }
+    if controls.schedule_enabled:
+        descriptor["scheduled_jobs"] = "durable-sleep"
+    emit(descriptor)
 
     loop = asyncio.get_running_loop()
     shutdown = asyncio.Event()
@@ -322,22 +436,52 @@ async def scenario_long_horizon() -> None:
 
     producer_conn = ReconnectingConn(await connect())
     depth_conn = ReconnectingConn(await connect())
-    worker_app = build_app(
-        QUEUE_NAME,
-        loop=loop,
-        subscriber_latencies_ms=subscriber_latencies_ms,
-        end_to_end_latencies_ms=end_to_end_latencies_ms,
-        completed_counter=completed_counter,
-        work_ms=work_ms,
+    # Absurd workers are per queue. ABSURD_CLIENTS_PER_QUEUE runs that many
+    # worker clients on each queue. Each client owns a connection unless
+    # ABSURD_SHARED_CONNECTIONS > 0, in which case clients share that many.
+    clients_per_queue = max(1, env_int("ABSURD_CLIENTS_PER_QUEUE", 1))
+    worker_slots = [queue for queue in queues for _ in range(clients_per_queue)]
+    shared_conns: list[AsyncConnection | None] = [None] * max(
+        0, env_int("ABSURD_SHARED_CONNECTIONS", 0)
     )
+
+    async def worker_conn(index: int) -> AsyncConnection | None:
+        if not shared_conns:
+            return None
+        slot = index % len(shared_conns)
+        conn = shared_conns[slot]
+        if conn is None or conn.closed or conn.broken:
+            shared_conns[slot] = await AsyncConnection.connect(
+                database_url(), autocommit=True
+            )
+        return shared_conns[slot]
+
+    async def make_app(index: int) -> AsyncAbsurd:
+        return build_app(
+            worker_slots[index],
+            conn=await worker_conn(index),
+            loop=loop,
+            subscriber_latencies_ms=subscriber_latencies_ms,
+            end_to_end_latencies_ms=end_to_end_latencies_ms,
+            completed_counter=completed_counter,
+            work_ms=work_ms,
+            controls=controls,
+        )
+
+    worker_apps = [await make_app(index) for index in range(len(worker_slots))]
 
     async def producer() -> None:
         nonlocal enqueued, current_producer_target_rate, current_queue_depth
-        if not producer_enabled():
+        # In depth-target mode only instance 0 sees the depth signal, so only
+        # it produces.
+        if not producer_enabled() or (
+            producer_mode == "depth-target" and not observer_enabled()
+        ):
             while not shutdown.is_set():
                 await asyncio.sleep(0.25)
             return
         seq = 0
+        batch_index = 0
         next_t = loop.time()
         while not shutdown.is_set():
             target_rate = read_producer_rate(producer_rate)
@@ -350,10 +494,18 @@ async def scenario_long_horizon() -> None:
                     continue
             else:
                 if target_rate <= 0:
+                    next_t = loop.time()
                     await asyncio.sleep(producer_batch_ms / 1000.0)
                     continue
                 credit = max(0.0, (loop.time() - next_t) * target_rate + 1.0)
-                batch_count = max(1, min(producer_batch_max, int(credit)))
+                if credit < 1.0:
+                    # Not due yet: at low rates, forcing a job per tick would
+                    # offer more than the target rate.
+                    await asyncio.sleep(
+                        min(producer_batch_ms / 1000.0, max(0.0, next_t - loop.time()))
+                    )
+                    continue
+                batch_count = min(producer_batch_max, int(credit))
 
             batch = []
             enqueued_at_ms = int(time.time() * 1000)
@@ -363,13 +515,21 @@ async def scenario_long_horizon() -> None:
                     {
                         "seq": seq,
                         "enqueued_at_ms": enqueued_at_ms,
-                        "payload_padding": payload_padding,
+                        "payload_padding": padding,
+                        **controls.failure_tag(seq),
+                        **controls.abandon_tag(),
                     }
                 )
 
             started = monotonic()
             try:
-                await enqueue_batch(producer_conn.conn, QUEUE_NAME, batch)
+                await enqueue_batch(
+                    producer_conn.conn,
+                    queues[batch_index % len(queues)],
+                    batch,
+                    spawn_options,
+                )
+                batch_index += 1
             except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
                 await producer_conn.reconnect()
                 continue
@@ -379,12 +539,35 @@ async def scenario_long_horizon() -> None:
             for _ in batch:
                 producer_latencies_ms.append((sample_ts, per_job_ms))
             enqueued += len(batch)
+            controls.record_abandon_tagged(sum("abandon" in item for item in batch))
 
             if producer_mode == "fixed":
                 next_t += len(batch) / max(target_rate, 1)
                 await asyncio.sleep(
                     max(0.0, min(producer_batch_ms / 1000.0, next_t - loop.time()))
                 )
+
+    herd_conn = ReconnectingConn(await connect()) if controls.schedule_enabled else None
+
+    async def enqueue_herd(first_seq: int, size: int, run_at_ms: int) -> None:
+        assert herd_conn is not None
+        enqueued_at_ms = int(time.time() * 1000)
+        items = [
+            {
+                "seq": first_seq + i,
+                "enqueued_at_ms": enqueued_at_ms,
+                "payload_padding": padding,
+                "run_at_ms": run_at_ms,
+            }
+            for i in range(size)
+        ]
+        try:
+            await enqueue_batch(
+                herd_conn.conn, queues[first_seq % len(queues)], items, spawn_options
+            )
+        except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
+            await herd_conn.reconnect()
+            raise
 
     async def depth_task() -> None:
         nonlocal current_queue_depth, current_running_depth, current_retryable_depth
@@ -395,7 +578,11 @@ async def scenario_long_horizon() -> None:
             return
         while not shutdown.is_set():
             try:
-                counts = await count_by_state(depth_conn.conn, QUEUE_NAME)
+                counts = (
+                    await count_by_state(depth_conn.conn, queues)
+                    if controls.failure_enabled
+                    else await count_live_runs(depth_conn.conn, queues)
+                )
             except (psycopg.OperationalError, psycopg.errors.ConnectionDoesNotExist):
                 await depth_conn.reconnect()
                 continue
@@ -467,6 +654,7 @@ async def scenario_long_horizon() -> None:
                 ("scheduled_depth", current_scheduled_depth, 0),
                 ("total_backlog", current_total_backlog, 0),
                 ("producer_target_rate", current_producer_target_rate, 0),
+                *controls.metrics(sample_every_s, sample_every_s),
             ):
                 if metric in OBSERVER_METRICS and not observer_enabled():
                     continue
@@ -492,29 +680,61 @@ async def scenario_long_horizon() -> None:
     # §1, §3). 10s is short enough to clear within a chaos-recovery window
     # and long enough to absorb a worker hiccup.
     claim_timeout_secs = env_int("CLAIM_TIMEOUT_SECS", 10)
-    worker_task = asyncio.create_task(
-        worker_app.start_worker(
-            concurrency=worker_count,
-            poll_interval=POLL_INTERVAL_SECS,
-            claim_timeout=claim_timeout_secs,
-        )
-    )
+    per_client_concurrency = max(1, worker_count // len(worker_slots))
+
+    # start_worker() returns when its connection fails. Restart it with a
+    # fresh client, as a process supervisor would restart a worker process.
+    async def run_worker(index: int) -> None:
+        await wait_for_consumer_gate(shutdown)
+        while not shutdown.is_set():
+            app = worker_apps[index]
+            try:
+                await app.start_worker(
+                    concurrency=per_client_concurrency,
+                    poll_interval=POLL_INTERVAL_SECS,
+                    claim_timeout=claim_timeout_secs,
+                )
+            except Exception as exc:
+                if shutdown.is_set():
+                    return
+                print(
+                    f"[absurd] worker for {worker_slots[index]} exited ({exc!r}); restarting in 1 s",
+                    file=sys.stderr,
+                )
+                await app.close()
+                await asyncio.sleep(1)
+                worker_apps[index] = await make_app(index)
+            else:
+                return
+
+    worker_tasks = [asyncio.create_task(run_worker(i)) for i in range(len(worker_apps))]
     tasks = [
         asyncio.create_task(producer()),
         asyncio.create_task(depth_task()),
         asyncio.create_task(sampler()),
-        worker_task,
+        asyncio.create_task(
+            herd_preload_loop(controls, shutdown, enqueue_herd, log_prefix="absurd")
+        ),
+        *worker_tasks,
     ]
 
     await shutdown.wait()
-    worker_app.stop_worker()
+    controls.exit_if_holding()
+    for app in worker_apps:
+        app.stop_worker()
     for task in tasks:
-        if task is not worker_task:
+        if task not in worker_tasks:
             task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
-    await worker_app.close()
+    for app in worker_apps:
+        await app.close()
+    for conn in shared_conns:
+        if conn is not None:
+            await conn.close()
     await producer_conn.close()
     await depth_conn.close()
+    if herd_conn is not None:
+        await herd_conn.close()
 
 
 async def main() -> None:

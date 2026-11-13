@@ -13,5 +13,10 @@
     "pgque.config"
   ],
   "event_indexes": [],
-  "extensions": []
+  "extensions": [],
+  "state_queries": {
+    "retryable": "SELECT count(*) FROM pgque.retry_queue",
+    "dead": "SELECT count(*) FROM pgque.dead_letter",
+    "running": "SELECT coalesce(sum(next_tick.tick_event_seq - last_tick.tick_event_seq), 0) FROM pgque.subscription s JOIN pgque.tick last_tick ON last_tick.tick_queue = s.sub_queue AND last_tick.tick_id = s.sub_last_tick JOIN pgque.tick next_tick ON next_tick.tick_queue = s.sub_queue AND next_tick.tick_id = s.sub_next_tick WHERE s.sub_batch IS NOT NULL"
+  }
 }

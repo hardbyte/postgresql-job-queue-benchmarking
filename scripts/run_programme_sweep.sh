@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# Cross-system comparison sweep: throughput, reference-rate latency, idle
+# cost, chaos recovery and the neighbour / replication / scheduling /
+# failure-churn scenarios, at shortened phase lengths so one pass fits in a
+# night. Cells already recorded in run_index.tsv are skipped, so the script
+# can be re-run to resume.
+#
+#   RESULTS_ROOT=results/2026-10-programme bash scripts/run_programme_sweep.sh [section...]
+#
+# Rerun one system over a finished sweep: SHARED_SYSTEMS=oban SHARED_ONLY=1
+# ABANDON_SYSTEMS=oban with a new RESULTS_ROOT, then pass both roots to
+# scripts/export_site_results.py.
+#
+# Sections: throughput throughput_tuned ref800 idle chaos neighbour logical scheduled retry
+# fanout payload large_args long_jobs drain abandon (default: all, in that order; abandon
+# goes last because its million-job cells leave the disk busy afterwards).
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+# Postgres data on the repository's disk rather than under the Docker root.
+export BENCH_PG_DATA_DIR="${BENCH_PG_DATA_DIR:-$ROOT/.pgdata}"
+RESULTS_ROOT="${RESULTS_ROOT:-$ROOT/results/$(date -u +%Y-%m-%d)-programme-sweep}"
+mkdir -p "$RESULTS_ROOT/logs"
+RUN_INDEX="$RESULTS_ROOT/run_index.tsv"
+[[ -f "$RUN_INDEX" ]] || echo -e "section\tcell_id\tsystems\trun_dir\texit_code\tstarted_at\tended_at" > "$RUN_INDEX"
+MASTER_LOG="$RESULTS_ROOT/run.log"
+PGMQ_IMAGE="ghcr.io/pgmq/pg18-pgmq:v1.13.1"
+SHARED="${SHARED_SYSTEMS:-awa,absurd,oban,pgboss,procrastinate,river}"
+
+# ONLY_SYSTEMS=awa,absurd limits the per-system sections (tuned, fanout).
+want() { [[ -z "${ONLY_SYSTEMS:-}" || ",${ONLY_SYSTEMS}," == *",$1,"* ]]; }
+log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$MASTER_LOG"; }
+
+run_cell() {
+  local section="$1" cell_id="$2" systems="$3"; shift 3
+  if grep -q "^${section}	${cell_id}	" "$RUN_INDEX"; then
+    log "SKIP ${cell_id}"
+    return 0
+  fi
+  local logfile="$RESULTS_ROOT/logs/${cell_id}.log"
+  local started; started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  log "START ${cell_id} systems=${systems}"
+  uv run --frozen bench run --systems "$systems" "$@" > "$logfile" 2>&1
+  local rc=$?
+  local run_dir; run_dir=$(grep -oE 'results/custom-[0-9TZ]+-[a-f0-9]+' "$logfile" | head -1)
+  echo -e "${section}\t${cell_id}\t${systems}\t${run_dir}\t${rc}\t${started}\t$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$RUN_INDEX"
+  log "END   ${cell_id} rc=${rc} dir=${run_dir}"
+}
+
+# One cell per system family that needs its own image or producer knobs.
+run_all() {
+  local section="$1" cell="$2"; shift 2
+  run_cell "$section" "${cell}_shared" "$SHARED" "$@"
+  [[ "${SHARED_ONLY:-0}" == 1 ]] && return 0
+  PRODUCER_BATCH_MAX=1000 run_cell "$section" "${cell}_pgque" pgque "$@"
+  run_cell "$section" "${cell}_pgmq" pgmq --pg-image "$PGMQ_IMAGE" "$@"
+}
+
+section_throughput() {
+  for workers in 4 16 64 128; do
+    run_all throughput "sat_w${workers}" \
+      --producer-rate 50000 --producer-mode depth-target --target-depth 4000 \
+      --worker-count "$workers" --phase warmup=warmup:30s --phase clean=clean:150s
+  done
+}
+
+# Each system tuned for throughput within one budget: at most 4 processes,
+# 128 handlers and 200 connections, the same 1 ms jobs and depth-target
+# producer, documented library settings only. TUNED_QUEUES is each system's
+# recommended queue count; a second cell at one queue shows what sharding adds.
+tuned_cell() {
+  local system="$1" queues="$2"; shift 2
+  want "$system" || return 0
+  local suffix="sat_tuned"
+  [[ "$queues" == 1 ]] || suffix="sat_tuned_k${queues}"
+  run_cell throughput "${suffix}_${system}" "$system" "$@" --queue-count "$queues" \
+    --producer-rate 50000 --producer-mode depth-target --target-depth 4000 \
+    --phase warmup=warmup:30s --phase clean=clean:150s
+}
+
+section_throughput_tuned() {
+  local queues
+  for queues in 1 4; do
+    ( export PRODUCER_BATCH_MAX=1000 MAX_CONNECTIONS=64 LEASE_ROTATE_MS=1000
+      tuned_cell awa "$queues" --replicas 1 --worker-count 128 )
+    ( export PRODUCER_BATCH_MAX=1000 MAX_CONNECTIONS=32 RIVER_FETCH_COOLDOWN_MS=2 RIVER_FETCH_POLL_INTERVAL_MS=20
+      tuned_cell river "$queues" --replicas 1 --worker-count 128 )
+    ( export PRODUCER_BATCH_MAX=256
+      tuned_cell absurd "$queues" --replicas 4 --worker-count 32 )
+  done
+  ( export PRODUCER_BATCH_MAX=1000 MAX_CONNECTIONS=40 OBAN_DISPATCH_COOLDOWN_MS=1
+    tuned_cell oban 1 --replicas 4 --worker-count 32 )
+  ( export PRODUCER_BATCH_MAX=1000 MAX_CONNECTIONS=40 SUBSCRIBER_BATCH_SIZE=32 \
+      PGBOSS_BURST_WHEN_BATCH_FULL=1 PGBOSS_LISTEN_NOTIFY=1
+    tuned_cell pgboss 1 --replicas 4 --worker-count 32 )
+  ( export PRODUCER_BATCH_MAX=500 MAX_CONNECTIONS=33
+    tuned_cell procrastinate 1 --replicas 4 --worker-count 32 )
+  ( export PRODUCER_BATCH_MAX=1000 PGQUE_SUBCONSUMERS=4 PGQUE_CONSUMER_CONNS=4 PGQUE_SHARED_LISTEN=1 \
+      PGQUE_TICKER_MODE=loop PGQUE_TICK_MS=10
+    tuned_cell pgque 1 --replicas 4 --worker-count 32 )
+  for queues in 1 16; do
+    ( export PRODUCER_BATCH_MAX=1000 CONSUMER_BATCH_SIZE=32 PGMQ_CONSUMER_SWEEP=1 PGMQ_ACK=delete
+      tuned_cell pgmq "$queues" --pg-image "$PGMQ_IMAGE" --replicas 4 --worker-count 32 )
+  done
+}
+
+section_ref800() {
+  run_all ref800 ref800 --producer-rate 800 --worker-count 32 \
+    --phase warmup=warmup:60s --phase clean=clean:300s
+}
+
+section_idle() {
+  run_all idle idle --producer-rate 200 --worker-count 8 \
+    --phase warmup=warmup:60s --phase "idle_1=idle-background(rate=0):10m"
+}
+
+section_chaos() {
+  run_all chaos pg_restart --producer-rate 400 --worker-count 16 --replicas 2 \
+    --phase warmup=warmup:30s --phase baseline=clean:90s \
+    --phase restart=postgres-restart:90s --phase recovery=clean:120s
+}
+
+section_neighbour() {
+  run_all neighbour neighbour --producer-rate 400 --worker-count 16 \
+    --phase warmup=warmup:60s \
+    --phase "baseline=neighbour-oltp(load=0):3m" \
+    --phase "moderate=neighbour-oltp(load=1):4m" \
+    --phase "saturation=neighbour-oltp(load=4):4m" \
+    --phase "recovery=neighbour-oltp(load=1):3m"
+}
+
+section_logical() {
+  run_all logical logical --producer-rate 400 --worker-count 16 \
+    --phase warmup=warmup:60s --phase clean_1=clean:3m \
+    --phase "stream_1=logical-stream(publication=all):4m" \
+    --phase pressure_1=high-load:4m --phase stall_1=logical-stall:4m \
+    --phase "catchup_1=logical-stream(publication=all):4m"
+}
+
+section_scheduled() {
+  run_all scheduled scheduled_burst --producer-rate 200 --worker-count 16 \
+    --phase warmup=warmup:60s --phase baseline=clean:2m \
+    --phase "preload=schedule-preload(count=20000):3m" \
+    --phase due=clean:4m --phase after=clean:2m
+}
+
+section_retry() {
+  JOB_MAX_ATTEMPTS=5 run_all retry retry_storm --producer-rate 200 --worker-count 16 \
+    --phase warmup=warmup:60s --phase baseline=clean:3m \
+    --phase "storm=retry-storm(transient_pct=30,poison_pct=1):6m" \
+    --phase recovery=recovery:6m
+}
+
+# Many queues at a fixed load: 200 jobs/s round-robin over 1 queue, then over
+# 200 queues, 16 handlers requested and 24 connections per process. Each
+# system serves many queues its own idiomatic way (FANOUT_ENV), the same for
+# both cells. River, Oban, pg-boss and Absurd need at least one worker per
+# queue, so they run 200 at 200 queues; the write-up reports it.
+fanout_env() {
+  case "$1" in
+    awa) echo AWA_WEIGHTED_WORKERS=1 ;;
+    river) echo RIVER_FETCH_POLL_INTERVAL_MS=1000 ;;
+    pgboss) echo PGBOSS_LISTEN_NOTIFY=1 ;;
+    absurd) echo ABSURD_SHARED_CONNECTIONS=16 ABSURD_POLL_INTERVAL_MS=250 ;;
+    pgmq) echo PGMQ_NOTIFY_INSERT_MS=0 POLL_INTERVAL_MS=500 ;;
+    pgque) echo PGQUE_CONSUMER_MODE=shared PGQUE_CONSUMER_CONNS=16 PGQUE_SHARED_LISTEN=1 \
+      PGQUE_IDLE_POLL_MS=1000 PGQUE_TICKER_MODE=loop PGQUE_TICK_MS=50 ;;
+  esac
+}
+
+section_fanout() {
+  local system queues extra
+  for queues in 1 200; do
+    for system in awa absurd oban pgboss procrastinate river pgque pgmq; do
+      want "$system" || continue
+      extra=()
+      [[ "$system" == pgmq ]] && extra=(--pg-image "$PGMQ_IMAGE")
+      # shellcheck disable=SC2046
+      ( export MAX_CONNECTIONS=24 $(fanout_env "$system")
+        run_cell fanout "fanout_q${queues}_${system}" "$system" "${extra[@]+"${extra[@]}"}" \
+          --producer-rate 200 --worker-count 16 --queue-count "$queues" \
+          --phase warmup=warmup:60s --phase clean_1=clean:4m \
+          --phase "idle_1=idle-background(rate=0):3m" )
+    done
+  done
+}
+
+section_payload() {
+  run_all payload payload_64k --producer-rate 50 --worker-count 16 \
+    --job-payload-bytes 65536 --job-payload-kind random \
+    --phase warmup=warmup:60s --phase clean_1=clean:5m --phase drain_1=drain:3m
+}
+
+section_long_jobs() {
+  run_all long_jobs long_jobs --producer-rate 1 --worker-count 100 --replicas 2 \
+    --job-work-ms 40000 \
+    --phase "warmup=warmup(rate=0):30s" --phase "preload=preload(jobs=150):20s" \
+    --phase hold=drain:45s --phase release=drain:60s --phase steady=clean:6m \
+    --phase tail=drain:90s
+}
+
+# Large incompressible args. The saturation cells compare each system's
+# insert path at 64 KiB and 1 MiB (one producer per system, so they are
+# enqueue-bound); the backlog cell preloads ~8 GiB of 1 MiB jobs from four
+# producers behind the gate and drains it, for worker memory, drain rate and
+# how far TOAST and the database shrink afterwards. Producer batches stay at
+# 128 rows for every system, pgque included, so one insert call carries at
+# most 128 MiB.
+section_large_args() {
+  local systems args
+  for bytes in 65536 1048576; do
+    args=(--job-payload-bytes "$bytes" --job-payload-kind random
+      --producer-rate 50000 --producer-mode depth-target --target-depth 2000
+      --worker-count 64 --phase warmup=warmup:30s --phase clean=clean:120s)
+    run_cell large_args "sat_${bytes}_shared" "$SHARED" "${args[@]}"
+    [[ "${SHARED_ONLY:-0}" == 1 ]] && continue
+    PRODUCER_BATCH_MAX=128 run_cell large_args "sat_${bytes}_pgque" pgque "${args[@]}"
+    run_cell large_args "sat_${bytes}_pgmq" pgmq --pg-image "$PGMQ_IMAGE" "${args[@]}"
+  done
+  args=(--job-payload-bytes 1048576 --job-payload-kind random
+    --producer-rate 2000 --replicas 4 --worker-count 16
+    --phase "warmup=warmup(rate=0):30s" --phase "preload=preload(jobs=8000):4m"
+    --phase drain=drain:5m --phase "settle=idle-background(rate=0):3m")
+  run_cell large_args backlog_1m_shared "$SHARED" "${args[@]}"
+  [[ "${SHARED_ONLY:-0}" == 1 ]] && return 0
+  PRODUCER_BATCH_MAX=128 run_cell large_args backlog_1m_pgque pgque "${args[@]}"
+  run_cell large_args backlog_1m_pgmq pgmq --pg-image "$PGMQ_IMAGE" "${args[@]}"
+}
+
+section_drain() {
+  run_all drain backlog_drain --producer-rate 2000 --worker-count 64 \
+    --phase "warmup=warmup(rate=0):30s" --phase "preload=preload(jobs=200000):3m" \
+    --phase drain=drain:6m --phase "settle=idle-background(rate=0):4m"
+}
+
+# Mass abandonment: 4 replicas hold ABANDON_JOBS claims between them, all
+# four are SIGKILLed at once, and a fresh fleet at ordinary concurrency
+# (RESCUE_FLEET_*) works the backlog off while 20 jobs/s per replica keep
+# arriving. Every claim timeout is 300 s (awa's default deadline), above the
+# 3-minute claim phase, so no live holder is rescued before the kill. One
+# cell per system: each needs its own knobs to hold 250k claims a process.
+ABANDON_JOBS="${ABANDON_JOBS:-1000000}"
+ABANDON_TIMEOUTS=(
+  LEASE_DEADLINE_MS=300000 RESCUE_AFTER_SECS=300 EXPIRE_IN_SECS=300
+  VISIBILITY_TIMEOUT_S=300 CLAIM_TIMEOUT_SECS=300 STALLED_AFTER_SECS=300
+  AWA_RUNTIME_SNAPSHOT_INTERVAL_MS=10000 RESCUE_FLEET_WORKER_COUNT=128
+)
+HOLD_PER_REPLICA=$(( ABANDON_JOBS / 4 + ABANDON_JOBS / 40 ))
+
+# abandon_cell <system> [VAR=value ...] [bench args ...]. CLAIM=<duration>
+# overrides the 3-minute claim phase.
+abandon_cell() {
+  local system="$1"; shift
+  [[ -n "${ABANDON_SYSTEMS:-}" && ",${ABANDON_SYSTEMS}," != *",${system},"* ]] && return 0
+  local extra=() claim=3m
+  while [[ $# -gt 0 && "$1" == *=* ]]; do
+    if [[ "$1" == CLAIM=* ]]; then claim="${1#CLAIM=}"; else extra+=("$1"); fi
+    shift
+  done
+  ( export "${ABANDON_TIMEOUTS[@]}" ${extra[@]+"${extra[@]}"}
+    run_cell abandon "abandon_${system}" "$system" "$@" \
+      --producer-rate 20 --replicas 4 \
+      --phase "warmup=warmup(rate=0):1m" \
+      --phase "preload=preload(jobs=${ABANDON_JOBS}):10m" \
+      --phase "claim=drain:${claim}" \
+      --phase kill=abandon-kill:30s \
+      --phase rescue=clean:30m \
+      --phase "settle=idle-background(rate=0):5m" )
+}
+
+section_abandon() {
+  abandon_cell awa MAX_CONNECTIONS=64 --worker-count "$HOLD_PER_REPLICA"
+  abandon_cell pgboss SUBSCRIBER_BATCH_SIZE=1000 RESCUE_FLEET_SUBSCRIBER_BATCH_SIZE=16 \
+    --worker-count $(( HOLD_PER_REPLICA / 1000 + 1 ))
+  # River caps a queue at 10,000 workers; 50 queues keep each fetch small.
+  abandon_cell river BENCH_QUEUE_COUNT=50 MAX_CONNECTIONS=60 --worker-count "$HOLD_PER_REPLICA"
+  abandon_cell oban MAX_CONNECTIONS=80 --worker-count "$HOLD_PER_REPLICA"
+  # One fetch per job at ~330 claims/s a process; its rescue keys off worker
+  # heartbeats, so a longer hold doesn't release live claims.
+  abandon_cell procrastinate CLAIM=15m --worker-count "$HOLD_PER_REPLICA"
+  abandon_cell absurd --worker-count "$HOLD_PER_REPLICA"
+  abandon_cell pgmq CONSUMER_BATCH_SIZE=$(( HOLD_PER_REPLICA / 32 + 1 )) \
+    RESCUE_FLEET_CONSUMER_BATCH_SIZE=8 RESCUE_FLEET_WORKER_COUNT=32 \
+    --worker-count 32 --pg-image "$PGMQ_IMAGE"
+  # Cooperative subconsumers split the log; a held batch needs at least
+  # SUBSCRIBER_BATCH_SIZE events, so ask each replica for a fifth.
+  abandon_cell pgque PRODUCER_BATCH_MAX=1000 SUBSCRIBER_BATCH_SIZE=$(( ABANDON_JOBS / 5 )) \
+    --worker-count 32
+}
+
+sections=("$@")
+[[ ${#sections[@]} -eq 0 ]] && sections=(throughput throughput_tuned ref800 idle chaos neighbour logical scheduled retry fanout payload large_args long_jobs drain abandon)
+for section in "${sections[@]}"; do
+  log "==== ${section} ===="
+  "section_${section}"
+done
+log "sweep complete: $RESULTS_ROOT"

@@ -57,6 +57,43 @@ function emit(record) {
   process.stdout.write(`${JSON.stringify(record)}\n`);
 }
 
+// BENCH_QUEUE_COUNT queues; queue 0 keeps the legacy name.
+function queueNames() {
+  const count = Math.max(1, envInt("BENCH_QUEUE_COUNT", 1));
+  const names = [QUEUE_NAME];
+  for (let i = 1; i < count; i += 1) {
+    names.push(`${QUEUE_NAME}_${i}`);
+  }
+  return names;
+}
+
+// JOB_PAYLOAD_KIND=random → incompressible base64 noise, else `x`s.
+function payloadPadding(length) {
+  const n = Math.max(0, length);
+  if (process.env.JOB_PAYLOAD_KIND === "random") {
+    return require("node:crypto").randomBytes(n).toString("base64").slice(0, n);
+  }
+  return "x".repeat(n);
+}
+
+// Resolves once CONSUMER_GATE_FILE reads `open` (immediately if unset).
+async function waitForConsumerGate(isShuttingDown) {
+  const path = process.env.CONSUMER_GATE_FILE;
+  if (!path) {
+    return;
+  }
+  while (!isShuttingDown()) {
+    try {
+      if (require("node:fs").readFileSync(path, "utf8").trim() === "open") {
+        return;
+      }
+    } catch {
+      // gate file not written yet
+    }
+    await sleep(200);
+  }
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -79,6 +116,233 @@ function readProducerRate(defaultValue) {
     return Number.isFinite(value) ? value : defaultValue;
   } catch {
     return defaultValue;
+  }
+}
+
+// ── Scenario controls (CONTRIBUTING_ADAPTERS.md "Scenario controls") ──
+// Default-off: JOB_FAILURE_CONTROL_FILE tags jobs as transient/poison
+// failures; SCHEDULE_CONTROL_FILE asks instance 0 to enqueue a scheduled
+// herd. Untagged jobs keep their existing payload and code path.
+
+function readJson(path) {
+  try {
+    const value = JSON.parse(require("node:fs").readFileSync(path, "utf8"));
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function maxAttemptsFromEnv() {
+  const value = Number.parseInt(process.env.JOB_MAX_ATTEMPTS || "", 10);
+  return Number.isFinite(value) ? Math.max(1, value) : null;
+}
+
+function failureTag(plan, seq) {
+  if (!plan || Object.keys(plan).length === 0) {
+    return {};
+  }
+  const poisonCut = Math.round(Number(plan.poison_pct || 0) * 100);
+  const transientCut = poisonCut + Math.round(Number(plan.transient_pct || 0) * 100);
+  const bucket = ((seq % 10000) * 7919) % 10000;
+  if (bucket < poisonCut) {
+    return { fail: "poison" };
+  }
+  if (bucket < transientCut) {
+    return { fail: "transient", fail_attempts: Number(plan.transient_failures || 1) };
+  }
+  return {};
+}
+
+// null = succeed, "retry" = fail and let pg-boss retry, "exhausted" = fail
+// on the job's last attempt.
+function failureOutcome(data, attempt, maxAttempts) {
+  const failing =
+    data.fail === "poison" ||
+    (data.fail === "transient" && attempt <= Number(data.fail_attempts || 1));
+  if (!failing) {
+    return null;
+  }
+  return maxAttempts !== null && attempt >= maxAttempts ? "exhausted" : "retry";
+}
+
+function isTagged(data) {
+  return Boolean(data.fail) || data.run_at_ms !== undefined || Boolean(data.abandon);
+}
+
+// Herd and abandon-tagged jobs stay out of completion_rate and the latency windows.
+function isExcluded(data) {
+  return data.run_at_ms !== undefined || Boolean(data.abandon);
+}
+
+function* herdBatches(command, maxBatch = 500) {
+  const count = Number(command.count);
+  const runAtMs = Number(command.run_at_ms);
+  const spreadMs = Number(command.spread_ms || 0);
+  const batch = spreadMs <= 0 ? maxBatch : Math.max(1, Math.min(maxBatch, Math.floor((count * 100) / spreadMs)));
+  for (let done = 0; done < count; ) {
+    const size = Math.min(batch, count - done);
+    const offset = spreadMs > 0 ? Math.floor((spreadMs * done) / count) : 0;
+    yield [size, runAtMs + offset];
+    done += size;
+  }
+}
+
+class ScenarioControls {
+  constructor() {
+    this.failurePath = process.env.JOB_FAILURE_CONTROL_FILE || null;
+    this.schedulePath = process.env.SCHEDULE_CONTROL_FILE || null;
+    this.abandonPath = process.env.JOB_ABANDON_CONTROL_FILE || null;
+    this.abandon = this.abandonPath ? readJson(this.abandonPath) : {};
+    this.abandonReadAt = nowMonoMs();
+    this.abandonHeld = 0;
+    this.abandonTaggedEnqueued = 0;
+    this.rescuedCompleted = 0;
+    this.maxAttempts = maxAttemptsFromEnv();
+    this.plan = {};
+    this.planReadAt = -Infinity;
+    this.lastScheduleId = null;
+    this.failedAttempts = 0;
+    this.retriedCompletions = 0;
+    this.poisonExhausted = 0;
+    this.scheduledCompletions = 0;
+    this.scheduleStarted = 0;
+    this.scheduleEnqueued = 0;
+    this.scheduleEarly = 0;
+    this.schedulePreloadS = null;
+    this.lateness = [];
+    this.lastRates = {};
+  }
+
+  tag(seq) {
+    if (!this.failurePath) {
+      return {};
+    }
+    const now = nowMonoMs();
+    if (now - this.planReadAt >= 1000) {
+      this.plan = readJson(this.failurePath);
+      this.planReadAt = now;
+    }
+    return failureTag(this.plan, seq);
+  }
+
+  abandonState() {
+    const now = nowMonoMs();
+    if (this.abandonPath && now - this.abandonReadAt >= 1000) {
+      this.abandon = readJson(this.abandonPath);
+      this.abandonReadAt = now;
+    }
+    return this.abandon;
+  }
+
+  abandonTag() {
+    return this.abandonPath && this.abandonState().tag === true ? { abandon: 1 } : {};
+  }
+
+  shouldHold(jobs) {
+    return this.abandonState().hold === true && jobs.some((job) => job.data && job.data.abandon);
+  }
+
+  // Never settles, so pg-boss keeps the whole batch `active` until the process dies.
+  // pg-boss aborts the batch's signal itself once expireInSeconds runs out in-process
+  // (and fails the jobs); that is reported, not obeyed.
+  hold(jobs) {
+    this.abandonHeld += jobs.length;
+    const signal = jobs[0].signal;
+    if (signal) {
+      signal.addEventListener(
+        "abort",
+        () => {
+          this.abandonHeld -= jobs.length;
+          console.error(`[pgboss] pg-boss released a held batch of ${jobs.length} (in-process expireInSeconds elapsed or shutdown)`);
+        },
+        { once: true }
+      );
+    }
+    return new Promise(() => {});
+  }
+
+  pollSchedule() {
+    if (!this.schedulePath) {
+      return null;
+    }
+    const command = readJson(this.schedulePath);
+    if (!command.id || command.id === this.lastScheduleId) {
+      return null;
+    }
+    this.lastScheduleId = command.id;
+    return command;
+  }
+
+  onStart(data) {
+    if (data.run_at_ms === undefined) {
+      return;
+    }
+    const latenessMs = Date.now() - Number(data.run_at_ms);
+    if (latenessMs < 0) {
+      this.scheduleEarly += 1;
+    }
+    this.lateness.push(Math.max(0, latenessMs));
+    this.scheduleStarted += 1;
+  }
+
+  recordFailure(data, outcome) {
+    this.failedAttempts += 1;
+    if (outcome === "exhausted" && data.fail === "poison") {
+      this.poisonExhausted += 1;
+    }
+  }
+
+  onComplete(data) {
+    if (data.abandon) {
+      this.rescuedCompleted += 1;
+    }
+    if (data.fail === "transient") {
+      this.retriedCompletions += 1;
+    }
+    if (data.run_at_ms !== undefined) {
+      this.scheduledCompletions += 1;
+    }
+  }
+
+  rate(name, value, dt) {
+    const rate = (value - (this.lastRates[name] || 0)) / dt;
+    this.lastRates[name] = value;
+    return rate;
+  }
+
+  metrics(dt, windowS) {
+    const out = [];
+    if (this.failurePath) {
+      out.push(["injected_failure_rate", this.rate("failed", this.failedAttempts, dt), windowS]);
+      out.push(["retried_completion_rate", this.rate("retried", this.retriedCompletions, dt), windowS]);
+      out.push(["poison_exhausted_rate", this.rate("exhausted", this.poisonExhausted, dt), windowS]);
+    }
+    if (this.schedulePath && (this.scheduleStarted || this.scheduleEnqueued)) {
+      out.push(["scheduled_completion_rate", this.rate("scheduled", this.scheduledCompletions, dt), windowS]);
+      if (this.lateness.length) {
+        this.lateness.sort((a, b) => a - b);
+        const values = this.lateness;
+        const q = (p) => values[Math.min(values.length - 1, Math.max(0, Math.round(p * (values.length - 1))))];
+        out.push(["schedule_lateness_p50_ms", q(0.5), 0]);
+        out.push(["schedule_lateness_p95_ms", q(0.95), 0]);
+        out.push(["schedule_lateness_p99_ms", q(0.99), 0]);
+        out.push(["schedule_lateness_max_ms", values[values.length - 1], 0]);
+      }
+      out.push(["schedule_started_total", this.scheduleStarted, 0]);
+      out.push(["schedule_enqueued_total", this.scheduleEnqueued, 0]);
+      out.push(["schedule_early_total", this.scheduleEarly, 0]);
+      if (this.schedulePreloadS !== null) {
+        out.push(["schedule_preload_s", this.schedulePreloadS, 0]);
+      }
+    }
+    if (this.abandonPath) {
+      out.push(["abandon_held_jobs", this.abandonHeld, 0]);
+      out.push(["abandon_tagged_enqueued_total", this.abandonTaggedEnqueued, 0]);
+      out.push(["rescued_completed_total", this.rescuedCompleted, 0]);
+      out.push(["rescued_completion_rate", this.rate("rescued", this.rescuedCompleted, dt), windowS]);
+    }
+    return out;
   }
 }
 
@@ -128,7 +392,16 @@ async function discoverQueueTable(boss) {
   return queueInfo && queueInfo.table ? `pgboss.${queueInfo.table}` : null;
 }
 
-async function countQueuedJobs(boss, queueTable) {
+async function countQueuedJobs(boss, queueTable, queues = [QUEUE_NAME]) {
+  if (queues.length > 1) {
+    // One statement over the partitioned parent so observer load doesn't
+    // scale with BENCH_QUEUE_COUNT.
+    const { rows } = await boss.getDb().executeSql(
+      `SELECT count(*)::int AS queued FROM pgboss.job WHERE name = ANY($1) AND state < 'active'`,
+      [queues]
+    );
+    return rows[0].queued;
+  }
   const { rows } = await boss.getDb().executeSql(
     `SELECT count(*)::int AS queued FROM ${queueTable} WHERE name = $1 AND state < 'active'`,
     [QUEUE_NAME]
@@ -151,12 +424,20 @@ async function scenarioLongHorizon() {
     Math.max(1, Math.min(64, Math.ceil((producerRate * 1.25) / Math.max(workerCount * 2, 1))))
   );
   const dbName = databaseUrl().split("/").pop();
+  // Unset keeps pg-boss's defaults: expireInSeconds 900, supervise/monitor every 60 s.
+  const expireInSecs = envInt("EXPIRE_IN_SECS", null);
+  const superviseIntervalSecs = envInt("SUPERVISE_INTERVAL_SECS", null);
+  // Unset keeps pg-boss's pool default (max 10).
+  const maxConnections = envInt("MAX_CONNECTIONS", null);
+  const listenNotify = envStr("PGBOSS_LISTEN_NOTIFY", "0") === "1";
 
   const boss = new PgBoss({
     connectionString: databaseUrl(),
-    noSupervisor: true,
-    noScheduling: true,
-    noMonitoring: true,
+    ...(maxConnections !== null ? { max: maxConnections } : {}),
+    ...(listenNotify ? { useListenNotify: true } : {}),
+    ...(superviseIntervalSecs !== null
+      ? { superviseIntervalSeconds: superviseIntervalSecs, monitorIntervalSeconds: superviseIntervalSecs }
+      : {}),
   });
 
   boss.on("error", (err) => {
@@ -165,10 +446,15 @@ async function scenarioLongHorizon() {
 
   await boss.start();
 
-  if (!(await boss.getQueue(QUEUE_NAME))) {
-    await boss.createQueue(QUEUE_NAME, { partition: true });
+  const queues = queueNames();
+  for (const name of queues) {
+    if (!(await boss.getQueue(name))) {
+      await boss.createQueue(name, { partition: true, ...(listenNotify ? { notify: true } : {}) });
+    } else if (listenNotify) {
+      // Another replica created it; this also refreshes the local queue cache.
+      await boss.updateQueue(name, { notify: true });
+    }
   }
-  await boss.deleteAllJobs(QUEUE_NAME);
 
   const schemaVersion = await boss.schemaVersion();
   const queueTable = await discoverQueueTable(boss);
@@ -183,9 +469,21 @@ async function scenarioLongHorizon() {
     schema_version: schemaVersion === null ? null : String(schemaVersion),
     db_name: dbName,
     started_at: nowIso(),
+    abandon_rescue:
+      `supervisor expires active jobs past expireInSeconds into retry ` +
+      `(EXPIRE_IN_SECS=${expireInSecs ?? "900 default"}, swept every SUPERVISE_INTERVAL_SECS=${superviseIntervalSecs ?? "60 default"})`,
   });
 
-  const payloadPadding = "x".repeat(Math.max(0, payloadBytes - 96));
+  const padding = payloadPadding(payloadBytes - 96);
+  const controls = new ScenarioControls();
+  // JOB_MAX_ATTEMPTS counts total attempts; pg-boss retryLimit counts retries.
+  const jobOptions = {
+    ...(controls.maxAttempts !== null ? { retryLimit: controls.maxAttempts - 1 } : {}),
+    ...(expireInSecs !== null ? { expireInSeconds: expireInSecs } : {}),
+  };
+  if (controls.abandonPath && controls.maxAttempts === 1) {
+    console.error("[pgboss] JOB_MAX_ATTEMPTS=1: expired abandoned jobs go to failed, not retry");
+  }
   const producerLatencies = new TimedWindow();
   const subscriberLatencies = new TimedWindow();
   const endToEndLatencies = new TimedWindow();
@@ -211,18 +509,55 @@ async function scenarioLongHorizon() {
   process.on("SIGINT", beginShutdown);
   process.on("SIGTERM", beginShutdown);
 
-  const workId = await boss.work(
-    QUEUE_NAME,
-    {
-      pollingIntervalSeconds: 0.5,
-      localConcurrency: workerCount,
-      batchSize: subscriberBatchSize,
-    },
-    async (jobs) => {
+  // Failure injection settles each job of a batch individually via
+  // pg-boss's perJobResults; without it the batch handler is unchanged.
+  const handleJobs = (
+    controls.failurePath ? async (jobs) => {
       const startedAtMs = Date.now();
+      const results = [];
+      const succeeded = [];
       for (const job of jobs) {
         const data = job.data || {};
-        if (typeof data.enqueued_at_ms === "number") {
+        if (isTagged(data)) {
+          controls.onStart(data);
+          const outcome = failureOutcome(data, job.retryCount + 1, controls.maxAttempts);
+          if (outcome !== null) {
+            controls.recordFailure(data, outcome);
+            results.push({ id: job.id, status: "failed", output: { message: `injected ${data.fail} failure` } });
+            continue;
+          }
+        } else if (typeof data.enqueued_at_ms === "number") {
+          subscriberLatencies.push(nowMonoMs(), startedAtMs - data.enqueued_at_ms);
+        }
+        succeeded.push(job);
+      }
+      if (workMs > 0) {
+        await sleep(workMs * succeeded.length);
+      }
+      const completedAtMs = Date.now();
+      for (const job of succeeded) {
+        const data = job.data || {};
+        results.push({ id: job.id, status: "completed" });
+        if (isTagged(data)) {
+          controls.onComplete(data);
+          if (isExcluded(data)) {
+            continue;
+          }
+        } else if (typeof data.enqueued_at_ms === "number") {
+          endToEndLatencies.push(nowMonoMs(), completedAtMs - data.enqueued_at_ms);
+        }
+        completed += 1;
+      }
+      return results;
+    } : async (jobs) => {
+      const startedAtMs = Date.now();
+      let excludedJobs = 0;
+      for (const job of jobs) {
+        const data = job.data || {};
+        if (isExcluded(data)) {
+          controls.onStart(data);
+          excludedJobs += 1;
+        } else if (typeof data.enqueued_at_ms === "number") {
           subscriberLatencies.push(nowMonoMs(), startedAtMs - data.enqueued_at_ms);
         }
       }
@@ -232,13 +567,47 @@ async function scenarioLongHorizon() {
       const completedAtMs = Date.now();
       for (const job of jobs) {
         const data = job.data || {};
-        if (typeof data.enqueued_at_ms === "number") {
+        if (isExcluded(data)) {
+          controls.onComplete(data);
+        } else if (typeof data.enqueued_at_ms === "number") {
           endToEndLatencies.push(nowMonoMs(), completedAtMs - data.enqueued_at_ms);
         }
       }
-      completed += jobs.length;
+      completed += jobs.length - excludedJobs;
     }
   );
+  const handler = controls.abandonPath
+    ? (jobs) => (controls.shouldHold(jobs) ? controls.hold(jobs) : handleJobs(jobs))
+    : handleJobs;
+
+  // pg-boss workers are per queue; worker concurrency is split across them.
+  const perQueueConcurrency = Math.max(1, Math.floor(workerCount / queues.length));
+  const workOptions = {
+    pollingIntervalSeconds: Number.parseFloat(envStr("PGBOSS_POLLING_INTERVAL_S", "0.5")),
+    localConcurrency: perQueueConcurrency,
+    batchSize: subscriberBatchSize,
+    ...(envStr("PGBOSS_BURST_WHEN_BATCH_FULL", "0") === "1" ? { burstWhenBatchFull: true } : {}),
+  };
+  const workIds = new Map();
+  const startWorkers = (async () => {
+    await waitForConsumerGate(() => shuttingDown);
+    for (const name of queues) {
+      if (shuttingDown) {
+        return;
+      }
+      workIds.set(
+        name,
+        await boss.work(
+          name,
+          controls.failurePath ? { ...workOptions, perJobResults: true } : workOptions,
+          handler
+        )
+      );
+    }
+  })();
+  if (!process.env.CONSUMER_GATE_FILE) {
+    await startWorkers;
+  }
 
   // Catch connection-loss errors from any boss.* call and let the
   // task loop continue. Without this, a single FATAL 57P0x from
@@ -252,11 +621,16 @@ async function scenarioLongHorizon() {
       return true;
     }
     const msg = String(err.message || err);
-    return /connection|terminat|shutdown|ECONN/i.test(msg);
+    return /connect|terminat|shutdown|ECONN/i.test(msg);
   };
 
   const producerTask = (async () => {
+    // Only instance 0 observes depth, so only it produces in depth-target mode.
+    if (producerMode === "depth-target" && !observerEnabled()) {
+      return;
+    }
     let nextAt = nowMonoMs();
+    let batchIndex = 0;
     while (!shuttingDown) {
       try {
         const targetRate = readProducerRate(producerRate);
@@ -264,18 +638,30 @@ async function scenarioLongHorizon() {
 
         let batchCount = 0;
         if (producerMode === "depth-target") {
-          queueDepth = await countQueuedJobs(boss, queueTable);
+          queueDepth = await countQueuedJobs(boss, queueTable, queues);
           batchCount = Math.max(0, Math.min(producerBatchMax, targetDepth - queueDepth));
           if (batchCount === 0) {
             await sleep(producerBatchMs);
             continue;
           }
         } else {
+          if (targetRate <= 0) {
+            nextAt = nowMonoMs();
+            await sleep(100);
+            continue;
+          }
           const now = nowMonoMs();
           const credit = Math.max(0, ((now - nextAt) * targetRate) / 1000 + 1);
-          batchCount = Math.max(1, Math.min(producerBatchMax, Math.floor(credit)));
+          if (credit < 1) {
+            // Not due yet: at low rates, forcing a job per tick would offer
+            // more than the target rate.
+            await sleep(Math.min(producerBatchMs, Math.max(0, nextAt - now)));
+            continue;
+          }
+          batchCount = Math.min(producerBatchMax, Math.floor(credit));
         }
 
+        const abandonTag = controls.abandonTag();
         const jobs = [];
         for (let i = 0; i < batchCount; i += 1) {
           seq += 1;
@@ -283,13 +669,17 @@ async function scenarioLongHorizon() {
             data: {
               seq,
               enqueued_at_ms: Date.now(),
-              payload_padding: payloadPadding,
+              payload_padding: padding,
+              ...controls.tag(seq),
+              ...abandonTag,
             },
+            ...jobOptions,
           });
         }
 
         const started = nowMonoMs();
-        await boss.insert(QUEUE_NAME, jobs);
+        await boss.insert(queues[batchIndex % queues.length], jobs);
+        batchIndex += 1;
         const elapsed = nowMonoMs() - started;
         const perJobLatency = elapsed / Math.max(jobs.length, 1);
         const sampleTs = nowMonoMs();
@@ -297,6 +687,9 @@ async function scenarioLongHorizon() {
           producerLatencies.push(sampleTs, perJobLatency);
         }
         enqueued += jobs.length;
+        if (abandonTag.abandon) {
+          controls.abandonTaggedEnqueued += jobs.length;
+        }
 
         if (producerMode === "fixed") {
           nextAt += Math.round((jobs.length * 1000) / Math.max(targetRate, 1));
@@ -316,6 +709,54 @@ async function scenarioLongHorizon() {
     }
   })();
 
+  const herdTask = (async () => {
+    if (!controls.schedulePath || instanceId() !== 0) {
+      return;
+    }
+    while (!shuttingDown) {
+      const command = controls.pollSchedule();
+      if (!command) {
+        await sleep(1000);
+        continue;
+      }
+      const started = nowMonoMs();
+      controls.schedulePreloadS = null;
+      let seqOffset = 0;
+      for (const [size, runAtMs] of herdBatches(command)) {
+        const enqueuedAtMs = Date.now();
+        const jobs = [];
+        for (let i = 0; i < size; i += 1) {
+          jobs.push({
+            data: {
+              seq: seqOffset + i,
+              enqueued_at_ms: enqueuedAtMs,
+              payload_padding: padding,
+              run_at_ms: runAtMs,
+            },
+            startAfter: new Date(runAtMs),
+            ...jobOptions,
+          });
+        }
+        while (!shuttingDown) {
+          try {
+            await boss.insert(QUEUE_NAME, jobs);
+            break;
+          } catch (err) {
+            console.error("[pgboss] herd insert failed", err.message || err);
+            await sleep(200);
+          }
+        }
+        if (shuttingDown) {
+          return;
+        }
+        seqOffset += size;
+        controls.scheduleEnqueued += size;
+      }
+      controls.schedulePreloadS = (nowMonoMs() - started) / 1000;
+      console.error(`[pgboss] herd ${command.id}: ${seqOffset} jobs enqueued in ${controls.schedulePreloadS.toFixed(1)}s`);
+    }
+  })();
+
   const depthTask = (async () => {
     if (!observerEnabled()) {
       // Non-zero replicas don't emit observer metrics; idle this
@@ -328,7 +769,7 @@ async function scenarioLongHorizon() {
     }
     while (!shuttingDown) {
       try {
-        queueDepth = await countQueuedJobs(boss, queueTable);
+        queueDepth = await countQueuedJobs(boss, queueTable, queues);
       } catch (err) {
         if (isConnectionLoss(err)) {
           await sleep(200);
@@ -375,6 +816,7 @@ async function scenarioLongHorizon() {
         ["completion_rate", completionRate, sampleEveryS],
         ["queue_depth", queueDepth, 0],
         ["producer_target_rate", currentProducerTargetRate, 0],
+        ...controls.metrics(Math.max(sampleEveryS, 1), sampleEveryS),
       ];
 
       for (const [metric, value, windowS] of metrics) {
@@ -405,8 +847,17 @@ async function scenarioLongHorizon() {
   })();
 
   await shutdownPromise;
-  await boss.offWork(QUEUE_NAME, { id: workId, wait: true }).catch(() => {});
-  await Promise.allSettled([producerTask, depthTask, samplerTask]);
+  if (controls.abandonHeld > 0) {
+    // Held handlers never return, so a graceful stop would wait on them; leave the
+    // claims behind as a dead process would.
+    await Promise.allSettled([producerTask, depthTask, samplerTask, herdTask]);
+    process.exit(0);
+  }
+  await startWorkers.catch(() => {});
+  for (const [name, id] of workIds) {
+    await boss.offWork(name, { id, wait: true }).catch(() => {});
+  }
+  await Promise.allSettled([producerTask, depthTask, samplerTask, herdTask]);
   await boss.stop({ graceful: true }).catch(() => {});
 }
 
