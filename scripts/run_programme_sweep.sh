@@ -159,7 +159,7 @@ section_retry() {
 fanout_env() {
   case "$1" in
     awa) echo AWA_WEIGHTED_WORKERS=1 ;;
-    river) echo RIVER_FETCH_COOLDOWN_MS=100 RIVER_FETCH_POLL_INTERVAL_MS=1000 ;;
+    river) echo RIVER_FETCH_POLL_INTERVAL_MS=1000 ;;
     pgboss) echo PGBOSS_LISTEN_NOTIFY=1 ;;
     absurd) echo ABSURD_SHARED_CONNECTIONS=16 ABSURD_POLL_INTERVAL_MS=250 ;;
     pgmq) echo PGMQ_NOTIFY_INSERT_MS=0 POLL_INTERVAL_MS=500 ;;
