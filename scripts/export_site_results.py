@@ -373,6 +373,12 @@ def main() -> None:
             version = revision.get("pgque_submodule_describe") or revision["pgque_submodule_sha"][:12]
         else:
             version = (
+                f"{revision['pinned_version']}+git.{revision['git_sha'][:8]}"
+                if revision.get("pinned_version")
+                and revision.get("git_sha")
+                and str(revision.get("lock_source") or "").startswith("git+")
+                else None
+            ) or (
                 revision.get("pinned_version")
                 or (revision.get("pinned_version_constraint") or "").replace("~>", "").strip()
                 or (revision.get("git_sha") or "")[:12]
