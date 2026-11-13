@@ -1,8 +1,9 @@
 """Render a programme sweep (scripts/run_programme_sweep.sh) as Markdown tables.
 
-Usage: python scripts/programme_sweep_report.py <results_root> > SUMMARY.md
+Usage: python scripts/programme_sweep_report.py <results_root> [<rerun_root> ...] > SUMMARY.md
 
-Reads run_index.tsv, merges each cell's per-system summary.json, and prints
+Reads each root's run_index.tsv, merges each cell's per-system summary.json (a
+later root's result for a system replaces an earlier one's), and prints
 one table per section with the headline columns for that scenario, then a
 resource table (CPU, memory, database load, lock waits) for the section's
 busiest phase. Missing values print as "–"; a system absent from a cell
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -249,10 +251,17 @@ def fmt(value, pattern: str) -> str:
 
 
 def main() -> None:
-    root = Path(sys.argv[1]).resolve()
+    roots = [Path(arg).resolve() for arg in sys.argv[1:]]
+    root = roots[0]
     cells: dict[str, dict[str, dict[str, dict]]] = defaultdict(lambda: defaultdict(dict))
-    with (root / "run_index.tsv").open() as handle:
-        for row in csv.DictReader(handle, delimiter="\t"):
+    rows = []
+    for results_root in roots:
+        with (results_root / "run_index.tsv").open() as handle:
+            rows.extend(csv.DictReader(handle, delimiter="\t"))
+    if True:
+        for row in rows:
+            if row.get("exit_code") not in (None, "0"):
+                continue
             summary_path = Path(row["run_dir"]) / "summary.json" if row["run_dir"] else None
             if summary_path and not summary_path.is_absolute():
                 summary_path = root.parents[1] / summary_path
@@ -266,7 +275,7 @@ def main() -> None:
     for section, (title, columns) in SECTIONS.items():
         if section not in cells:
             continue
-        for cell, systems in sorted(cells[section].items()):
+        for cell, systems in sorted(cells[section].items(), key=lambda kv: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", kv[0])]):
             print(f"## {title}" + (f" — `{cell}`" if len(cells[section]) > 1 else "") + "\n")
             print("| system | " + " | ".join(header for _, _, header, _ in columns) + " |")
             print("|---|" + "---:|" * len(columns))
