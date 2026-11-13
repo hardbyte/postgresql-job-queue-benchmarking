@@ -145,6 +145,7 @@ section_large_args() {
       --producer-rate 50000 --producer-mode depth-target --target-depth 2000
       --worker-count 64 --phase warmup=warmup:30s --phase clean=clean:120s)
     run_cell large_args "sat_${bytes}_shared" "$SHARED" "${args[@]}"
+    [[ "${SHARED_ONLY:-0}" == 1 ]] && continue
     PRODUCER_BATCH_MAX=128 run_cell large_args "sat_${bytes}_pgque" pgque "${args[@]}"
     run_cell large_args "sat_${bytes}_pgmq" pgmq --pg-image "$PGMQ_IMAGE" "${args[@]}"
   done
@@ -153,6 +154,7 @@ section_large_args() {
     --phase "warmup=warmup(rate=0):30s" --phase "preload=preload(jobs=8000):4m"
     --phase drain=drain:5m --phase "settle=idle-background(rate=0):3m")
   run_cell large_args backlog_1m_shared "$SHARED" "${args[@]}"
+  [[ "${SHARED_ONLY:-0}" == 1 ]] && return 0
   PRODUCER_BATCH_MAX=128 run_cell large_args backlog_1m_pgque pgque "${args[@]}"
   run_cell large_args backlog_1m_pgmq pgmq --pg-image "$PGMQ_IMAGE" "${args[@]}"
 }

@@ -308,6 +308,9 @@ def main() -> None:
         summary = json.loads(summary_path.read_text())
         manifest = json.loads((run_dir / "manifest.json").read_text())
         for system, blob in summary.get("systems", {}).items():
+            if cell == "abandon" and not dig(blob.get("abandon") or {}, "running_before_kill"):
+                print(f"skipping {cell_id}/{system}: no claims held at the kill", file=sys.stderr)
+                continue
             by_cell[cell][system] = {"summary": blob, "phases": summary["phases"]}
             sources[cell][system] = cell_id
             raw_dirs[(cell, system)] = run_dir
@@ -380,10 +383,14 @@ def main() -> None:
             "version": version,
         }
     any_manifest = next(iter(manifests.values()))
-    harness = (
-        any_manifest["adapters"].get(next(iter(manifests)), {})
-        .get("revision", {})
-        .get("benchmark_harness", {})
+    # Not every adapter's revision block records the harness checkout.
+    harness = next(
+        (
+            manifest["adapters"][system]["revision"]["benchmark_harness"]
+            for system, manifest in manifests.items()
+            if manifest["adapters"].get(system, {}).get("revision", {}).get("benchmark_harness", {}).get("git_sha")
+        ),
+        {},
     )
     try:
         cpu_model = next(
