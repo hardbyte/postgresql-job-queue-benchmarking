@@ -127,7 +127,7 @@
         ),
       ];
       if (!labels.length) return "";
-      const head = `<tr class="group-row"><th scope="rowgroup" colspan="${chosen.length + 1}">Measured in the ${escapeHtml(data.run.started)} run <a href="${prefix}benchmarks/">How these were measured →</a></th></tr>`;
+      const head = `<tr class="group-row"><th scope="rowgroup" colspan="${chosen.length + 1}">Measured ${escapeHtml(data.run.started)} to ${escapeHtml(data.run.ended)} <a href="${prefix}benchmarks/">How these were measured →</a></th></tr>`;
       return (
         head +
         labels

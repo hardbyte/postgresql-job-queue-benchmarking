@@ -216,7 +216,9 @@ function dumbbell(rows, opts) {
         `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${top - 4}" y2="${top + ordered.length * rowH}"/><text class="tick" x="${x(t)}" y="${top + ordered.length * rowH + 16}" text-anchor="middle">${esc(tickLabel(t, opts.unit))}</text>`,
     )
     .join("");
-  const legend = `<g class="legend"><circle class="dot-a" cx="${labelW + 6}" cy="10" r="5"/><text x="${labelW + 16}" y="14">${esc(opts.aLabel)}</text><circle class="dot-b" cx="${labelW + 160}" cy="10" r="5"/><text x="${labelW + 170}" y="14">${esc(opts.bLabel)}</text></g>`;
+  // Second legend entry after the first label (about 6.6 px per character at 11 px).
+  const legendGap = Math.max(160, 36 + String(opts.aLabel).length * 6.6);
+  const legend = `<g class="legend"><circle class="dot-a" cx="${labelW + 6}" cy="10" r="5"/><text x="${labelW + 16}" y="14">${esc(opts.aLabel)}</text><circle class="dot-b" cx="${labelW + legendGap}" cy="10" r="5"/><text x="${labelW + legendGap + 10}" y="14">${esc(opts.bLabel)}</text></g>`;
   const marks = ordered
     .map((r, i) => {
       const cy = top + i * rowH + rowH / 2;
