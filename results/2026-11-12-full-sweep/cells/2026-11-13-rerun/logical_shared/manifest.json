@@ -1,0 +1,114 @@
+{
+  "run_id": "custom-20261113T050738Z-30d083",
+  "scenario": null,
+  "started_at": "2026-11-13T05:28:00+00:00",
+  "cli": [
+    ".venv/bin/bench",
+    "run",
+    "--systems",
+    "oban",
+    "--producer-rate",
+    "400",
+    "--worker-count",
+    "16",
+    "--phase",
+    "warmup=warmup:60s",
+    "--phase",
+    "clean_1=clean:3m",
+    "--phase",
+    "stream_1=logical-stream(publication=all):4m",
+    "--phase",
+    "pressure_1=high-load:4m",
+    "--phase",
+    "stall_1=logical-stall:4m",
+    "--phase",
+    "catchup_1=logical-stream(publication=all):4m"
+  ],
+  "systems": [
+    "oban"
+  ],
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 60
+    },
+    {
+      "label": "clean_1",
+      "type": "clean",
+      "duration_s": 180
+    },
+    {
+      "label": "stream_1",
+      "type": "logical-stream",
+      "duration_s": 240
+    },
+    {
+      "label": "pressure_1",
+      "type": "high-load",
+      "duration_s": 240
+    },
+    {
+      "label": "stall_1",
+      "type": "logical-stall",
+      "duration_s": 240
+    },
+    {
+      "label": "catchup_1",
+      "type": "logical-stream",
+      "duration_s": 240
+    }
+  ],
+  "engine": "postgres",
+  "pg_image": "postgres:18.6-alpine",
+  "postgres": {
+    "version": "PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "settings": {
+      "shared_buffers": "256MB",
+      "work_mem": "8MB",
+      "maintenance_work_mem": "128MB",
+      "autovacuum": "on",
+      "autovacuum_naptime": "1min",
+      "autovacuum_vacuum_cost_delay": "2ms",
+      "autovacuum_vacuum_cost_limit": "200",
+      "autovacuum_vacuum_scale_factor": "0.2",
+      "autovacuum_analyze_scale_factor": "0.1",
+      "max_connections": "400",
+      "synchronous_commit": "on",
+      "wal_level": "logical",
+      "shared_preload_libraries": ""
+    }
+  },
+  "host": {
+    "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "kernel": "7.0.0-43-generic",
+    "cpu": "x86_64",
+    "cpu_count": 24,
+    "memory_bytes": 65173884928,
+    "python": "3.14.5",
+    "docker": "Docker version 26.1.4, build 5650f9b",
+    "docker_compose": "Docker Compose version v2.27.1"
+  },
+  "adapters": {
+    "oban": {
+      "system": "oban",
+      "version": "0.1.0",
+      "started_at": "2026-11-13T05:07:54.236416Z",
+      "extensions": [],
+      "kind": "descriptor",
+      "instance_id": 0,
+      "abandon_rescue": "Lifeline stuck-job rescuer (RESCUE_AFTER_SECS)",
+      "db_name": "oban_bench",
+      "event_tables": [
+        "public.oban_jobs",
+        "public.oban_peers"
+      ],
+      "schema_version": "current",
+      "revision": {
+        "source": "oban-bench/mix.exs",
+        "library": "oban",
+        "pinned_version_constraint": "~> 2.24.2"
+      }
+    }
+  }
+}
