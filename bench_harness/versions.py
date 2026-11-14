@@ -246,8 +246,11 @@ def capture_adapter_revision(system: str) -> dict[str, Any]:
         return {
             "source": "unknown",
             "note": f"no version capture registered for {system!r}",
+            "benchmark_harness": _bench_repo_revision(),
         }
-    return getter()
+    revision = getter()
+    revision.setdefault("benchmark_harness", _bench_repo_revision())
+    return revision
 
 
 def capture_all(systems: list[str]) -> dict[str, dict]:
