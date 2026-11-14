@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Same-host A/B of awa builds on the cells where releases differ most:
-# depth-target saturation at 4 / 16 / 64 workers and the 800 jobs/s
-# reference rate, ROUNDS runs each, variants interleaved per round.
+# Same-host A/B of awa builds, ROUNDS runs per cell, variants interleaved per
+# round.
 #
-#   VARIANTS="v0616 rel=/path/to/awa rel507=/path/to/awa" bash scripts/run_awa_ab.sh
+#   VARIANTS="v0617 v0616=/path/to/awa pr652=/path/to/awa" CELLS="sat ref800" \
+#     bash scripts/run_awa_ab.sh
 #
 # A bare variant name uses the crates.io pin in awa-bench/Cargo.toml; name=path
-# patches crates-io awa to that checkout. Cells already in run_index.tsv are
-# skipped, so the script can be re-run with more variants.
+# patches crates-io awa to that checkout and pins awa-bench to its version.
+# CELLS picks from: sat (depth-target saturation at 4 / 16 / 64 workers),
+# ref800 (800 jobs/s, 32 workers), sat2r (two replicas x 64 workers,
+# saturating) and fanout200 (200 jobs/s over 200 queues, then idle).
+# AWA_-prefixed settings such as AWA_POINT_READS_PER_S reach every cell.
+# Cells already in run_index.tsv are skipped, so the script can be re-run
+# with more variants.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -15,6 +20,7 @@ cd "$ROOT"
 export BENCH_PG_DATA_DIR="${BENCH_PG_DATA_DIR:-$ROOT/.pgdata}"
 RESULTS_ROOT="${RESULTS_ROOT:-$ROOT/results/$(date -u +%Y-%m-%d)-awa-ab}"
 ROUNDS="${ROUNDS:-2}"
+read -r -a cells <<< "${CELLS:-sat ref800}"
 mkdir -p "$RESULTS_ROOT/logs"
 RUN_INDEX="$RESULTS_ROOT/run_index.tsv"
 [[ -f "$RUN_INDEX" ]] || echo -e "variant\tcell_id\tsource\trun_dir\texit_code\tstarted_at\tended_at" > "$RUN_INDEX"
@@ -25,7 +31,11 @@ log() { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$RESULTS_ROOT/run.log"; }
 use_variant() {
   local source="$1"
   rm -f "$PATCH_FILE"
+  git checkout -q -- awa-bench/Cargo.toml awa-bench/Cargo.lock
   if [[ -n "$source" ]]; then
+    local version
+    version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$source/Cargo.toml" | head -1)
+    sed -i -E "s/^(awa-(model|worker|macros)) = \"=[^\"]+\"/\1 = \"=${version}\"/" awa-bench/Cargo.toml
     mkdir -p "$(dirname "$PATCH_FILE")"
     {
       echo '[patch.crates-io]'
@@ -34,7 +44,6 @@ use_variant() {
       done
     } > "$PATCH_FILE"
   fi
-  git checkout -q -- awa-bench/Cargo.lock
 }
 
 run_cell() {
@@ -55,7 +64,7 @@ run_cell() {
   log "END   ${cell_id} rc=${rc} dir=${run_dir}"
 }
 
-trap 'rm -f "$PATCH_FILE"; git checkout -q -- awa-bench/Cargo.lock' EXIT
+trap 'rm -f "$PATCH_FILE"; git checkout -q -- awa-bench/Cargo.toml awa-bench/Cargo.lock' EXIT
 read -r -a variants <<< "${VARIANTS:-v0616}"
 for round in $(seq 1 "$ROUNDS"); do
   for spec in "${variants[@]}"; do
@@ -63,13 +72,29 @@ for round in $(seq 1 "$ROUNDS"); do
     source=""
     [[ "$spec" == *=* ]] && source="${spec#*=}"
     use_variant "$source"
-    for workers in 4 16 64; do
-      run_cell "$name" "$source" "sat_w${workers}_r${round}" \
-        --producer-rate 50000 --producer-mode depth-target --target-depth 4000 \
-        --worker-count "$workers" --phase warmup=warmup:30s --phase clean=clean:150s
+    for cell in "${cells[@]}"; do
+      case "$cell" in
+        sat)
+          for workers in 4 16 64; do
+            run_cell "$name" "$source" "sat_w${workers}_r${round}" \
+              --producer-rate 50000 --producer-mode depth-target --target-depth 4000 \
+              --worker-count "$workers" --phase warmup=warmup:30s --phase clean=clean:150s
+          done ;;
+        ref800)
+          run_cell "$name" "$source" "ref800_r${round}" --producer-rate 800 --worker-count 32 \
+            --phase warmup=warmup:60s --phase clean=clean:300s ;;
+        sat2r)
+          run_cell "$name" "$source" "sat2r_w64_r${round}" --replicas 2 \
+            --producer-rate 50000 --producer-mode depth-target --target-depth 4000 \
+            --worker-count 64 --phase warmup=warmup:30s --phase clean=clean:150s ;;
+        fanout200)
+          MAX_CONNECTIONS=300 run_cell "$name" "$source" "fanout200_r${round}" \
+            --producer-rate 200 --worker-count 16 --queue-count 200 \
+            --phase warmup=warmup:60s --phase clean_1=clean:4m \
+            --phase "idle_1=idle-background(rate=0):3m" ;;
+        *) log "unknown cell $cell"; exit 2 ;;
+      esac
     done
-    run_cell "$name" "$source" "ref800_r${round}" --producer-rate 800 --worker-count 32 \
-      --phase warmup=warmup:60s --phase clean=clean:300s
   done
 done
 log "A/B complete: $RESULTS_ROOT"
