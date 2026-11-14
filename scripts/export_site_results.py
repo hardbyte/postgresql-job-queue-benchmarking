@@ -7,7 +7,8 @@ Reads each root's run_index.tsv (a later root's result for a system replaces
 an earlier one's, so a rerun of one system can be layered over a sweep) and each cell's summary.json / manifest.json /
 raw.csv, and writes website/data/results.json: run context, curated per-scenario
 metrics for every system, and downsampled mass-abandonment recovery curves.
-With --cells-dir, also copies each cell's summary.json and manifest.json there
+With --cells-dir, also copies each cell's summary.json and manifest.json there,
+under <root name>/<cell id>,
 (local paths stripped) so the site can link to them in the repository.
 """
 
@@ -50,7 +51,7 @@ SECTIONS: list[dict] = [
             "sat_tuned": "Tuned, 1 queue",
             "sat_tuned_k4": "Tuned, 4 queues",
             "sat_tuned_k16": "Tuned, 16 queues",
-            "sat_tuned_best": "Tuned, recommended queue count",
+            "sat_best": "Best measured configuration",
         },
         "metrics": [
             ("jobs_per_s", "clean", "median_throughput_per_s", "Completed jobs/s", "jobs/s", "higher"),
@@ -249,29 +250,45 @@ def strip_local_paths(text: str) -> str:
     return re.sub(r"/(?:home|Users)/[^\s\"']*?/(?=results/|bench_harness/|\.venv/|[a-z_-]+-bench/)", "", text)
 
 
-TUNED_QUEUES = {"sat_tuned": 1, "sat_tuned_k4": 4, "sat_tuned_k16": 16}
+def sources_by_root(cells: list[dict]) -> dict[str, list[str]]:
+    """Which run each system's numbers in a section come from."""
+    by_root: dict[str, set[str]] = defaultdict(set)
+    for cell in cells:
+        for system, source in cell["source"].items():
+            by_root[source.split("/", 1)[0]].add(system)
+    return {root: sorted(systems) for root, systems in by_root.items()}
 
 
-def tuned_best(cells: list[dict]) -> dict | None:
-    """Each system's tuned cell at its recommended queue count: the sharded
-    cell where the system has one, else its one-queue cell. Chosen by queue
-    count, not by result, so no system gets a best-of-two pick."""
+SATURATION_CONFIGS = {
+    "sat_w4": "4 workers, 1 process",
+    "sat_w16": "16 workers, 1 process",
+    "sat_w64": "64 workers, 1 process",
+    "sat_w128": "128 workers, 1 process",
+    "sat_tuned": "tuned, 1 queue",
+    "sat_tuned_k4": "tuned, 4 queues",
+    "sat_tuned_k16": "tuned, 16 queues",
+}
+
+
+def best_measured(cells: list[dict]) -> dict | None:
+    """Each system's highest throughput over every saturation configuration
+    it ran (the four worker counts and its tuned cells), with the
+    configuration named. Every system is chosen the same way."""
     values: dict[str, dict] = {}
     source: dict[str, str] = {}
-    chosen: dict[str, int] = {}
     for cell in cells:
-        queues = TUNED_QUEUES.get(cell["id"])
-        if queues is None:
+        config = SATURATION_CONFIGS.get(cell["id"])
+        if config is None:
             continue
         for system, metrics in cell["values"].items():
-            if metrics.get("jobs_per_s") is None or queues < chosen.get(system, 0):
+            rate = metrics.get("jobs_per_s")
+            if rate is None or rate <= values.get(system, {}).get("jobs_per_s", -1):
                 continue
-            chosen[system] = queues
-            values[system] = {**metrics, "queues": queues}
+            values[system] = {**metrics, "config": config}
             source[system] = cell["source"][system]
     if not values:
         return None
-    return {"id": "sat_tuned_best", "label": "Tuned, recommended queue count", "values": values, "source": source}
+    return {"id": "sat_best", "label": "Best measured configuration", "values": values, "source": source}
 
 
 def abandon_curve(raw_csv: Path, system: str, phases: list[dict]) -> list[list[float]]:
@@ -324,13 +341,15 @@ def main() -> None:
         with (results_root.resolve() / "run_index.tsv").open() as handle:
             for row in csv.DictReader(handle, delimiter="\t"):
                 if row["exit_code"] == "0" and row["run_dir"]:
-                    index[(order, row["cell_id"])] = row
+                    index[(order, row["cell_id"])] = {**row, "root": results_root.resolve().name}
 
     # cell (without the _shared/_pgque/... family suffix) -> system -> data
     by_cell: dict[str, dict[str, dict]] = defaultdict(dict)
     sources: dict[str, dict[str, str]] = defaultdict(dict)
     manifests: dict[str, dict] = {}
     raw_dirs: dict[tuple[str, str], Path] = {}
+    # root name -> run dates and harness commit, for the provenance block
+    roots_meta: dict[str, dict] = {}
     # cell -> system -> why its run is left out of the results
     excluded: dict[str, dict[str, str]] = defaultdict(dict)
     for (_, cell_id), row in sorted(index.items()):
@@ -343,17 +362,24 @@ def main() -> None:
             cell = "abandon"
         summary = json.loads(summary_path.read_text())
         manifest = json.loads((run_dir / "manifest.json").read_text())
+        meta = roots_meta.setdefault(row["root"], {"started": [], "ended": [], "harness": None})
+        meta["started"].append(row["started_at"])
+        meta["ended"].append(row["ended_at"])
+        for adapter in manifest.get("adapters", {}).values():
+            sha = ((adapter.get("revision") or {}).get("benchmark_harness") or {}).get("git_sha")
+            meta["harness"] = meta["harness"] or sha
         for system, blob in summary.get("systems", {}).items():
             if cell == "abandon" and not dig(blob.get("abandon") or {}, "running_before_kill"):
                 print(f"skipping {cell_id}/{system}: no claims held at the kill", file=sys.stderr)
                 excluded[cell][CATALOG_ID.get(system, system)] = "held no claims at the kill"
                 continue
             by_cell[cell][system] = {"summary": blob, "phases": summary["phases"]}
-            sources[cell][system] = cell_id
+            # Roots reuse cell ids, so a source names its root too.
+            sources[cell][system] = f"{row['root']}/{cell_id}"
             raw_dirs[(cell, system)] = run_dir
             manifests[system] = manifest
         if args.cells_dir:
-            target = args.cells_dir / cell_id
+            target = args.cells_dir / row["root"] / cell_id
             target.mkdir(parents=True, exist_ok=True)
             for name in ("summary.json", "manifest.json"):
                 (target / name).write_text(strip_local_paths((run_dir / name).read_text()))
@@ -388,7 +414,7 @@ def main() -> None:
         if not cells_out:
             continue
         if spec["id"] == "saturation":
-            best = tuned_best(cells_out)
+            best = best_measured(cells_out)
             if best:
                 cells_out.append(best)
         section = {
@@ -398,6 +424,7 @@ def main() -> None:
                 for k, _, _, label, unit, better in spec["metrics"]
             ],
             "cells": cells_out,
+            "sources_by_root": sources_by_root(cells_out),
         }
         if spec["id"] == "abandon":
             section["curves"] = {
@@ -448,6 +475,13 @@ def main() -> None:
         )
     except (OSError, StopIteration):
         cpu_model = platform.processor() or "unknown"
+    for results_root in args.results_roots:
+        # Manifests from before every adapter recorded the harness commit
+        # name it in the root's harness_commit.txt instead.
+        note = results_root.resolve() / "harness_commit.txt"
+        meta = roots_meta.get(results_root.resolve().name)
+        if meta is not None and not meta["harness"] and note.exists():
+            meta["harness"] = note.read_text().strip()
     started = sorted(row["started_at"] for row in index.values())
     ended = sorted(row["ended_at"] for row in index.values())
     out = {
@@ -456,6 +490,15 @@ def main() -> None:
             "started": started[0],
             "ended": ended[-1],
             "cells": len(index),
+            "roots": [
+                {
+                    "id": name,
+                    "started": min(meta["started"]),
+                    "ended": max(meta["ended"]),
+                    "harness_commit": meta["harness"],
+                }
+                for name, meta in roots_meta.items()
+            ],
             "host": {
                 "cpu": cpu_model,
                 "threads": any_manifest["host"].get("cpu_count"),

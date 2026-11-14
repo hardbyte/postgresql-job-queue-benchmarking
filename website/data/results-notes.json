@@ -1,5 +1,5 @@
 {
-  "intro": "Every system ran the same scenarios, one after another, against a fresh PostgreSQL 18.6 cluster capped at 4 CPUs, on one host. Each section says what it asks, how it was run, and what to watch for when reading it. Absolute numbers depend on this host; the comparisons within a section are the point.",
+  "intro": "Every system ran the same scenarios, one after another, against a fresh PostgreSQL 18.6 cluster capped at 4 CPUs, on one host, between 11 and 13 November 2026. Saturation, the Postgres restart and many queues were run for every system with the same connection rule (a pool of workers + 8 per process); the other scenarios come from the full sweep, with Oban rerun after an adapter fix and Awa and Absurd rerun on newer adapters. Each section names the run behind each system's numbers. Absolute numbers depend on this host; the comparisons within a section are the point.",
   "contracts": [
     {
       "systems": [
@@ -79,20 +79,32 @@
         },
         {
           "type": "bars",
-          "cell": "sat_tuned_best",
+          "cell": "sat_best",
           "metric": "jobs_per_s",
-          "title": "Tuned: completed jobs/s",
-          "caption": "Each system at its recommended queue count."
+          "title": "Best measured: completed jobs/s",
+          "caption": "Each system's highest throughput over every configuration it ran, labelled with that configuration.",
+          "noteField": "config"
+        },
+        {
+          "type": "dumbbell",
+          "cellA": "sat_w128",
+          "cellB": "sat_best",
+          "a": "jobs_per_s",
+          "b": "jobs_per_s",
+          "aLabel": "Out of the box, 128 workers",
+          "bLabel": "Best measured",
+          "title": "What configuration adds"
         },
         {
           "type": "dumbbell",
           "cellA": "sat_tuned",
-          "cellB": "sat_tuned_best",
+          "cellB": "sat_tuned_k4",
           "a": "jobs_per_s",
           "b": "jobs_per_s",
-          "aLabel": "1 queue",
-          "bLabel": "Recommended queues",
-          "title": "What sharding across queues adds"
+          "aLabel": "Tuned, 1 queue",
+          "bLabel": "Tuned, 4 queues",
+          "title": "What sharding across queues adds",
+          "caption": "Systems whose docs recommend sharding a hot queue. PGMQ's 16-queue run is in the table view."
         },
         {
           "type": "settings",
@@ -141,7 +153,14 @@
           "title": "Peak dead tuples at 64 workers",
           "caption": "Rows waiting for vacuum in the queue's tables while saturated."
         }
-      ]
+      ],
+      "findings": [
+        "PgQue completes the most events (47,282/s tuned), but it acknowledges a batch at a time and its single producer was the limit: the queue stayed empty with Postgres at 1.1 cores, so treat it as a floor.",
+        "PGMQ peaks at 12,013/s with 16 workers. With more readers each pgmq.read scans past the others' in-flight rows, Postgres saturates and throughput falls (3,678/s at 128 workers; 5,710/s tuned over 16 queues).",
+        "Among job frameworks, tuned and sharded over 4 queues, River (10,905/s on 2.2 Postgres cores) and Awa (10,762/s on 4.0 cores) lead, then Oban (5,673/s), pg-boss (3,495/s, Postgres-bound), Absurd (1,625/s) and Procrastinate (1,472/s).",
+        "Configuration matters most for River (2,509/s at 128 workers with the adapter's 50 ms fetch cooldown) and Procrastinate (451/s on one process, 3.3× with four)."
+      ],
+      "headline": "Tuned: River 10.9k and Awa 10.8k jobs/s; PgQue 47k events/s, producer-bound."
     },
     {
       "id": "ref800",
@@ -168,7 +187,12 @@
           "metric": "wal_per_job",
           "title": "WAL written per job"
         }
-      ]
+      ],
+      "findings": [
+        "Awa, Oban and PGMQ pick up within 20 ms at p99; PgQue at 107 ms (its consumer's 100 ms poll); pg-boss at 410 ms.",
+        "River (634/s), Procrastinate (442/s) and Absurd (223/s) fell behind and their queues grew. River's adapter cooldown caps 32 workers at 640 jobs/s; Procrastinate and Absurd are limited per process (see saturation)."
+      ],
+      "headline": "Awa, Oban and PGMQ pick up within 20 ms p99; three systems fall behind."
     },
     {
       "id": "idle",
@@ -198,7 +222,12 @@
           "title": "Postgres private memory while idle",
           "caption": "Backend-local memory in the Postgres container (shared buffers excluded)."
         }
-      ]
+      ],
+      "findings": [
+        "Oban, pg-boss, Absurd and River each cost Postgres about 16–24 transactions/s when idle; PGMQ costs 160/s from its polling consumers.",
+        "Awa keeps 276 MB of private Postgres memory while idle, against 18–59 MB for the others: each of its connections caches metadata and prepared plans for its 220 ring tables."
+      ],
+      "headline": "16–24 xacts/s for most; PGMQ polls at 160/s; Awa holds 276 MB of Postgres memory."
     },
     {
       "id": "chaos",
@@ -225,7 +254,12 @@
           "title": "Queue depth after the restart",
           "log": true
         }
-      ]
+      ],
+      "findings": [
+        "Every system came back to its pre-restart rate within the 5 s check after Postgres returned.",
+        "Absurd and Procrastinate get there only because their adapters restart the worker: both libraries stop the worker when the database goes away and expect a supervisor to start it again."
+      ],
+      "headline": "All eight recover; Absurd and Procrastinate need a supervisor to restart the worker."
     },
     {
       "id": "neighbour",
@@ -245,7 +279,12 @@
           "bLabel": "Queue at 1,600 jobs/s",
           "title": "Neighbour transaction latency, p99"
         }
-      ]
+      ],
+      "findings": [
+        "No system cut the neighbour's throughput (all within 1% of baseline).",
+        "With the queue at 4× load, the neighbour's p99 ranged from 2.4 ms (PgQue) and 5–7 ms (Procrastinate, Awa, River) to 18 ms (PGMQ)."
+      ],
+      "headline": "Neighbour throughput unchanged everywhere; p99 at 4× from 2.4 to 18 ms."
     },
     {
       "id": "logical",
@@ -276,7 +315,12 @@
           "metric": "retained_wal",
           "title": "WAL retained by the stalled slot"
         }
-      ]
+      ],
+      "findings": [
+        "Awa at 1a53fd9e now gives every table a replica identity (0 tables without one, down from 19 on 0.6.17) but still leaves the most dead catalog tuples while the slot is stalled (11,374, down from 19,024; the others 20–214).",
+        "PGMQ has 2 and PgQue 5 tables without a replica identity, so logical replication of updates and deletes on them fails."
+      ],
+      "headline": "Awa 19 → 0 tables without replica identity; still the most catalog churn."
     },
     {
       "id": "scheduled",
@@ -301,7 +345,12 @@
           "log": true,
           "title": "Immediate jobs while the herd drains, claim p99"
         }
-      ]
+      ],
+      "findings": [
+        "PGMQ starts 20,000 simultaneous scheduled jobs within 1.9 s (p99), Awa within 12 s and Oban 21 s; Procrastinate 41 s, River 63 s, pg-boss 77 s, Absurd 137 s.",
+        "Immediate jobs keep flowing during the herd on Awa, Oban, Procrastinate and PGMQ (p99 under 50 ms); River's, pg-boss's and Absurd's wait seconds behind it. PgQue has no per-job scheduling."
+      ],
+      "headline": "PGMQ 1.9 s, Awa 12 s, Oban 21 s to start a 20,000-job herd."
     },
     {
       "id": "retry",
@@ -325,7 +374,11 @@
           "log": true,
           "title": "Claim latency during the storm, p99"
         }
-      ]
+      ],
+      "findings": [
+        "With 30% transient and 1% poison failures, every system kept completing the good jobs at the offered rate (132–138/s)."
+      ],
+      "headline": "Every system kept the good jobs flowing through a failure storm."
     },
     {
       "id": "fanout",
@@ -407,7 +460,12 @@
             }
           ]
         }
-      ]
+      ],
+      "findings": [
+        "Every system kept up with 200 jobs/s over 200 queues.",
+        "Idle cost at 200 queues ranges from 0.02–0.05 Postgres cores (Oban, River, Procrastinate) to about 1 core (pg-boss, PgQue) and 1.7 cores (Absurd)."
+      ],
+      "headline": "All keep up; idle cost at 200 queues from 0.02 to 1.7 Postgres cores."
     },
     {
       "id": "large_args",
@@ -449,7 +507,12 @@
           "log": true,
           "title": "Worker memory while draining, all four processes"
         }
-      ]
+      ],
+      "findings": [
+        "After draining an 8 GiB backlog of 1 MiB jobs, Awa's database is back to 21 MB; every other system keeps 7–8 GB (PGMQ 16 GB, archive included).",
+        "Worker memory while draining 1 MiB jobs: Oban 8.7 GB and pg-boss 5.3 GB, against 0.2–1 GB for the others."
+      ],
+      "headline": "Awa shrinks back to 21 MB after 8 GiB; others keep 7–16 GB."
     },
     {
       "id": "payload",
@@ -471,7 +534,12 @@
           "metric": "wal_per_job",
           "title": "WAL written per job"
         }
-      ]
+      ],
+      "findings": [
+        "Only Awa gives the space back: 22 MB after the run, where every other system keeps about 1.2 GB of TOAST until VACUUM FULL.",
+        "PGMQ writes about 2.5× the WAL per 64 KiB job of the others (205 KB), because acknowledging archives the message."
+      ],
+      "headline": "Only Awa returns the space (22 MB vs 1.2 GB)."
     },
     {
       "id": "long_jobs",
@@ -494,7 +562,12 @@
           "metric": "duplicates",
           "title": "Duplicate completions"
         }
-      ]
+      ],
+      "findings": [
+        "Keeping 40 s jobs running costs between 4.6 KB/s of WAL (PGMQ) and 28 KB/s (Awa, whose lease heartbeats write more often).",
+        "Absurd (1,134), PGMQ (610), River (360) and Oban (298) ran some 40 s jobs more than once in this cell."
+      ],
+      "headline": "WAL to keep 40 s jobs alive: 4.6 KB/s (PGMQ) to 28 KB/s (Awa)."
     },
     {
       "id": "drain",
@@ -516,7 +589,12 @@
           "log": true,
           "title": "Database size after draining"
         }
-      ]
+      ],
+      "findings": [
+        "PGMQ and PgQue drain a 200,000-job backlog at about 14,500 jobs/s; Awa at 5,154/s, Oban 4,206/s, pg-boss 2,510/s, River 1,226/s, Procrastinate 579/s; Absurd did not finish in 6 minutes.",
+        "Only Awa's database shrinks back afterwards (21 MB)."
+      ],
+      "headline": "PGMQ and PgQue drain at ~14.5k jobs/s; only Awa shrinks back."
     },
     {
       "id": "abandon",
@@ -548,7 +626,13 @@
           "metric": "cleared_s",
           "title": "Time until the database released the dead fleet's claims"
         }
-      ]
+      ],
+      "findings": [
+        "PgQue redelivers abandoned batches at once (16 s); among per-job systems PGMQ finishes in 5.9 min, pg-boss 14 min, Awa 20.5 min, Absurd 28.5 min and Procrastinate 32 min.",
+        "Oban's Lifeline rescued about a fifth of the jobs in 30 minutes (798,438 still unfinished).",
+        "Apart from Oban's unfinished jobs, none went missing; a few ran twice (Absurd 43, pg-boss 80, PGMQ 102, PgQue 12)."
+      ],
+      "headline": "PgQue 16 s, PGMQ 5.9 min, pg-boss 14 min, Awa 20.5 min to finish 1M abandoned jobs."
     }
   ],
   "overview": [
@@ -638,5 +722,10 @@
       "label": "1M abandoned jobs, all done again",
       "missing": "not done in 30 min"
     }
-  ]
+  ],
+  "runs": {
+    "2026-11-12-full-sweep": "the 11–13 Nov sweep, each adapter's default connection pool",
+    "2026-11-13-rerun": "the 13 Nov rerun after the adapter's latency-window fix, the adapter's default connection pool",
+    "2026-11-13-followup": "the 13 Nov follow-up, a pool of workers + 8 per process"
+  }
 }

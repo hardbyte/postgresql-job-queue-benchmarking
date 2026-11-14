@@ -1,0 +1,121 @@
+{
+  "run_id": "custom-20261112T172512Z-707af8",
+  "scenario": null,
+  "started_at": "2026-11-12T17:39:34+00:00",
+  "cli": [
+    ".venv/bin/bench",
+    "run",
+    "--systems",
+    "pgque",
+    "--job-payload-bytes",
+    "1048576",
+    "--job-payload-kind",
+    "random",
+    "--producer-rate",
+    "2000",
+    "--replicas",
+    "4",
+    "--worker-count",
+    "16",
+    "--phase",
+    "warmup=warmup(rate=0):30s",
+    "--phase",
+    "preload=preload(jobs=8000):4m",
+    "--phase",
+    "drain=drain:5m",
+    "--phase",
+    "settle=idle-background(rate=0):3m"
+  ],
+  "systems": [
+    "pgque"
+  ],
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 30
+    },
+    {
+      "label": "preload",
+      "type": "preload",
+      "duration_s": 240
+    },
+    {
+      "label": "drain",
+      "type": "drain",
+      "duration_s": 300
+    },
+    {
+      "label": "settle",
+      "type": "idle-background",
+      "duration_s": 180
+    }
+  ],
+  "engine": "postgres",
+  "pg_image": "postgres:18.6-alpine",
+  "postgres": {
+    "version": "PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "settings": {
+      "shared_buffers": "256MB",
+      "work_mem": "8MB",
+      "maintenance_work_mem": "128MB",
+      "autovacuum": "on",
+      "autovacuum_naptime": "1min",
+      "autovacuum_vacuum_cost_delay": "2ms",
+      "autovacuum_vacuum_cost_limit": "200",
+      "autovacuum_vacuum_scale_factor": "0.2",
+      "autovacuum_analyze_scale_factor": "0.1",
+      "max_connections": "400",
+      "synchronous_commit": "on",
+      "wal_level": "replica",
+      "shared_preload_libraries": ""
+    }
+  },
+  "host": {
+    "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "kernel": "7.0.0-43-generic",
+    "cpu": "x86_64",
+    "cpu_count": 24,
+    "memory_bytes": 65173884928,
+    "python": "3.14.5",
+    "docker": "Docker version 26.1.4, build 5650f9b",
+    "docker_compose": "Docker Compose version v2.27.1"
+  },
+  "adapters": {
+    "pgque": {
+      "kind": "descriptor",
+      "system": "pgque",
+      "event_tables": [
+        "pgque.config",
+        "pgque.consumer",
+        "pgque.dead_letter",
+        "pgque.event_1",
+        "pgque.event_1_0",
+        "pgque.event_1_1",
+        "pgque.event_1_2",
+        "pgque.event_template",
+        "pgque.queue",
+        "pgque.retry_queue",
+        "pgque.subscription",
+        "pgque.tick"
+      ],
+      "extensions": [],
+      "version": "0.2.0",
+      "schema_version": "v0.2.0",
+      "db_name": "pgque_bench",
+      "abandon_rescue": "open batch redelivered to the same consumer name on restart, no timeout (BENCH_INSTANCE_ID)",
+      "started_at": "2026-11-12T17:25:28.428Z",
+      "instance_id": 0,
+      "revision": {
+        "source": "benchmark repo + pgque submodule",
+        "git_sha": "62f22cd2084dc334168f4c1630b72a74defbb967",
+        "git_short": "62f22cd",
+        "git_branch": "brian/full-comparison-awa-0616",
+        "git_tag": null,
+        "dirty": true,
+        "pgque_submodule_sha": "8e3064ca5cace7c3aa9364c5d071f19e3339a96b",
+        "pgque_submodule_describe": "v0.3.0-alpha.1-30-g8e3064c"
+      }
+    }
+  }
+}

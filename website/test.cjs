@@ -115,10 +115,10 @@ test("published results: every scenario with data renders charts with table view
   const tables = html.match(/<details class="table-view">/g) || [];
   assert.ok(figures.length >= results.sections.length);
   assert.equal(figures.length, tables.length, "every chart has a table view");
-  assert.ok(html.includes(results.run.harness_commit.slice(0, 10)));
+  for (const root of results.run.roots) assert.ok(html.includes(root.harness_commit.slice(0, 10)));
   for (const s of results.systems)
     assert.ok(
-      fs.readFileSync(path.join(out, "systems", s, "index.html"), "utf8").includes("Measured in the"),
+      fs.readFileSync(path.join(out, "systems", s, "index.html"), "utf8").includes("Measured "),
       `${s} profile lacks measured results`,
     );
 });

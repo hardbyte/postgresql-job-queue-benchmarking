@@ -2,8 +2,28 @@
  "run": {
   "id": "2026-11-12-full-sweep",
   "started": "2026-11-11T21:39:13Z",
-  "ended": "2026-11-13T04:11:02Z",
-  "cells": 65,
+  "ended": "2026-11-13T22:14:59Z",
+  "cells": 143,
+  "roots": [
+   {
+    "id": "2026-11-12-full-sweep",
+    "started": "2026-11-11T21:39:13Z",
+    "ended": "2026-11-13T04:11:02Z",
+    "harness_commit": "62f22cd2084dc334168f4c1630b72a74defbb967"
+   },
+   {
+    "id": "2026-11-13-rerun",
+    "started": "2026-11-13T04:14:47Z",
+    "ended": "2026-11-13T08:50:24Z",
+    "harness_commit": "1964ee5be1917d91e5e85204198e1a34df3d1a7b"
+   },
+   {
+    "id": "2026-11-13-followup",
+    "started": "2026-11-13T08:50:42Z",
+    "ended": "2026-11-13T22:14:59Z",
+    "harness_commit": "50b978ae46d2a81a856abc47d55bf8c7c6c2b43f"
+   }
+  ],
   "host": {
    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
    "threads": 24,
@@ -31,7 +51,7 @@
     "shared_preload_libraries": ""
    }
   },
-  "harness_commit": "62f22cd2084dc334168f4c1630b72a74defbb967",
+  "harness_commit": "50b978ae46d2a81a856abc47d55bf8c7c6c2b43f",
   "versions": {
    "absurd": {
     "library": "absurd-sdk",
@@ -39,7 +59,7 @@
    },
    "awa": {
     "library": "awa",
-    "version": "0.6.17"
+    "version": "0.6.17+git.1a53fd9e"
    },
    "oban": {
     "library": "oban",
@@ -136,95 +156,96 @@
      "label": "4 workers",
      "values": {
       "pgmq": {
-       "jobs_per_s": 3616.0,
-       "peak_dead_tup": 432332.0,
-       "wal_per_job": 1691.9054,
-       "pg_cores": 0.2444,
-       "worker_cores": 0.1147,
-       "pg_mem": 27.5039,
-       "worker_mem": 43.2109,
-       "aas": 0.4933
+       "jobs_per_s": 3494.4,
+       "peak_dead_tup": 447939.0,
+       "wal_per_job": 1702.2848,
+       "pg_cores": 0.295,
+       "worker_cores": 0.127,
+       "pg_mem": 27.6875,
+       "worker_mem": 43.3047,
+       "aas": 0.5067
       },
       "pgque": {
-       "jobs_per_s": 3249.9165,
+       "jobs_per_s": 3214.5484,
        "peak_dead_tup": 438.0,
-       "wal_per_job": 434.2957,
-       "pg_cores": 0.0524,
-       "worker_cores": 0.123,
-       "pg_mem": 30.3438,
-       "worker_mem": 55.0742,
-       "aas": 0.1133
+       "wal_per_job": 427.7399,
+       "pg_cores": 0.0576,
+       "worker_cores": 0.1362,
+       "pg_mem": 28.0508,
+       "worker_mem": 55.8398,
+       "aas": 0.0467
       },
       "awa": {
-       "jobs_per_s": 494.5148,
-       "peak_dead_tup": 349.0,
-       "wal_per_job": 2375.2691,
-       "pg_cores": 1.3421,
-       "worker_cores": 0.1453,
-       "pg_mem": 291.0312,
-       "worker_mem": 11.9609,
-       "aas": 1.8133
+       "jobs_per_s": 487.7594,
+       "peak_dead_tup": 355.0,
+       "wal_per_job": 2368.7116,
+       "pg_cores": 1.3362,
+       "worker_cores": 0.1515,
+       "pg_mem": 296.9375,
+       "worker_mem": 11.5078,
+       "aas": 1.4667
       },
       "absurd": {
-       "jobs_per_s": 270.8,
-       "peak_dead_tup": 250.0,
-       "wal_per_job": 2289.056,
-       "pg_cores": 0.8054,
-       "worker_cores": 0.1272,
-       "pg_mem": 18.6719,
-       "worker_mem": 44.6094,
-       "aas": 1.0
+       "jobs_per_s": 274.0,
+       "peak_dead_tup": 239.0,
+       "wal_per_job": 2251.6015,
+       "pg_cores": 0.8233,
+       "worker_cores": 0.1343,
+       "pg_mem": 18.5898,
+       "worker_mem": 44.8438,
+       "aas": 0.9733
       },
       "oban": {
-       "jobs_per_s": 378.9968,
-       "peak_dead_tup": 45452.0,
-       "wal_per_job": 4281.3574,
-       "pg_cores": 0.2088,
-       "worker_cores": 0.5145,
-       "pg_mem": 62.2617,
-       "worker_mem": 2129.6328,
-       "aas": 0.4667
+       "jobs_per_s": 384.5693,
+       "peak_dead_tup": 46155.0,
+       "wal_per_job": 4302.7352,
+       "pg_cores": 0.2224,
+       "worker_cores": 0.3563,
+       "pg_mem": 45.8477,
+       "worker_mem": 2125.4492,
+       "aas": 0.68
       },
       "pg-boss": {
        "jobs_per_s": 512.0,
-       "peak_dead_tup": 58440.0,
-       "wal_per_job": 2552.2913,
-       "pg_cores": 0.4034,
-       "worker_cores": 0.073,
-       "pg_mem": 28.9766,
-       "worker_mem": 64.3867,
-       "aas": 0.76
+       "peak_dead_tup": 58316.0,
+       "wal_per_job": 2545.0357,
+       "pg_cores": 0.4809,
+       "worker_cores": 0.0788,
+       "pg_mem": 25.0195,
+       "worker_mem": 64.9609,
+       "aas": 0.4467
       },
       "procrastinate": {
-       "jobs_per_s": 482.7804,
-       "peak_dead_tup": 53960.0,
-       "wal_per_job": 2573.1742,
-       "pg_cores": 0.8449,
-       "worker_cores": 0.7475,
-       "pg_mem": 32.5977,
-       "worker_mem": 40.0469,
-       "aas": 1.9267
+       "jobs_per_s": 473.7471,
+       "peak_dead_tup": 49675.0,
+       "wal_per_job": 2473.4392,
+       "pg_cores": 0.7793,
+       "worker_cores": 0.6989,
+       "pg_mem": 29.3438,
+       "worker_mem": 40.3867,
+       "aas": 1.86
       },
       "river": {
-       "jobs_per_s": 79.1983,
-       "peak_dead_tup": 8720.0,
-       "wal_per_job": 3671.4514,
-       "pg_cores": 0.0401,
-       "worker_cores": 0.0169,
-       "pg_mem": 21.8672,
-       "worker_mem": 10.1172,
-       "aas": 0.1
+       "jobs_per_s": 79.1975,
+       "peak_dead_tup": 9500.0,
+       "wal_per_job": 3702.1876,
+       "pg_cores": 0.0457,
+       "worker_cores": 0.0201,
+       "pg_mem": 24.5156,
+       "worker_mem": 10.2734,
+       "aas": 0.0667
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "sat_w4_pgmq",
-      "pgque": "sat_w4_pgque",
-      "awa": "sat_w4_shared",
-      "absurd": "sat_w4_shared",
-      "oban": "sat_w4_shared",
-      "pg-boss": "sat_w4_shared",
-      "procrastinate": "sat_w4_shared",
-      "river": "sat_w4_shared"
+      "pgmq": "2026-11-13-followup/sat_w4_pgmq",
+      "pgque": "2026-11-13-followup/sat_w4_pgque",
+      "awa": "2026-11-13-followup/sat_w4_shared",
+      "absurd": "2026-11-13-followup/sat_w4_shared",
+      "oban": "2026-11-13-followup/sat_w4_shared",
+      "pg-boss": "2026-11-13-followup/sat_w4_shared",
+      "procrastinate": "2026-11-13-followup/sat_w4_shared",
+      "river": "2026-11-13-followup/sat_w4_shared"
      }
     },
     {
@@ -232,95 +253,96 @@
      "label": "16 workers",
      "values": {
       "pgmq": {
-       "jobs_per_s": 13116.8,
-       "peak_dead_tup": 2189802.0,
-       "wal_per_job": 2007.4117,
-       "pg_cores": 1.538,
-       "worker_cores": 0.3421,
-       "pg_mem": 67.8516,
-       "worker_mem": 45.1953,
-       "aas": 2.7733
+       "jobs_per_s": 12012.8,
+       "peak_dead_tup": 2143975.0,
+       "wal_per_job": 2052.646,
+       "pg_cores": 1.7298,
+       "worker_cores": 0.3249,
+       "pg_mem": 67.5039,
+       "worker_mem": 45.293,
+       "aas": 3.0533
       },
       "pgque": {
-       "jobs_per_s": 9998.2687,
-       "peak_dead_tup": 773.0,
-       "wal_per_job": 435.8382,
-       "pg_cores": 0.112,
-       "worker_cores": 0.3081,
-       "pg_mem": 30.6367,
-       "worker_mem": 55.332,
-       "aas": 0.1933
+       "jobs_per_s": 9750.645,
+       "peak_dead_tup": 725.0,
+       "wal_per_job": 431.8007,
+       "pg_cores": 0.1185,
+       "worker_cores": 0.3212,
+       "pg_mem": 30.625,
+       "worker_mem": 55.5508,
+       "aas": 0.16
       },
       "awa": {
-       "jobs_per_s": 1875.1413,
-       "peak_dead_tup": 362.0,
-       "wal_per_job": 1712.1404,
-       "pg_cores": 1.3952,
-       "worker_cores": 0.1974,
-       "pg_mem": 297.5234,
-       "worker_mem": 24.0469,
-       "aas": 1.66
+       "jobs_per_s": 1716.8881,
+       "peak_dead_tup": 353.0,
+       "wal_per_job": 1703.536,
+       "pg_cores": 1.4417,
+       "worker_cores": 0.2022,
+       "pg_mem": 344.5742,
+       "worker_mem": 20.9922,
+       "aas": 1.4667
       },
       "absurd": {
-       "jobs_per_s": 460.8,
-       "peak_dead_tup": 17320.0,
-       "wal_per_job": 2383.9704,
-       "pg_cores": 0.7685,
-       "worker_cores": 0.1907,
-       "pg_mem": 18.5859,
-       "worker_mem": 44.625,
-       "aas": 0.9467
+       "jobs_per_s": 440.0,
+       "peak_dead_tup": 11606.0,
+       "wal_per_job": 2346.0468,
+       "pg_cores": 0.7375,
+       "worker_cores": 0.1955,
+       "pg_mem": 19.4141,
+       "worker_mem": 44.832,
+       "aas": 0.8733
       },
       "oban": {
-       "jobs_per_s": 1132.6629,
-       "peak_dead_tup": 132679.0,
-       "wal_per_job": 4769.1217,
-       "pg_cores": 0.4293,
-       "worker_cores": 1.4616,
-       "pg_mem": 103.1094,
-       "worker_mem": 2244.0977,
-       "aas": 1.9733
+       "jobs_per_s": 1312.3192,
+       "peak_dead_tup": 153851.0,
+       "wal_per_job": 4749.6084,
+       "pg_cores": 0.5757,
+       "worker_cores": 1.3624,
+       "pg_mem": 76.3633,
+       "worker_mem": 2159.8125,
+       "aas": 1.0
       },
       "pg-boss": {
        "jobs_per_s": 2048.0,
-       "peak_dead_tup": 232441.0,
-       "wal_per_job": 2780.0806,
-       "pg_cores": 1.916,
-       "worker_cores": 0.2624,
-       "pg_mem": 40.5,
-       "worker_mem": 97.7773,
-       "aas": 2.3
+       "peak_dead_tup": 243272.0,
+       "wal_per_job": 2769.5622,
+       "pg_cores": 1.9473,
+       "worker_cores": 0.3167,
+       "pg_mem": 47.8594,
+       "worker_mem": 92.1094,
+       "aas": 2.1133
       },
       "procrastinate": {
-       "jobs_per_s": 468.569,
-       "peak_dead_tup": 52552.0,
-       "wal_per_job": 2487.5816,
-       "pg_cores": 0.8307,
-       "worker_cores": 0.6928,
-       "pg_mem": 31.9336,
-       "worker_mem": 40.0195,
-       "aas": 1.9133
+       "jobs_per_s": 454.3267,
+       "peak_dead_tup": 54203.0,
+       "wal_per_job": 2475.5741,
+       "pg_cores": 0.8086,
+       "worker_cores": 0.6955,
+       "pg_mem": 29.5664,
+       "worker_mem": 40.3711,
+       "aas": 1.7467
       },
       "river": {
-       "jobs_per_s": 316.7963,
-       "peak_dead_tup": 38192.0,
-       "wal_per_job": 3708.0538,
-       "pg_cores": 0.0579,
-       "worker_cores": 0.03,
-       "pg_mem": 24.8672,
-       "worker_mem": 14.293,
-       "aas": 0.06
+       "jobs_per_s": 316.7938,
+       "peak_dead_tup": 37600.0,
+       "wal_per_job": 3772.0811,
+       "pg_cores": 0.0636,
+       "worker_cores": 0.0346,
+       "pg_mem": 21.7383,
+       "worker_mem": 14.2578,
+       "aas": 0.0533
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "sat_w16_pgmq",
-      "pgque": "sat_w16_pgque",
-      "awa": "sat_w16_shared",
-      "absurd": "sat_w16_shared",
-      "oban": "sat_w16_shared",
-      "pg-boss": "sat_w16_shared",
-      "procrastinate": "sat_w16_shared",
-      "river": "sat_w16_shared"
+      "pgmq": "2026-11-13-followup/sat_w16_pgmq",
+      "pgque": "2026-11-13-followup/sat_w16_pgque",
+      "awa": "2026-11-13-followup/sat_w16_shared",
+      "absurd": "2026-11-13-followup/sat_w16_shared",
+      "oban": "2026-11-13-followup/sat_w16_shared",
+      "pg-boss": "2026-11-13-followup/sat_w16_shared",
+      "procrastinate": "2026-11-13-followup/sat_w16_shared",
+      "river": "2026-11-13-followup/sat_w16_shared"
      }
     },
     {
@@ -328,95 +350,96 @@
      "label": "64 workers",
      "values": {
       "pgmq": {
-       "jobs_per_s": 4819.9,
-       "peak_dead_tup": 1036560.0,
-       "wal_per_job": 1937.1115,
-       "pg_cores": 3.6113,
-       "worker_cores": 0.3835,
-       "pg_mem": 190.0938,
-       "worker_mem": 49.8359,
-       "aas": 13.5333
+       "jobs_per_s": 5378.5,
+       "peak_dead_tup": 866781.0,
+       "wal_per_job": 2014.9152,
+       "pg_cores": 3.9416,
+       "worker_cores": 0.272,
+       "pg_mem": 200.0039,
+       "worker_mem": 50.2305,
+       "aas": 41.5733
       },
       "pgque": {
-       "jobs_per_s": 19676.7664,
-       "peak_dead_tup": 1162.0,
-       "wal_per_job": 436.2198,
-       "pg_cores": 0.2004,
-       "worker_cores": 0.6052,
-       "pg_mem": 31.0977,
-       "worker_mem": 55.3359,
-       "aas": 0.26
+       "jobs_per_s": 18906.8619,
+       "peak_dead_tup": 1138.0,
+       "wal_per_job": 435.5154,
+       "pg_cores": 0.208,
+       "worker_cores": 0.6227,
+       "pg_mem": 30.8398,
+       "worker_mem": 55.5586,
+       "aas": 0.2467
       },
       "awa": {
-       "jobs_per_s": 6067.2163,
-       "peak_dead_tup": 517.0,
-       "wal_per_job": 1525.4505,
-       "pg_cores": 1.5749,
-       "worker_cores": 0.3592,
-       "pg_mem": 327.2461,
-       "worker_mem": 56.9883,
-       "aas": 1.7933
+       "jobs_per_s": 5688.583,
+       "peak_dead_tup": 585.0,
+       "wal_per_job": 1523.7269,
+       "pg_cores": 1.5716,
+       "worker_cores": 0.373,
+       "pg_mem": 329.4062,
+       "worker_mem": 63.7383,
+       "aas": 1.9933
       },
       "absurd": {
-       "jobs_per_s": 589.6,
-       "peak_dead_tup": 31224.0,
-       "wal_per_job": 2471.4884,
-       "pg_cores": 0.7136,
-       "worker_cores": 0.2444,
-       "pg_mem": 18.8828,
-       "worker_mem": 44.9648,
-       "aas": 0.9267
+       "jobs_per_s": 577.8,
+       "peak_dead_tup": 33967.0,
+       "wal_per_job": 2470.4346,
+       "pg_cores": 0.6629,
+       "worker_cores": 0.2454,
+       "pg_mem": 18.5547,
+       "worker_mem": 45.1211,
+       "aas": 0.7933
       },
       "oban": {
-       "jobs_per_s": 0.1577,
-       "peak_dead_tup": 114807.0,
-       "wal_per_job": 4678.4436,
-       "pg_cores": 0.0308,
-       "worker_cores": 1.225,
-       "pg_mem": 192.1484,
-       "worker_mem": 2968.9922,
-       "aas": 0.6533
+       "jobs_per_s": 3992.7496,
+       "peak_dead_tup": 557559.0,
+       "wal_per_job": 5399.0698,
+       "pg_cores": 1.5509,
+       "worker_cores": 4.1307,
+       "pg_mem": 257.9258,
+       "worker_mem": 2199.5078,
+       "aas": 11.0267
       },
       "pg-boss": {
-       "jobs_per_s": 2329.6,
-       "peak_dead_tup": 481238.0,
-       "wal_per_job": 3069.6402,
-       "pg_cores": 2.8801,
-       "worker_cores": 0.3764,
-       "pg_mem": 62.0117,
-       "worker_mem": 187.7852,
-       "aas": 2.6733
+       "jobs_per_s": 2247.7,
+       "peak_dead_tup": 464236.0,
+       "wal_per_job": 3129.6864,
+       "pg_cores": 2.8907,
+       "worker_cores": 0.3482,
+       "pg_mem": 104.2109,
+       "worker_mem": 200.5156,
+       "aas": 2.7748
       },
       "procrastinate": {
-       "jobs_per_s": 464.4278,
-       "peak_dead_tup": 51237.0,
-       "wal_per_job": 2518.9253,
-       "pg_cores": 0.865,
-       "worker_cores": 0.7245,
-       "pg_mem": 31.418,
-       "worker_mem": 40.0469,
-       "aas": 1.8867
+       "jobs_per_s": 459.063,
+       "peak_dead_tup": 54569.0,
+       "wal_per_job": 2465.2833,
+       "pg_cores": 0.8181,
+       "worker_cores": 0.7045,
+       "pg_mem": 32.5742,
+       "worker_mem": 40.3672,
+       "aas": 1.96
       },
       "river": {
-       "jobs_per_s": 1265.5454,
-       "peak_dead_tup": 149019.0,
-       "wal_per_job": 4073.7351,
-       "pg_cores": 0.1254,
-       "worker_cores": 0.089,
-       "pg_mem": 23.6094,
-       "worker_mem": 16.1758,
-       "aas": 0.22
+       "jobs_per_s": 1267.0619,
+       "peak_dead_tup": 147969.0,
+       "wal_per_job": 4051.6608,
+       "pg_cores": 0.1332,
+       "worker_cores": 0.0926,
+       "pg_mem": 24.9609,
+       "worker_mem": 16.1875,
+       "aas": 0.2267
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "sat_w64_pgmq",
-      "pgque": "sat_w64_pgque",
-      "awa": "sat_w64_shared",
-      "absurd": "sat_w64_shared",
-      "oban": "sat_w64_shared",
-      "pg-boss": "sat_w64_shared",
-      "procrastinate": "sat_w64_shared",
-      "river": "sat_w64_shared"
+      "pgmq": "2026-11-13-followup/sat_w64_pgmq",
+      "pgque": "2026-11-13-followup/sat_w64_pgque",
+      "awa": "2026-11-13-followup/sat_w64_shared",
+      "absurd": "2026-11-13-followup/sat_w64_shared",
+      "oban": "2026-11-13-followup/sat_w64_shared",
+      "pg-boss": "2026-11-13-followup/sat_w64_shared",
+      "procrastinate": "2026-11-13-followup/sat_w64_shared",
+      "river": "2026-11-13-followup/sat_w64_shared"
      }
     },
     {
@@ -424,98 +447,374 @@
      "label": "128 workers",
      "values": {
       "pgmq": {
-       "jobs_per_s": 3015.2,
-       "peak_dead_tup": 390786.0,
-       "wal_per_job": 1956.9354,
-       "pg_cores": 3.9876,
-       "worker_cores": 0.3457,
-       "pg_mem": 349.4922,
-       "worker_mem": 52.168,
-       "aas": 77.4408
+       "jobs_per_s": 3678.4,
+       "peak_dead_tup": 594649.0,
+       "wal_per_job": 1967.1223,
+       "pg_cores": 3.9964,
+       "worker_cores": 0.2719,
+       "pg_mem": 344.668,
+       "worker_mem": 52.4062,
+       "aas": 73.0733
       },
       "pgque": {
-       "jobs_per_s": 24333.2754,
-       "peak_dead_tup": 1426.0,
-       "wal_per_job": 439.3258,
-       "pg_cores": 0.2426,
-       "worker_cores": 0.7404,
-       "pg_mem": 31.0898,
-       "worker_mem": 55.4375,
-       "aas": 0.3667
+       "jobs_per_s": 23320.9995,
+       "peak_dead_tup": 1308.0,
+       "wal_per_job": 434.432,
+       "pg_cores": 0.2486,
+       "worker_cores": 0.7569,
+       "pg_mem": 30.3945,
+       "worker_mem": 55.5938,
+       "aas": 0.3267
       },
       "awa": {
-       "jobs_per_s": 8632.4847,
-       "peak_dead_tup": 593.0,
-       "wal_per_job": 1502.4163,
-       "pg_cores": 1.6624,
-       "worker_cores": 0.4837,
-       "pg_mem": 328.3359,
-       "worker_mem": 66.8086,
-       "aas": 1.9667
+       "jobs_per_s": 8572.7627,
+       "peak_dead_tup": 570.0,
+       "wal_per_job": 1512.5328,
+       "pg_cores": 1.6388,
+       "worker_cores": 0.5025,
+       "pg_mem": 331.9453,
+       "worker_mem": 69.3242,
+       "aas": 1.7
       },
       "absurd": {
        "jobs_per_s": 614.4,
-       "peak_dead_tup": 32070.0,
-       "wal_per_job": 2516.0643,
-       "pg_cores": 0.666,
-       "worker_cores": 0.2497,
-       "pg_mem": 19.1758,
-       "worker_mem": 45.3008,
-       "aas": 0.86
+       "peak_dead_tup": 32479.0,
+       "wal_per_job": 2521.4195,
+       "pg_cores": 0.6261,
+       "worker_cores": 0.2562,
+       "pg_mem": 18.4023,
+       "worker_mem": 45.4961,
+       "aas": 0.8067
       },
       "oban": {
-       "jobs_per_s": 0.1467,
-       "peak_dead_tup": 120045.0,
-       "wal_per_job": 1281.0273,
-       "pg_cores": 0.0314,
-       "worker_cores": 1.0779,
-       "pg_mem": 342.9805,
-       "worker_mem": 2996.7383,
-       "aas": 0.02
+       "jobs_per_s": 5418.3636,
+       "peak_dead_tup": 910516.0,
+       "wal_per_job": 5580.143,
+       "pg_cores": 2.3317,
+       "worker_cores": 6.7043,
+       "pg_mem": 432.3867,
+       "worker_mem": 2228.0078,
+       "aas": 12.8609
       },
       "pg-boss": {
-       "jobs_per_s": 1075.2,
-       "peak_dead_tup": 437673.0,
-       "wal_per_job": 2857.5338,
-       "pg_cores": 2.4172,
-       "worker_cores": 0.3565,
-       "pg_mem": 50.0273,
-       "worker_mem": 148.6602,
-       "aas": 3.1141
+       "jobs_per_s": 2240.0,
+       "peak_dead_tup": 471434.0,
+       "wal_per_job": 3149.6262,
+       "pg_cores": 2.9968,
+       "worker_cores": 0.3571,
+       "pg_mem": 128.3984,
+       "worker_mem": 187.5156,
+       "aas": 2.8867
       },
       "procrastinate": {
-       "jobs_per_s": 244.6996,
-       "peak_dead_tup": 28727.0,
-       "wal_per_job": 2511.1963,
-       "pg_cores": 0.7613,
-       "worker_cores": 0.5872,
-       "pg_mem": 32.5039,
-       "worker_mem": 39.793,
-       "aas": 1.8658
+       "jobs_per_s": 450.7802,
+       "peak_dead_tup": 52611.0,
+       "wal_per_job": 2464.4235,
+       "pg_cores": 0.7563,
+       "worker_cores": 0.6719,
+       "pg_mem": 33.9453,
+       "worker_mem": 40.3828,
+       "aas": 2.06
       },
       "river": {
-       "jobs_per_s": 2486.757,
-       "peak_dead_tup": 310077.0,
-       "wal_per_job": 4270.443,
-       "pg_cores": 0.3022,
-       "worker_cores": 0.1818,
-       "pg_mem": 27.5352,
-       "worker_mem": 20.2227,
-       "aas": 0.36
+       "jobs_per_s": 2509.034,
+       "peak_dead_tup": 324958.0,
+       "wal_per_job": 4276.7847,
+       "pg_cores": 0.2305,
+       "worker_cores": 0.1764,
+       "pg_mem": 27.8633,
+       "worker_mem": 17.9414,
+       "aas": 0.3067
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/sat_w128_pgmq",
+      "pgque": "2026-11-13-followup/sat_w128_pgque",
+      "awa": "2026-11-13-followup/sat_w128_shared",
+      "absurd": "2026-11-13-followup/sat_w128_shared",
+      "oban": "2026-11-13-followup/sat_w128_shared",
+      "pg-boss": "2026-11-13-followup/sat_w128_shared",
+      "procrastinate": "2026-11-13-followup/sat_w128_shared",
+      "river": "2026-11-13-followup/sat_w128_shared"
+     }
+    },
+    {
+     "id": "sat_tuned",
+     "label": "Tuned, 1 queue",
+     "values": {
+      "absurd": {
+       "jobs_per_s": 1382.4,
+       "peak_dead_tup": 92160.0,
+       "wal_per_job": 2641.4893,
+       "pg_cores": 2.6924,
+       "worker_cores": 0.6421,
+       "pg_mem": 43.8789,
+       "worker_mem": 172.5547,
+       "aas": 3.86
+      },
+      "awa": {
+       "jobs_per_s": 8550.0356,
+       "peak_dead_tup": 548.0,
+       "wal_per_job": 1541.3152,
+       "pg_cores": 1.5692,
+       "worker_cores": 0.5079,
+       "pg_mem": 353.3828,
+       "worker_mem": 71.8008,
+       "aas": 1.96
+      },
+      "oban": {
+       "jobs_per_s": 5672.5372,
+       "peak_dead_tup": 1045237.0,
+       "wal_per_job": 6446.8143,
+       "pg_cores": 3.7802,
+       "worker_cores": 6.2047,
+       "pg_mem": 417.875,
+       "worker_mem": 8653.8125,
+       "aas": 23.2583
+      },
+      "pg-boss": {
+       "jobs_per_s": 3494.6,
+       "peak_dead_tup": 639069.0,
+       "wal_per_job": 3787.1412,
+       "pg_cores": 3.9361,
+       "worker_cores": 0.7669,
+       "pg_mem": 376.7695,
+       "worker_mem": 339.9336,
+       "aas": 38.3245
+      },
+      "pgmq": {
+       "jobs_per_s": 7387.9,
+       "peak_dead_tup": 1551084.0,
+       "wal_per_job": 1346.3302,
+       "pg_cores": 3.9998,
+       "worker_cores": 0.3928,
+       "pg_mem": 343.2773,
+       "worker_mem": 176.6094,
+       "aas": 104.4172
+      },
+      "pgque": {
+       "jobs_per_s": 47281.6887,
+       "peak_dead_tup": 6342.0,
+       "wal_per_job": 442.8172,
+       "pg_cores": 1.0893,
+       "worker_cores": 1.9019,
+       "pg_mem": 215.9727,
+       "worker_mem": 259.8633,
+       "aas": 5.3933
+      },
+      "procrastinate": {
+       "jobs_per_s": 1472.1283,
+       "peak_dead_tup": 172468.0,
+       "wal_per_job": 2470.1666,
+       "pg_cores": 2.2295,
+       "worker_cores": 2.0234,
+       "pg_mem": 76.4453,
+       "worker_mem": 162.3828,
+       "aas": 5.3867
+      },
+      "river": {
+       "jobs_per_s": 8113.4877,
+       "peak_dead_tup": 1514412.0,
+       "wal_per_job": 4701.5545,
+       "pg_cores": 1.0526,
+       "worker_cores": 0.5177,
+       "pg_mem": 45.9492,
+       "worker_mem": 19.9297,
+       "aas": 1.702
+      }
+     },
+     "excluded": {},
+     "source": {
+      "absurd": "2026-11-13-followup/sat_tuned_absurd",
+      "awa": "2026-11-13-followup/sat_tuned_awa",
+      "oban": "2026-11-13-followup/sat_tuned_oban",
+      "pg-boss": "2026-11-13-followup/sat_tuned_pgboss",
+      "pgmq": "2026-11-13-followup/sat_tuned_pgmq",
+      "pgque": "2026-11-13-followup/sat_tuned_pgque",
+      "procrastinate": "2026-11-13-followup/sat_tuned_procrastinate",
+      "river": "2026-11-13-followup/sat_tuned_river"
+     }
+    },
+    {
+     "id": "sat_tuned_k4",
+     "label": "Tuned, 4 queues",
+     "values": {
+      "absurd": {
+       "jobs_per_s": 1625.0,
+       "peak_dead_tup": 40780.0,
+       "wal_per_job": 3211.9485,
+       "pg_cores": 3.993,
+       "worker_cores": 0.9453,
+       "pg_mem": 102.5039,
+       "worker_mem": 172.9531,
+       "aas": 12.5467
+      },
+      "awa": {
+       "jobs_per_s": 10762.1562,
+       "peak_dead_tup": 708.0,
+       "wal_per_job": 1618.8831,
+       "pg_cores": 3.9572,
+       "worker_cores": 0.8336,
+       "pg_mem": 456.1289,
+       "worker_mem": 76.9531,
+       "aas": 5.0133
+      },
+      "river": {
+       "jobs_per_s": 10905.0835,
+       "peak_dead_tup": 2195052.0,
+       "wal_per_job": 5251.3902,
+       "pg_cores": 2.1645,
+       "worker_cores": 0.7432,
+       "pg_mem": 55.0859,
+       "worker_mem": 22.082,
+       "aas": 4.4106
+      }
+     },
+     "excluded": {},
+     "source": {
+      "absurd": "2026-11-13-followup/sat_tuned_k4_absurd",
+      "awa": "2026-11-13-followup/sat_tuned_k4_awa",
+      "river": "2026-11-13-followup/sat_tuned_k4_river"
+     }
+    },
+    {
+     "id": "sat_tuned_k16",
+     "label": "Tuned, 16 queues",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 5709.6,
+       "peak_dead_tup": 61712.0,
+       "wal_per_job": 1331.4332,
+       "pg_cores": 4.0008,
+       "worker_cores": 0.8836,
+       "pg_mem": 381.8945,
+       "worker_mem": 176.7461,
+       "aas": 69.8543
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/sat_tuned_k16_pgmq"
+     }
+    },
+    {
+     "id": "sat_best",
+     "label": "Best measured configuration",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 12012.8,
+       "peak_dead_tup": 2143975.0,
+       "wal_per_job": 2052.646,
+       "pg_cores": 1.7298,
+       "worker_cores": 0.3249,
+       "pg_mem": 67.5039,
+       "worker_mem": 45.293,
+       "aas": 3.0533,
+       "config": "16 workers, 1 process"
+      },
+      "pgque": {
+       "jobs_per_s": 47281.6887,
+       "peak_dead_tup": 6342.0,
+       "wal_per_job": 442.8172,
+       "pg_cores": 1.0893,
+       "worker_cores": 1.9019,
+       "pg_mem": 215.9727,
+       "worker_mem": 259.8633,
+       "aas": 5.3933,
+       "config": "tuned, 1 queue"
+      },
+      "awa": {
+       "jobs_per_s": 10762.1562,
+       "peak_dead_tup": 708.0,
+       "wal_per_job": 1618.8831,
+       "pg_cores": 3.9572,
+       "worker_cores": 0.8336,
+       "pg_mem": 456.1289,
+       "worker_mem": 76.9531,
+       "aas": 5.0133,
+       "config": "tuned, 4 queues"
+      },
+      "absurd": {
+       "jobs_per_s": 1625.0,
+       "peak_dead_tup": 40780.0,
+       "wal_per_job": 3211.9485,
+       "pg_cores": 3.993,
+       "worker_cores": 0.9453,
+       "pg_mem": 102.5039,
+       "worker_mem": 172.9531,
+       "aas": 12.5467,
+       "config": "tuned, 4 queues"
+      },
+      "oban": {
+       "jobs_per_s": 5672.5372,
+       "peak_dead_tup": 1045237.0,
+       "wal_per_job": 6446.8143,
+       "pg_cores": 3.7802,
+       "worker_cores": 6.2047,
+       "pg_mem": 417.875,
+       "worker_mem": 8653.8125,
+       "aas": 23.2583,
+       "config": "tuned, 1 queue"
+      },
+      "pg-boss": {
+       "jobs_per_s": 3494.6,
+       "peak_dead_tup": 639069.0,
+       "wal_per_job": 3787.1412,
+       "pg_cores": 3.9361,
+       "worker_cores": 0.7669,
+       "pg_mem": 376.7695,
+       "worker_mem": 339.9336,
+       "aas": 38.3245,
+       "config": "tuned, 1 queue"
+      },
+      "procrastinate": {
+       "jobs_per_s": 1472.1283,
+       "peak_dead_tup": 172468.0,
+       "wal_per_job": 2470.1666,
+       "pg_cores": 2.2295,
+       "worker_cores": 2.0234,
+       "pg_mem": 76.4453,
+       "worker_mem": 162.3828,
+       "aas": 5.3867,
+       "config": "tuned, 1 queue"
+      },
+      "river": {
+       "jobs_per_s": 10905.0835,
+       "peak_dead_tup": 2195052.0,
+       "wal_per_job": 5251.3902,
+       "pg_cores": 2.1645,
+       "worker_cores": 0.7432,
+       "pg_mem": 55.0859,
+       "worker_mem": 22.082,
+       "aas": 4.4106,
+       "config": "tuned, 4 queues"
       }
      },
      "source": {
-      "pgmq": "sat_w128_pgmq",
-      "pgque": "sat_w128_pgque",
-      "awa": "sat_w128_shared",
-      "absurd": "sat_w128_shared",
-      "oban": "sat_w128_shared",
-      "pg-boss": "sat_w128_shared",
-      "procrastinate": "sat_w128_shared",
-      "river": "sat_w128_shared"
+      "pgmq": "2026-11-13-followup/sat_w16_pgmq",
+      "pgque": "2026-11-13-followup/sat_tuned_pgque",
+      "awa": "2026-11-13-followup/sat_tuned_k4_awa",
+      "absurd": "2026-11-13-followup/sat_tuned_k4_absurd",
+      "oban": "2026-11-13-followup/sat_tuned_oban",
+      "pg-boss": "2026-11-13-followup/sat_tuned_pgboss",
+      "procrastinate": "2026-11-13-followup/sat_tuned_procrastinate",
+      "river": "2026-11-13-followup/sat_tuned_k4_river"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-13-followup": [
+     "absurd",
+     "awa",
+     "oban",
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ]
+   }
   },
   {
    "id": "ref800",
@@ -579,27 +878,27 @@
        "pg_cores": 0.0686
       },
       "awa": {
-       "jobs_per_s": 799.0774,
-       "e2e_p99": 26.015,
-       "claim_p99": 25.007,
+       "jobs_per_s": 798.7882,
+       "e2e_p99": 21.007,
+       "claim_p99": 19.007,
        "depth": 0.0,
-       "wal_per_job": 1723.1639,
-       "pg_cores": 0.574
+       "wal_per_job": 1703.1468,
+       "pg_cores": 0.6057
       },
       "absurd": {
-       "jobs_per_s": 240.0,
-       "e2e_p99": 113760.5,
-       "claim_p99": 113760.5,
-       "depth": 91118.0,
-       "wal_per_job": 5019.1408,
-       "pg_cores": 1.1605
+       "jobs_per_s": 223.3,
+       "e2e_p99": 119537.5,
+       "claim_p99": 119536.5,
+       "depth": 95699.5,
+       "wal_per_job": 5186.7219,
+       "pg_cores": 1.0444
       },
       "oban": {
-       "jobs_per_s": 799.8603,
-       "claim_p99": 81.0,
+       "jobs_per_s": 800.1398,
+       "claim_p99": 19.5,
        "depth": 9.0,
-       "wal_per_job": 5005.8435,
-       "pg_cores": 0.3603
+       "wal_per_job": 4982.6742,
+       "pg_cores": 0.3624
       },
       "pg-boss": {
        "jobs_per_s": 826.9,
@@ -624,18 +923,35 @@
        "pg_cores": 0.142
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "ref800_pgmq",
-      "pgque": "ref800_pgque",
-      "awa": "ref800_shared",
-      "absurd": "ref800_shared",
-      "oban": "ref800_shared",
-      "pg-boss": "ref800_shared",
-      "procrastinate": "ref800_shared",
-      "river": "ref800_shared"
+      "pgmq": "2026-11-12-full-sweep/ref800_pgmq",
+      "pgque": "2026-11-12-full-sweep/ref800_pgque",
+      "awa": "2026-11-13-followup/ref800_shared",
+      "absurd": "2026-11-13-followup/ref800_shared",
+      "oban": "2026-11-13-rerun/ref800_shared",
+      "pg-boss": "2026-11-12-full-sweep/ref800_shared",
+      "procrastinate": "2026-11-12-full-sweep/ref800_shared",
+      "river": "2026-11-12-full-sweep/ref800_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "idle",
@@ -691,25 +1007,25 @@
        "pg_mem": 29.0664
       },
       "awa": {
-       "xacts_per_s": 59.9697,
-       "wal_per_s": 4152.6655,
-       "relfile_per_s": 0.6235,
-       "pg_cores": 0.0496,
-       "pg_mem": 260.4531
+       "xacts_per_s": 60.0941,
+       "wal_per_s": 3909.4252,
+       "relfile_per_s": 0.3681,
+       "pg_cores": 0.0531,
+       "pg_mem": 276.1992
       },
       "absurd": {
-       "xacts_per_s": 23.6706,
-       "wal_per_s": 914.5395,
+       "xacts_per_s": 23.4706,
+       "wal_per_s": 991.2756,
        "relfile_per_s": 0.0,
-       "pg_cores": 0.0538,
-       "pg_mem": 18.6719
+       "pg_cores": 0.0507,
+       "pg_mem": 17.6914
       },
       "oban": {
-       "xacts_per_s": 15.8017,
-       "wal_per_s": 3891.5815,
+       "xacts_per_s": 15.9933,
+       "wal_per_s": 4189.7815,
        "relfile_per_s": 0.0,
-       "pg_cores": 0.0151,
-       "pg_mem": 58.1719
+       "pg_cores": 0.0152,
+       "pg_mem": 58.7344
       },
       "pg-boss": {
        "xacts_per_s": 21.9176,
@@ -733,18 +1049,35 @@
        "pg_mem": 23.4844
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "idle_pgmq",
-      "pgque": "idle_pgque",
-      "awa": "idle_shared",
-      "absurd": "idle_shared",
-      "oban": "idle_shared",
-      "pg-boss": "idle_shared",
-      "procrastinate": "idle_shared",
-      "river": "idle_shared"
+      "pgmq": "2026-11-12-full-sweep/idle_pgmq",
+      "pgque": "2026-11-12-full-sweep/idle_pgque",
+      "awa": "2026-11-13-followup/idle_shared",
+      "absurd": "2026-11-13-followup/idle_shared",
+      "oban": "2026-11-13-rerun/idle_shared",
+      "pg-boss": "2026-11-12-full-sweep/idle_shared",
+      "procrastinate": "2026-11-12-full-sweep/idle_shared",
+      "river": "2026-11-12-full-sweep/idle_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "chaos",
@@ -792,73 +1125,90 @@
      "label": null,
      "values": {
       "pgmq": {
-       "baseline_jobs": 401.1,
-       "recovery_jobs": 399.7,
+       "baseline_jobs": 401.0,
+       "recovery_jobs": 398.6,
        "workers_back_s": 5.007,
        "backlog_clear_s": 5.007,
-       "recovery_e2e_p99": 29.5,
+       "recovery_e2e_p99": 28.0,
        "recovery_depth": 1.0
       },
       "pgque": {
-       "baseline_jobs": 800.8734,
-       "recovery_jobs": 797.3352,
-       "workers_back_s": 5.011,
-       "backlog_clear_s": 5.013,
-       "recovery_e2e_p99": 108.1065,
+       "baseline_jobs": 800.6272,
+       "recovery_jobs": 805.1953,
+       "workers_back_s": 5.012,
+       "backlog_clear_s": 5.012,
+       "recovery_e2e_p99": 108.693,
        "recovery_depth": 0.0
       },
       "awa": {
-       "baseline_jobs": 799.6794,
-       "recovery_jobs": 791.8847,
-       "workers_back_s": 5.0,
-       "backlog_clear_s": 5.0,
-       "recovery_e2e_p99": 49.023,
+       "baseline_jobs": 798.1752,
+       "recovery_jobs": 802.1088,
+       "workers_back_s": 5.001,
+       "backlog_clear_s": 10.0,
+       "recovery_e2e_p99": 30.015,
        "recovery_depth": 4.0
       },
       "absurd": {
-       "baseline_jobs": 401.2,
-       "recovery_jobs": 0.0,
-       "recovery_depth": 41660.0
+       "baseline_jobs": 794.2,
+       "recovery_jobs": 801.8,
+       "workers_back_s": 5.018,
+       "backlog_clear_s": 10.036,
+       "recovery_e2e_p99": 1197.5,
+       "recovery_depth": 6.0
       },
       "oban": {
-       "baseline_jobs": 805.974,
-       "recovery_jobs": 796.1061,
-       "workers_back_s": 5.005,
-       "backlog_clear_s": 5.006,
+       "baseline_jobs": 793.0862,
+       "recovery_jobs": 801.7982,
+       "workers_back_s": 5.006,
+       "backlog_clear_s": 5.005,
        "recovery_depth": 0.0
       },
       "pg-boss": {
-       "baseline_jobs": 668.4,
-       "recovery_jobs": 668.5,
-       "workers_back_s": 5.008,
-       "backlog_clear_s": 5.008,
-       "recovery_e2e_p99": 350.0,
-       "recovery_depth": 32.5
+       "baseline_jobs": 668.0,
+       "recovery_jobs": 667.8,
+       "workers_back_s": 5.009,
+       "recovery_e2e_p99": 399.5,
+       "recovery_depth": 175.5
       },
       "procrastinate": {
-       "baseline_jobs": 770.8172,
-       "recovery_jobs": 0.0,
-       "recovery_depth": 72870.5
+       "baseline_jobs": 776.8329,
+       "recovery_jobs": 774.8566,
+       "workers_back_s": 5.005,
+       "backlog_clear_s": 5.005,
+       "recovery_depth": 2.0
       },
       "river": {
-       "baseline_jobs": 633.5788,
-       "recovery_jobs": 633.5857,
+       "baseline_jobs": 633.569,
+       "recovery_jobs": 633.58,
        "workers_back_s": 5.0,
-       "recovery_depth": 37308.5
+       "recovery_depth": 37708.5
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "pg_restart_pgmq",
-      "pgque": "pg_restart_pgque",
-      "awa": "pg_restart_shared",
-      "absurd": "pg_restart_shared",
-      "oban": "pg_restart_shared",
-      "pg-boss": "pg_restart_shared",
-      "procrastinate": "pg_restart_shared",
-      "river": "pg_restart_shared"
+      "pgmq": "2026-11-13-followup/pg_restart_pgmq",
+      "pgque": "2026-11-13-followup/pg_restart_pgque",
+      "awa": "2026-11-13-followup/pg_restart_shared",
+      "absurd": "2026-11-13-followup/pg_restart_shared",
+      "oban": "2026-11-13-followup/pg_restart_shared",
+      "pg-boss": "2026-11-13-followup/pg_restart_shared",
+      "procrastinate": "2026-11-13-followup/pg_restart_shared",
+      "river": "2026-11-13-followup/pg_restart_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-13-followup": [
+     "absurd",
+     "awa",
+     "oban",
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ]
+   }
   },
   {
    "id": "neighbour",
@@ -914,25 +1264,25 @@
        "queue_jobs_4x": 1605.644
       },
       "awa": {
-       "p99_baseline": 3.324,
-       "p99_1x": 4.109,
-       "p99_4x": 9.498,
-       "tps_ratio_4x": 0.9999,
-       "queue_jobs_4x": 1600.2104
+       "p99_baseline": 2.258,
+       "p99_1x": 4.474,
+       "p99_4x": 6.478,
+       "tps_ratio_4x": 0.9889,
+       "queue_jobs_4x": 1600.4357
       },
       "absurd": {
-       "p99_baseline": 2.163,
-       "p99_1x": 3.243,
-       "p99_4x": 15.071,
-       "tps_ratio_4x": 0.9884,
-       "queue_jobs_4x": 89.6
+       "p99_baseline": 2.255,
+       "p99_1x": 6.313,
+       "p99_4x": 14.359,
+       "tps_ratio_4x": 0.9954,
+       "queue_jobs_4x": 80.0
       },
       "oban": {
-       "p99_baseline": 2.137,
-       "p99_1x": 6.448,
-       "p99_4x": 10.624,
-       "tps_ratio_4x": 0.9979,
-       "queue_jobs_4x": 1121.2605
+       "p99_baseline": 3.959,
+       "p99_1x": 4.956,
+       "p99_4x": 11.548,
+       "tps_ratio_4x": 0.999,
+       "queue_jobs_4x": 1390.9137
       },
       "pg-boss": {
        "p99_baseline": 2.141,
@@ -956,18 +1306,35 @@
        "queue_jobs_4x": 316.804
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "neighbour_pgmq",
-      "pgque": "neighbour_pgque",
-      "awa": "neighbour_shared",
-      "absurd": "neighbour_shared",
-      "oban": "neighbour_shared",
-      "pg-boss": "neighbour_shared",
-      "procrastinate": "neighbour_shared",
-      "river": "neighbour_shared"
+      "pgmq": "2026-11-12-full-sweep/neighbour_pgmq",
+      "pgque": "2026-11-12-full-sweep/neighbour_pgque",
+      "awa": "2026-11-13-followup/neighbour_shared",
+      "absurd": "2026-11-13-followup/neighbour_shared",
+      "oban": "2026-11-13-rerun/neighbour_shared",
+      "pg-boss": "2026-11-12-full-sweep/neighbour_shared",
+      "procrastinate": "2026-11-12-full-sweep/neighbour_shared",
+      "river": "2026-11-12-full-sweep/neighbour_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "logical",
@@ -1023,25 +1390,25 @@
        "stream_jobs": 401.8439
       },
       "awa": {
-       "no_replica_identity": 19.0,
-       "retained_wal": 226235432.0,
-       "catalog_dead": 19024.0,
-       "wal_per_job": 2069.8239,
-       "stream_jobs": 399.4309
+       "no_replica_identity": 0.0,
+       "retained_wal": 200520832.0,
+       "catalog_dead": 11374.0,
+       "wal_per_job": 2008.4774,
+       "stream_jobs": 399.4481
       },
       "absurd": {
        "no_replica_identity": 0.0,
-       "retained_wal": 151653160.0,
+       "retained_wal": 189640600.0,
        "catalog_dead": 22.0,
-       "wal_per_job": 3282.6643,
-       "stream_jobs": 401.4
+       "wal_per_job": 3228.4583,
+       "stream_jobs": 401.6
       },
       "oban": {
        "no_replica_identity": 0.0,
-       "retained_wal": 551565824.0,
+       "retained_wal": 569002728.0,
        "catalog_dead": 115.0,
-       "wal_per_job": 5086.5594,
-       "stream_jobs": 400.0
+       "wal_per_job": 5017.311,
+       "stream_jobs": 399.9201
       },
       "pg-boss": {
        "no_replica_identity": 0.0,
@@ -1065,18 +1432,35 @@
        "stream_jobs": 316.7894
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "logical_pgmq",
-      "pgque": "logical_pgque",
-      "awa": "logical_shared",
-      "absurd": "logical_shared",
-      "oban": "logical_shared",
-      "pg-boss": "logical_shared",
-      "procrastinate": "logical_shared",
-      "river": "logical_shared"
+      "pgmq": "2026-11-12-full-sweep/logical_pgmq",
+      "pgque": "2026-11-12-full-sweep/logical_pgque",
+      "awa": "2026-11-13-followup/logical_shared",
+      "absurd": "2026-11-13-followup/logical_shared",
+      "oban": "2026-11-13-rerun/logical_shared",
+      "pg-boss": "2026-11-12-full-sweep/logical_shared",
+      "procrastinate": "2026-11-12-full-sweep/logical_shared",
+      "river": "2026-11-12-full-sweep/logical_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "scheduled",
@@ -1121,22 +1505,22 @@
        "immediate_claim_p99": 106.541
       },
       "awa": {
-       "lateness_p50": 6123.0,
-       "lateness_p99": 11379.0,
-       "herd_drain_s": 11.483,
-       "immediate_claim_p99": 22.015
+       "lateness_p50": 6334.0,
+       "lateness_p99": 11975.0,
+       "herd_drain_s": 12.082,
+       "immediate_claim_p99": 18.511
       },
       "absurd": {
-       "lateness_p50": 70342.7029,
-       "lateness_p99": 105259.6094,
-       "herd_drain_s": 105.965,
-       "immediate_claim_p99": 76950.5
+       "lateness_p50": 96588.3694,
+       "lateness_p99": 136800.3855,
+       "herd_drain_s": 137.6658,
+       "immediate_claim_p99": 113193.0
       },
       "oban": {
-       "lateness_p50": 11841.0,
-       "lateness_p99": 20688.0,
-       "herd_drain_s": 20.824,
-       "immediate_claim_p99": 14.0
+       "lateness_p50": 11653.0,
+       "lateness_p99": 20544.0,
+       "herd_drain_s": 20.686,
+       "immediate_claim_p99": 13.0
       },
       "pg-boss": {
        "lateness_p50": 39316.0,
@@ -1157,18 +1541,35 @@
        "immediate_claim_p99": 9209.5
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "scheduled_burst_pgmq",
-      "pgque": "scheduled_burst_pgque",
-      "awa": "scheduled_burst_shared",
-      "absurd": "scheduled_burst_shared",
-      "oban": "scheduled_burst_shared",
-      "pg-boss": "scheduled_burst_shared",
-      "procrastinate": "scheduled_burst_shared",
-      "river": "scheduled_burst_shared"
+      "pgmq": "2026-11-12-full-sweep/scheduled_burst_pgmq",
+      "pgque": "2026-11-12-full-sweep/scheduled_burst_pgque",
+      "awa": "2026-11-13-followup/scheduled_burst_shared",
+      "absurd": "2026-11-13-followup/scheduled_burst_shared",
+      "oban": "2026-11-13-rerun/scheduled_burst_shared",
+      "pg-boss": "2026-11-12-full-sweep/scheduled_burst_shared",
+      "procrastinate": "2026-11-12-full-sweep/scheduled_burst_shared",
+      "river": "2026-11-12-full-sweep/scheduled_burst_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "retry",
@@ -1224,25 +1625,25 @@
        "peak_dead_tup": 5089.0
       },
       "awa": {
-       "baseline_jobs": 199.8042,
-       "storm_good_jobs": 138.0035,
-       "storm_claim_p99": 24.511,
-       "backlog_drain_s": 39.72,
-       "peak_dead_tup": 4771.0
+       "baseline_jobs": 199.7982,
+       "storm_good_jobs": 137.9981,
+       "storm_claim_p99": 24.015,
+       "backlog_drain_s": 39.408,
+       "peak_dead_tup": 4572.0
       },
       "absurd": {
-       "baseline_jobs": 200.4,
-       "storm_good_jobs": 138.4,
-       "storm_claim_p99": 11.0,
-       "backlog_drain_s": 3.281,
-       "peak_dead_tup": 7530.0
+       "baseline_jobs": 200.6,
+       "storm_good_jobs": 138.5,
+       "storm_claim_p99": 12.0,
+       "backlog_drain_s": 3.149,
+       "peak_dead_tup": 7651.0
       },
       "oban": {
        "baseline_jobs": 200.04,
-       "storm_good_jobs": 138.0619,
-       "storm_claim_p99": 45.0,
+       "storm_good_jobs": 137.9172,
+       "storm_claim_p99": 44.0,
        "backlog_drain_s": 95.0,
-       "peak_dead_tup": 34416.0
+       "peak_dead_tup": 34611.0
       },
       "pg-boss": {
        "baseline_jobs": 200.0,
@@ -1265,18 +1666,35 @@
        "peak_dead_tup": 32291.0
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "retry_storm_pgmq",
-      "pgque": "retry_storm_pgque",
-      "awa": "retry_storm_shared",
-      "absurd": "retry_storm_shared",
-      "oban": "retry_storm_shared",
-      "pg-boss": "retry_storm_shared",
-      "procrastinate": "retry_storm_shared",
-      "river": "retry_storm_shared"
+      "pgmq": "2026-11-12-full-sweep/retry_storm_pgmq",
+      "pgque": "2026-11-12-full-sweep/retry_storm_pgque",
+      "awa": "2026-11-13-followup/retry_storm_shared",
+      "absurd": "2026-11-13-followup/retry_storm_shared",
+      "oban": "2026-11-13-rerun/retry_storm_shared",
+      "pg-boss": "2026-11-12-full-sweep/retry_storm_shared",
+      "procrastinate": "2026-11-12-full-sweep/retry_storm_shared",
+      "river": "2026-11-12-full-sweep/retry_storm_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "fanout",
@@ -1325,78 +1743,79 @@
      "values": {
       "pgmq": {
        "jobs_per_s": 200.6,
-       "claim_p99": 41.0,
-       "backends": 18.0,
-       "listen": 0.0,
-       "idle_xacts": 314.8629,
-       "idle_pg_cores": 0.0984
+       "claim_p99": 4.0,
+       "backends": 19.0,
+       "listen": 1.0,
+       "idle_xacts": 36.3086,
+       "idle_pg_cores": 0.0335
       },
       "pgque": {
-       "jobs_per_s": 200.928,
-       "claim_p99": 106.056,
-       "backends": 7.0,
+       "jobs_per_s": 200.0998,
+       "claim_p99": 136.762,
+       "backends": 22.0,
        "listen": 1.0,
-       "idle_xacts": 40.52,
-       "idle_pg_cores": 0.0294
+       "idle_xacts": 35.1829,
+       "idle_pg_cores": 0.0307
       },
       "awa": {
-       "jobs_per_s": 199.627,
-       "claim_p99": 21.007,
-       "backends": 9.0,
+       "jobs_per_s": 199.7851,
+       "claim_p99": 19.007,
+       "backends": 11.0,
        "listen": 2.0,
-       "idle_xacts": 60.3486,
-       "idle_pg_cores": 0.0633
+       "idle_xacts": 60.0686,
+       "idle_pg_cores": 0.0629
       },
       "absurd": {
        "jobs_per_s": 200.6,
        "claim_p99": 10.0,
        "backends": 3.0,
        "listen": 0.0,
-       "idle_xacts": 23.4,
-       "idle_pg_cores": 0.0829
+       "idle_xacts": 8.3714,
+       "idle_pg_cores": 0.0237
       },
       "oban": {
-       "jobs_per_s": 0.0,
-       "claim_p99": 0.0,
-       "backends": 301.0,
+       "jobs_per_s": 200.04,
+       "claim_p99": 13.0,
+       "backends": 25.0,
        "listen": 1.0,
-       "idle_xacts": 6.1657,
-       "idle_pg_cores": 0.0702
+       "idle_xacts": 163.4514,
+       "idle_pg_cores": 0.0182
       },
       "pg-boss": {
-       "jobs_per_s": 200.0,
-       "claim_p99": 483.0,
-       "backends": 10.0,
+       "jobs_per_s": 200.4,
+       "claim_p99": 5.0,
+       "backends": 19.0,
        "listen": 0.0,
-       "idle_xacts": 37.8229,
-       "idle_pg_cores": 0.0618
+       "idle_xacts": 16.0571,
+       "idle_pg_cores": 0.0544
       },
       "procrastinate": {
-       "jobs_per_s": 199.9476,
-       "claim_p99": 8.8515,
-       "backends": 9.0,
+       "jobs_per_s": 199.9446,
+       "claim_p99": 5.875,
+       "backends": 6.0,
        "listen": 1.0,
-       "idle_xacts": 379.3429,
-       "idle_pg_cores": 0.0713
+       "idle_xacts": 374.48,
+       "idle_pg_cores": 0.0305
       },
       "river": {
-       "jobs_per_s": 200.0191,
+       "jobs_per_s": 200.1074,
        "claim_p99": 51.0,
-       "backends": 4.0,
+       "backends": 5.0,
        "listen": 0.0,
-       "idle_xacts": 24.0743,
-       "idle_pg_cores": 0.0181
+       "idle_xacts": 7.76,
+       "idle_pg_cores": 0.016
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "fanout_q1_pgmq",
-      "pgque": "fanout_q1_pgque",
-      "awa": "fanout_q1_shared",
-      "absurd": "fanout_q1_shared",
-      "oban": "fanout_q1_shared",
-      "pg-boss": "fanout_q1_shared",
-      "procrastinate": "fanout_q1_shared",
-      "river": "fanout_q1_shared"
+      "pgmq": "2026-11-13-followup/fanout_q1_pgmq",
+      "pgque": "2026-11-13-followup/fanout_q1_pgque",
+      "awa": "2026-11-13-followup/fanout_q1_awa",
+      "absurd": "2026-11-13-followup/fanout_q1_absurd",
+      "oban": "2026-11-13-followup/fanout_q1_oban",
+      "pg-boss": "2026-11-13-followup/fanout_q1_pgboss",
+      "procrastinate": "2026-11-13-followup/fanout_q1_procrastinate",
+      "river": "2026-11-13-followup/fanout_q1_river"
      }
     },
     {
@@ -1405,81 +1824,94 @@
      "values": {
       "pgmq": {
        "jobs_per_s": 200.6,
-       "claim_p99": 58.0,
-       "backends": 18.0,
-       "listen": 0.0,
-       "idle_xacts": 3401.0686,
-       "idle_pg_cores": 0.608
+       "claim_p99": 3.0,
+       "backends": 19.0,
+       "listen": 1.0,
+       "idle_xacts": 401.0514,
+       "idle_pg_cores": 0.1083
       },
       "pgque": {
-       "jobs_per_s": 182.0037,
-       "claim_p99": 23814.3335,
-       "backends": 206.0,
-       "listen": 200.0,
-       "idle_xacts": 2195.4971,
-       "idle_pg_cores": 2.1568
+       "jobs_per_s": 199.9819,
+       "claim_p99": 105.463,
+       "backends": 22.0,
+       "listen": 1.0,
+       "idle_xacts": 1498.2171,
+       "idle_pg_cores": 1.0539
       },
       "awa": {
-       "jobs_per_s": 126.5023,
-       "claim_p99": 998.911,
-       "backends": 122.0,
+       "jobs_per_s": 199.8032,
+       "claim_p99": 85.023,
+       "backends": 20.0,
        "listen": 2.0,
-       "idle_xacts": 705.5257,
-       "idle_pg_cores": 0.3167
+       "idle_xacts": 667.2686,
+       "idle_pg_cores": 0.2359
       },
       "absurd": {
-       "jobs_per_s": 195.3,
-       "claim_p99": 17609.5,
-       "backends": 202.0,
+       "jobs_per_s": 200.7,
+       "claim_p99": 255.0,
+       "backends": 18.0,
        "listen": 0.0,
-       "idle_xacts": 1819.0286,
-       "idle_pg_cores": 4.0088
+       "idle_xacts": 808.56,
+       "idle_pg_cores": 1.6794
       },
       "oban": {
-       "jobs_per_s": 199.001,
-       "claim_p99": 14.0,
-       "backends": 301.0,
+       "jobs_per_s": 200.04,
+       "claim_p99": 13.0,
+       "backends": 25.0,
        "listen": 1.0,
-       "idle_xacts": 11.1657,
-       "idle_pg_cores": 0.0289
+       "idle_xacts": 168.4343,
+       "idle_pg_cores": 0.019
       },
       "pg-boss": {
-       "jobs_per_s": 200.0,
-       "claim_p99": 505.0,
-       "backends": 10.0,
+       "jobs_per_s": 200.4,
+       "claim_p99": 5.0,
+       "backends": 6.0,
        "listen": 0.0,
-       "idle_xacts": 437.0962,
-       "idle_pg_cores": 1.1903
+       "idle_xacts": 48.9143,
+       "idle_pg_cores": 0.9783
       },
       "procrastinate": {
-       "jobs_per_s": 199.8307,
-       "claim_p99": 10.976,
-       "backends": 9.0,
+       "jobs_per_s": 199.9109,
+       "claim_p99": 11.008,
+       "backends": 6.0,
        "listen": 1.0,
-       "idle_xacts": 378.8571,
-       "idle_pg_cores": 0.0781
+       "idle_xacts": 373.8743,
+       "idle_pg_cores": 0.0361
       },
       "river": {
-       "jobs_per_s": 200.0295,
-       "claim_p99": 51.0,
-       "backends": 27.0,
+       "jobs_per_s": 199.9978,
+       "claim_p99": 42.0,
+       "backends": 15.0,
        "listen": 0.0,
-       "idle_xacts": 3629.7486,
-       "idle_pg_cores": 0.4981
+       "idle_xacts": 203.08,
+       "idle_pg_cores": 0.0456
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "fanout_q200_pgmq",
-      "pgque": "fanout_q200_pgque",
-      "awa": "fanout_q200_shared",
-      "absurd": "fanout_q200_shared",
-      "oban": "fanout_q200_shared",
-      "pg-boss": "fanout_q200_shared",
-      "procrastinate": "fanout_q200_shared",
-      "river": "fanout_q200_shared"
+      "pgmq": "2026-11-13-followup/fanout_q200_pgmq",
+      "pgque": "2026-11-13-followup/fanout_q200_pgque",
+      "awa": "2026-11-13-followup/fanout_q200_awa",
+      "absurd": "2026-11-13-followup/fanout_q200_absurd",
+      "oban": "2026-11-13-followup/fanout_q200_oban",
+      "pg-boss": "2026-11-13-followup/fanout_q200_pgboss",
+      "procrastinate": "2026-11-13-followup/fanout_q200_procrastinate",
+      "river": "2026-11-13-followup/fanout_q200_river"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-13-followup": [
+     "absurd",
+     "awa",
+     "oban",
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ]
+   }
   },
   {
    "id": "payload",
@@ -1527,22 +1959,22 @@
        "db_after": 1188.6462
       },
       "awa": {
-       "jobs_per_s": 49.9983,
-       "wal_per_job": 75609.8479,
+       "jobs_per_s": 50.0001,
+       "wal_per_job": 75272.2312,
        "toast_after": 0.625,
-       "db_after": 22.3024
+       "db_after": 22.2243
       },
       "absurd": {
        "jobs_per_s": 50.0,
-       "wal_per_job": 86535.7751,
-       "toast_after": 1173.8594,
-       "db_after": 1193.1306
+       "wal_per_job": 86672.3352,
+       "toast_after": 1174.0,
+       "db_after": 1193.3571
       },
       "oban": {
        "jobs_per_s": 49.98,
-       "wal_per_job": 82866.5206,
-       "toast_after": 1173.9766,
-       "db_after": 1192.4274
+       "wal_per_job": 83078.206,
+       "toast_after": 1173.8047,
+       "db_after": 1192.2399
       },
       "pg-boss": {
        "jobs_per_s": 50.0,
@@ -1563,18 +1995,35 @@
        "db_after": 1191.3493
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "payload_64k_pgmq",
-      "pgque": "payload_64k_pgque",
-      "awa": "payload_64k_shared",
-      "absurd": "payload_64k_shared",
-      "oban": "payload_64k_shared",
-      "pg-boss": "payload_64k_shared",
-      "procrastinate": "payload_64k_shared",
-      "river": "payload_64k_shared"
+      "pgmq": "2026-11-12-full-sweep/payload_64k_pgmq",
+      "pgque": "2026-11-12-full-sweep/payload_64k_pgque",
+      "awa": "2026-11-13-followup/payload_64k_shared",
+      "absurd": "2026-11-13-followup/payload_64k_shared",
+      "oban": "2026-11-13-rerun/payload_64k_shared",
+      "pg-boss": "2026-11-12-full-sweep/payload_64k_shared",
+      "procrastinate": "2026-11-12-full-sweep/payload_64k_shared",
+      "river": "2026-11-12-full-sweep/payload_64k_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "large_args",
@@ -1648,25 +2097,25 @@
        "db_final": 3904.9196
       },
       "awa": {
-       "jobs_per_s": 691.1722,
-       "wal_per_job": 94306.527,
-       "worker_mem": 88.7734,
-       "db_peak": 1728.0005,
-       "db_final": 1015.2399
+       "jobs_per_s": 691.1991,
+       "wal_per_job": 94792.0457,
+       "worker_mem": 88.0156,
+       "db_peak": 1689.0161,
+       "db_final": 1218.3649
       },
       "absurd": {
-       "jobs_per_s": 313.6,
-       "wal_per_job": 113397.2262,
-       "worker_mem": 63.9102,
-       "db_peak": 3525.8493,
-       "db_final": 3525.8493
+       "jobs_per_s": 268.8,
+       "wal_per_job": 113468.0322,
+       "worker_mem": 59.7656,
+       "db_peak": 3306.4899,
+       "db_final": 3306.4899
       },
       "oban": {
-       "jobs_per_s": 672.9579,
-       "wal_per_job": 102440.7477,
-       "worker_mem": 2332.7969,
-       "db_peak": 9833.3884,
-       "db_final": 9833.3884
+       "jobs_per_s": 663.7398,
+       "wal_per_job": 102725.7866,
+       "worker_mem": 2255.4141,
+       "db_peak": 9920.4196,
+       "db_final": 9920.4196
       },
       "pg-boss": {
        "jobs_per_s": 563.2,
@@ -1690,15 +2139,16 @@
        "db_final": 12029.0446
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "sat_65536_pgmq",
-      "pgque": "sat_65536_pgque",
-      "awa": "sat_65536_shared",
-      "absurd": "sat_65536_shared",
-      "oban": "sat_65536_shared",
-      "pg-boss": "sat_65536_shared",
-      "procrastinate": "sat_65536_shared",
-      "river": "sat_65536_shared"
+      "pgmq": "2026-11-12-full-sweep/sat_65536_pgmq",
+      "pgque": "2026-11-12-full-sweep/sat_65536_pgque",
+      "awa": "2026-11-13-followup/sat_65536_shared",
+      "absurd": "2026-11-13-followup/sat_65536_shared",
+      "oban": "2026-11-13-rerun/sat_65536_shared",
+      "pg-boss": "2026-11-12-full-sweep/sat_65536_shared",
+      "procrastinate": "2026-11-12-full-sweep/sat_65536_shared",
+      "river": "2026-11-12-full-sweep/sat_65536_shared"
      }
     },
     {
@@ -1720,25 +2170,25 @@
        "db_final": 4051.6931
       },
       "awa": {
-       "jobs_per_s": 51.1979,
-       "wal_per_job": 1375356.0399,
-       "worker_mem": 954.4297,
-       "db_peak": 1635.6255,
-       "db_final": 719.6724
+       "jobs_per_s": 51.197,
+       "wal_per_job": 1415768.8395,
+       "worker_mem": 944.1758,
+       "db_peak": 1626.6646,
+       "db_final": 822.7946
       },
       "absurd": {
        "jobs_per_s": 38.4,
-       "wal_per_job": 1276277.7919,
-       "worker_mem": 372.0742,
-       "db_peak": 15992.5446,
-       "db_final": 15992.5446
+       "wal_per_job": 1274797.4746,
+       "worker_mem": 372.125,
+       "db_peak": 15859.5681,
+       "db_final": 15859.5681
       },
       "oban": {
-       "jobs_per_s": 51.1898,
-       "wal_per_job": 1399638.4768,
-       "worker_mem": 2575.8789,
-       "db_peak": 10425.7556,
-       "db_final": 10425.7556
+       "jobs_per_s": 44.891,
+       "wal_per_job": 1203763.6667,
+       "worker_mem": 2550.3555,
+       "db_peak": 10255.4274,
+       "db_final": 10255.4274
       },
       "pg-boss": {
        "jobs_per_s": 25.6,
@@ -1762,15 +2212,16 @@
        "db_final": 19563.1618
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "sat_1048576_pgmq",
-      "pgque": "sat_1048576_pgque",
-      "awa": "sat_1048576_shared",
-      "absurd": "sat_1048576_shared",
-      "oban": "sat_1048576_shared",
-      "pg-boss": "sat_1048576_shared",
-      "procrastinate": "sat_1048576_shared",
-      "river": "sat_1048576_shared"
+      "pgmq": "2026-11-12-full-sweep/sat_1048576_pgmq",
+      "pgque": "2026-11-12-full-sweep/sat_1048576_pgque",
+      "awa": "2026-11-13-followup/sat_1048576_shared",
+      "absurd": "2026-11-13-followup/sat_1048576_shared",
+      "oban": "2026-11-13-rerun/sat_1048576_shared",
+      "pg-boss": "2026-11-12-full-sweep/sat_1048576_shared",
+      "procrastinate": "2026-11-12-full-sweep/sat_1048576_shared",
+      "river": "2026-11-12-full-sweep/sat_1048576_shared"
      }
     },
     {
@@ -1792,25 +2243,25 @@
        "db_final": 8330.9352
       },
       "awa": {
-       "preloaded": 6915.0008,
-       "drain_jobs": 183.5652,
-       "drain_worker_mem": 304.8398,
-       "db_peak": 7211.2946,
-       "db_final": 21.2009
+       "preloaded": 6494.0091,
+       "drain_jobs": 169.5389,
+       "drain_worker_mem": 259.3867,
+       "db_peak": 6773.6696,
+       "db_final": 21.3102
       },
       "absurd": {
-       "preloaded": 7670.0,
-       "drain_jobs": 262.6532,
-       "drain_worker_mem": 363.1016,
-       "db_peak": 7989.4274,
-       "db_final": 7989.4274
+       "preloaded": 7684.0,
+       "drain_jobs": 243.3879,
+       "drain_worker_mem": 365.7891,
+       "db_peak": 8003.3181,
+       "db_final": 8003.3181
       },
       "oban": {
-       "preloaded": 7674.4651,
-       "drain_jobs": 275.2692,
-       "drain_worker_mem": 8640.1836,
-       "db_peak": 8000.9352,
-       "db_final": 8000.9352
+       "preloaded": 7675.4559,
+       "drain_jobs": 257.5241,
+       "drain_worker_mem": 8712.8477,
+       "db_peak": 8001.0524,
+       "db_final": 8001.0524
       },
       "pg-boss": {
        "preloaded": 8004.0,
@@ -1834,18 +2285,35 @@
        "db_final": 7997.2868
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "backlog_1m_pgmq",
-      "pgque": "backlog_1m_pgque",
-      "awa": "backlog_1m_shared",
-      "absurd": "backlog_1m_shared",
-      "oban": "backlog_1m_shared",
-      "pg-boss": "backlog_1m_shared",
-      "procrastinate": "backlog_1m_shared",
-      "river": "backlog_1m_shared"
+      "pgmq": "2026-11-12-full-sweep/backlog_1m_pgmq",
+      "pgque": "2026-11-12-full-sweep/backlog_1m_pgque",
+      "awa": "2026-11-13-followup/backlog_1m_shared",
+      "absurd": "2026-11-13-followup/backlog_1m_shared",
+      "oban": "2026-11-13-rerun/backlog_1m_shared",
+      "pg-boss": "2026-11-12-full-sweep/backlog_1m_shared",
+      "procrastinate": "2026-11-12-full-sweep/backlog_1m_shared",
+      "river": "2026-11-12-full-sweep/backlog_1m_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "long_jobs",
@@ -1893,22 +2361,22 @@
        "duplicates": -841.8222
       },
       "awa": {
-       "wal_per_s": 32821.8901,
-       "xacts_per_s": 109.6141,
-       "tup_updated_per_s": 31.0225,
-       "duplicates": 0.0016
+       "wal_per_s": 27929.338,
+       "xacts_per_s": 114.6056,
+       "tup_updated_per_s": 24.2028,
+       "duplicates": 0.0057
       },
       "absurd": {
-       "wal_per_s": 12574.9577,
-       "xacts_per_s": 14.4479,
-       "tup_updated_per_s": 17.1437,
-       "duplicates": 1164.0
+       "wal_per_s": 12321.2479,
+       "xacts_per_s": 14.3634,
+       "tup_updated_per_s": 17.0028,
+       "duplicates": 1134.0
       },
       "oban": {
-       "wal_per_s": 11262.707,
-       "xacts_per_s": 15.7296,
-       "tup_updated_per_s": 5.4817,
-       "duplicates": 298.9402
+       "wal_per_s": 11244.4197,
+       "xacts_per_s": 15.9296,
+       "tup_updated_per_s": 5.507,
+       "duplicates": 297.9404
       },
       "pg-boss": {
        "wal_per_s": 6518.4479,
@@ -1929,18 +2397,35 @@
        "duplicates": 359.9896
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "long_jobs_pgmq",
-      "pgque": "long_jobs_pgque",
-      "awa": "long_jobs_shared",
-      "absurd": "long_jobs_shared",
-      "oban": "long_jobs_shared",
-      "pg-boss": "long_jobs_shared",
-      "procrastinate": "long_jobs_shared",
-      "river": "long_jobs_shared"
+      "pgmq": "2026-11-12-full-sweep/long_jobs_pgmq",
+      "pgque": "2026-11-12-full-sweep/long_jobs_pgque",
+      "awa": "2026-11-13-followup/long_jobs_shared",
+      "absurd": "2026-11-13-followup/long_jobs_shared",
+      "oban": "2026-11-13-rerun/long_jobs_shared",
+      "pg-boss": "2026-11-12-full-sweep/long_jobs_shared",
+      "procrastinate": "2026-11-12-full-sweep/long_jobs_shared",
+      "river": "2026-11-12-full-sweep/long_jobs_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "drain",
@@ -2002,24 +2487,24 @@
        "db_final": 75.904
       },
       "awa": {
-       "drain_jobs": 6291.706,
-       "drain_s": 31.752,
-       "db_baseline": 20.6618,
-       "db_peak": 175.3415,
-       "db_final": 21.3962,
-       "settle_s": 41.205
+       "drain_jobs": 5154.1798,
+       "drain_s": 38.778,
+       "db_baseline": 20.7399,
+       "db_peak": 173.3415,
+       "db_final": 21.4665,
+       "settle_s": 73.25
       },
       "absurd": {
        "db_baseline": 7.8337,
-       "db_peak": 212.7477,
-       "db_final": 212.7477
+       "db_peak": 210.9509,
+       "db_final": 210.9509
       },
       "oban": {
-       "drain_jobs": 631.7514,
-       "drain_s": 289.502,
+       "drain_jobs": 4205.5693,
+       "drain_s": 47.25,
        "db_baseline": 7.8102,
-       "db_peak": 249.4587,
-       "db_final": 249.4587
+       "db_peak": 323.1149,
+       "db_final": 323.1149
       },
       "pg-boss": {
        "drain_jobs": 2509.7574,
@@ -2043,18 +2528,35 @@
        "db_final": 216.1931
       }
      },
+     "excluded": {},
      "source": {
-      "pgmq": "backlog_drain_pgmq",
-      "pgque": "backlog_drain_pgque",
-      "awa": "backlog_drain_shared",
-      "absurd": "backlog_drain_shared",
-      "oban": "backlog_drain_shared",
-      "pg-boss": "backlog_drain_shared",
-      "procrastinate": "backlog_drain_shared",
-      "river": "backlog_drain_shared"
+      "pgmq": "2026-11-12-full-sweep/backlog_drain_pgmq",
+      "pgque": "2026-11-12-full-sweep/backlog_drain_pgque",
+      "awa": "2026-11-13-followup/backlog_drain_shared",
+      "absurd": "2026-11-13-followup/backlog_drain_shared",
+      "oban": "2026-11-13-rerun/backlog_drain_shared",
+      "pg-boss": "2026-11-12-full-sweep/backlog_drain_shared",
+      "procrastinate": "2026-11-12-full-sweep/backlog_drain_shared",
+      "river": "2026-11-12-full-sweep/backlog_drain_shared"
      }
     }
-   ]
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
   },
   {
    "id": "abandon",
@@ -2126,34 +2628,36 @@
      "label": null,
      "values": {
       "absurd": {
-       "held": 998432.0,
-       "first_s": 132.798,
-       "half_s": 943.791,
-       "cleared_s": 2077.758,
-       "missing": 107525.0,
-       "excess": 0.0,
-       "fresh_claim_p99": 139620.0,
-       "pg_cores": 3.6707
+       "held": 998434.0,
+       "first_s": 131.335,
+       "half_s": 716.901,
+       "all_s": 1709.292,
+       "cleared_s": 1536.298,
+       "rate": 592.7979,
+       "missing": 0.0,
+       "excess": 43.0,
+       "fresh_claim_p99": 99120.5,
+       "pg_cores": 3.3931
       },
       "awa": {
-       "held": 999911.0,
-       "first_s": 136.635,
-       "half_s": 771.634,
-       "all_s": 1361.634,
-       "cleared_s": 1541.563,
-       "rate": 864.8086,
+       "held": 999885.0,
+       "first_s": 140.527,
+       "half_s": 740.527,
+       "all_s": 1230.527,
+       "cleared_s": 1330.441,
+       "rate": 919.4555,
        "missing": 0.0,
        "excess": 0.0,
-       "fresh_claim_p99": 124.031,
-       "pg_cores": 3.9422
+       "fresh_claim_p99": 116.543,
+       "pg_cores": 3.8892
       },
       "oban": {
-       "held": 998328.0,
-       "first_s": 132.29,
-       "missing": 788372.0,
+       "held": 998387.0,
+       "first_s": 127.097,
+       "missing": 798438.0,
        "excess": 0.0,
-       "fresh_claim_p99": 2501.0,
-       "pg_cores": 2.204
+       "fresh_claim_p99": 2470.0,
+       "pg_cores": 1.8666
       },
       "pg-boss": {
        "held": 1104000.0,
@@ -2203,2602 +2707,2620 @@
        "pg_cores": 1.8891
       }
      },
+     "excluded": {
+      "river": "held no claims at the kill"
+     },
      "source": {
-      "absurd": "abandon_absurd",
-      "awa": "abandon_awa",
-      "oban": "abandon_oban",
-      "pg-boss": "abandon_pgboss",
-      "pgmq": "abandon_pgmq",
-      "pgque": "abandon_pgque",
-      "procrastinate": "abandon_procrastinate"
+      "absurd": "2026-11-13-followup/abandon_absurd",
+      "awa": "2026-11-13-followup/abandon_awa",
+      "oban": "2026-11-13-rerun/abandon_oban",
+      "pg-boss": "2026-11-12-full-sweep/abandon_pgboss",
+      "pgmq": "2026-11-12-full-sweep/abandon_pgmq",
+      "pgque": "2026-11-12-full-sweep/abandon_pgque",
+      "procrastinate": "2026-11-12-full-sweep/abandon_procrastinate"
      }
     }
    ],
+   "sources_by_root": {
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ],
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate"
+    ]
+   },
    "curves": {
     "absurd": [
      [
-      0.5,
-      0.01
+      6.3,
+      0.0
      ],
      [
-      12.8,
-      0.01
+      16.3,
+      0.0
      ],
      [
-      22.8,
-      0.01
+      26.3,
+      0.0
      ],
      [
-      32.8,
-      0.01
+      36.3,
+      0.0
      ],
      [
-      42.8,
-      0.01
+      46.3,
+      0.0
      ],
      [
-      52.8,
-      0.01
+      56.3,
+      0.0
      ],
      [
-      62.8,
-      0.01
+      66.3,
+      0.0
      ],
      [
-      72.8,
-      0.01
+      76.3,
+      0.0
      ],
      [
-      82.8,
-      0.01
+      86.3,
+      0.0
      ],
      [
-      92.8,
-      0.01
+      96.3,
+      0.0
      ],
      [
-      102.8,
-      0.01
+      106.3,
+      0.0
      ],
      [
-      112.8,
-      0.01
+      116.3,
+      0.0
      ],
      [
-      122.8,
-      0.24
+      126.3,
+      0.74
      ],
      [
-      132.8,
-      1.17
+      136.3,
+      1.9
      ],
      [
-      142.8,
-      2.12
+      146.3,
+      3.12
      ],
      [
-      152.8,
-      3.05
+      156.3,
+      4.37
      ],
      [
-      162.8,
-      4.02
+      166.4,
+      5.57
      ],
      [
-      172.8,
-      4.9
+      176.4,
+      6.86
      ],
      [
-      182.8,
-      5.84
+      186.4,
+      8.13
      ],
      [
-      192.8,
-      6.82
+      196.4,
+      9.35
      ],
      [
-      202.8,
-      7.91
+      206.4,
+      10.51
      ],
      [
-      212.8,
-      8.93
+      216.4,
+      11.83
      ],
      [
-      222.8,
-      10.02
+      226.4,
+      13.06
      ],
      [
-      232.9,
-      11.07
+      236.4,
+      14.42
      ],
      [
-      242.9,
-      12.13
+      246.4,
+      15.81
      ],
      [
-      252.9,
-      13.16
+      256.4,
+      17.16
      ],
      [
-      262.9,
-      14.16
+      266.4,
+      18.46
      ],
      [
-      272.9,
-      15.16
+      276.4,
+      19.78
      ],
      [
-      282.9,
-      16.19
+      286.4,
+      20.97
      ],
      [
-      292.9,
-      17.31
+      296.4,
+      22.37
      ],
      [
-      302.9,
-      18.48
+      306.4,
+      23.78
      ],
      [
-      312.9,
-      19.55
+      316.4,
+      25.16
      ],
      [
-      322.9,
-      20.68
+      326.4,
+      26.26
      ],
      [
-      332.9,
-      21.79
+      336.5,
+      27.32
      ],
      [
-      342.9,
-      22.87
+      346.5,
+      28.33
      ],
      [
-      352.9,
-      23.98
+      356.5,
+      29.29
      ],
      [
-      363.0,
-      24.98
+      366.5,
+      30.24
      ],
      [
-      373.0,
-      25.91
+      376.5,
+      31.2
      ],
      [
-      383.0,
-      26.68
+      386.5,
+      32.13
      ],
      [
-      393.0,
-      27.4
+      396.5,
+      33.12
      ],
      [
-      403.0,
-      28.23
+      406.5,
+      34.08
      ],
      [
-      413.0,
-      29.0
+      416.5,
+      35.03
      ],
      [
-      423.0,
-      29.84
+      426.5,
+      36.01
      ],
      [
-      433.0,
-      30.71
+      436.5,
+      36.62
      ],
      [
-      443.0,
-      31.41
+      446.6,
+      37.15
      ],
      [
-      453.0,
-      32.17
+      456.6,
+      37.66
      ],
      [
-      463.1,
-      32.93
+      466.6,
+      38.2
      ],
      [
-      473.1,
-      33.7
+      476.6,
+      38.71
      ],
      [
-      483.1,
-      34.42
+      486.6,
+      39.21
      ],
      [
-      493.1,
-      34.8
+      496.6,
+      39.71
      ],
      [
-      503.1,
-      35.18
+      506.6,
+      40.24
      ],
      [
-      513.1,
-      35.56
+      516.6,
+      40.74
      ],
      [
-      523.1,
-      35.93
+      526.6,
+      41.28
      ],
      [
-      533.1,
-      36.31
+      536.7,
+      41.82
      ],
      [
-      543.1,
-      36.68
+      546.7,
+      42.28
      ],
      [
-      553.2,
-      37.06
+      556.7,
+      42.74
      ],
      [
-      563.2,
-      37.44
+      566.7,
+      43.22
      ],
      [
-      573.2,
-      37.75
+      576.7,
+      43.65
      ],
      [
-      583.2,
-      38.09
+      586.7,
+      44.1
      ],
      [
-      593.2,
-      38.43
+      596.7,
+      44.56
      ],
      [
-      603.2,
-      38.7
+      606.7,
+      45.01
      ],
      [
-      613.2,
-      39.04
+      616.8,
+      45.43
      ],
      [
-      623.3,
-      39.38
+      626.8,
+      45.85
      ],
      [
-      633.3,
-      39.72
+      636.8,
+      46.3
      ],
      [
-      643.3,
-      40.07
+      646.8,
+      46.83
      ],
      [
-      653.3,
-      40.47
+      656.8,
+      47.33
      ],
      [
-      663.3,
-      40.84
+      666.8,
+      47.86
      ],
      [
-      673.3,
-      41.18
+      676.8,
+      48.4
      ],
      [
-      683.3,
-      41.52
+      686.9,
+      48.84
      ],
      [
-      693.3,
-      41.85
+      696.9,
+      49.28
      ],
      [
-      703.4,
-      42.2
+      706.9,
+      49.72
      ],
      [
-      713.4,
-      42.54
+      716.9,
+      50.2
      ],
      [
-      723.4,
-      42.88
+      726.9,
+      50.66
      ],
      [
-      733.4,
-      43.23
+      736.9,
+      51.11
      ],
      [
-      743.4,
-      43.52
+      746.9,
+      51.57
      ],
      [
-      753.4,
-      43.87
+      757.0,
+      52.02
      ],
      [
-      763.5,
-      44.22
+      767.0,
+      52.47
      ],
      [
-      773.5,
-      44.53
+      777.0,
+      52.96
      ],
      [
-      783.5,
-      44.87
+      787.0,
+      53.41
      ],
      [
-      793.5,
-      45.18
+      797.0,
+      53.89
      ],
      [
-      803.5,
-      45.52
+      807.0,
+      54.34
      ],
      [
-      813.6,
-      45.82
+      817.1,
+      54.78
      ],
      [
-      823.6,
-      46.16
+      827.1,
+      55.18
      ],
      [
-      833.6,
-      46.52
+      837.1,
+      55.58
      ],
      [
-      843.6,
-      46.82
+      847.1,
+      55.98
      ],
      [
-      853.6,
-      47.17
+      857.1,
+      56.44
      ],
      [
-      863.7,
-      47.49
+      867.1,
+      56.94
      ],
      [
-      873.7,
-      47.8
+      877.2,
+      57.43
      ],
      [
-      883.7,
-      48.15
+      887.2,
+      57.85
      ],
      [
-      893.7,
-      48.5
+      897.2,
+      58.32
      ],
      [
-      903.7,
-      48.79
-     ],
-     [
-      913.7,
-      49.13
-     ],
-     [
-      923.8,
-      49.44
-     ],
-     [
-      933.8,
-      49.8
-     ],
-     [
-      943.8,
-      50.11
-     ],
-     [
-      953.8,
-      50.46
-     ],
-     [
-      963.8,
-      50.76
-     ],
-     [
-      973.8,
-      51.1
-     ],
-     [
-      983.9,
-      51.41
-     ],
-     [
-      993.9,
-      51.75
-     ],
-     [
-      1003.9,
-      52.06
-     ],
-     [
-      1013.9,
-      52.4
-     ],
-     [
-      1023.9,
-      52.75
-     ],
-     [
-      1034.0,
-      53.08
-     ],
-     [
-      1044.0,
-      53.4
-     ],
-     [
-      1054.0,
-      53.71
-     ],
-     [
-      1064.0,
-      54.05
-     ],
-     [
-      1074.0,
-      54.36
-     ],
-     [
-      1084.1,
-      54.7
-     ],
-     [
-      1094.1,
-      55.06
-     ],
-     [
-      1104.1,
-      55.4
-     ],
-     [
-      1114.1,
-      55.75
-     ],
-     [
-      1124.1,
-      56.09
-     ],
-     [
-      1134.2,
-      56.43
-     ],
-     [
-      1144.2,
-      56.78
-     ],
-     [
-      1154.2,
-      57.11
-     ],
-     [
-      1164.2,
-      57.42
-     ],
-     [
-      1174.2,
-      57.79
-     ],
-     [
-      1184.3,
-      58.15
-     ],
-     [
-      1194.3,
-      58.49
-     ],
-     [
-      1204.3,
+      907.2,
       58.81
      ],
      [
-      1214.3,
-      59.18
+      917.2,
+      59.26
      ],
      [
-      1224.3,
-      59.54
+      927.3,
+      59.74
      ],
      [
-      1234.4,
-      59.88
+      937.3,
+      60.22
      ],
      [
-      1244.4,
-      60.24
+      947.3,
+      60.7
      ],
      [
-      1254.4,
-      60.59
+      957.3,
+      61.18
      ],
      [
-      1264.4,
-      60.91
+      967.3,
+      61.7
      ],
      [
-      1274.5,
-      61.27
+      977.4,
+      62.21
      ],
      [
-      1284.5,
-      61.62
+      987.4,
+      62.68
      ],
      [
-      1294.5,
-      61.97
+      997.4,
+      63.18
      ],
      [
-      1304.5,
-      62.32
+      1007.4,
+      63.69
      ],
      [
-      1314.6,
-      62.62
+      1017.4,
+      64.18
      ],
      [
-      1324.6,
-      62.97
+      1027.5,
+      64.62
      ],
      [
-      1334.6,
-      63.3
+      1037.5,
+      65.13
      ],
      [
-      1344.6,
-      63.67
+      1047.5,
+      65.58
      ],
      [
-      1354.7,
-      64.0
+      1057.5,
+      66.05
      ],
      [
-      1364.7,
-      64.34
+      1067.6,
+      66.54
      ],
      [
-      1374.7,
-      64.68
+      1077.6,
+      67.0
      ],
      [
-      1384.7,
-      65.06
+      1087.6,
+      67.49
      ],
      [
-      1394.8,
-      65.39
+      1097.6,
+      67.99
      ],
      [
-      1404.8,
-      65.72
+      1107.6,
+      68.41
      ],
      [
-      1414.8,
-      66.09
+      1117.7,
+      68.89
      ],
      [
-      1424.8,
-      66.4
+      1127.7,
+      69.38
      ],
      [
-      1434.9,
-      66.71
+      1137.7,
+      69.84
      ],
      [
-      1444.9,
-      67.01
+      1147.7,
+      70.28
      ],
      [
-      1454.9,
-      67.32
+      1157.8,
+      70.73
      ],
      [
-      1464.9,
-      67.64
+      1167.8,
+      71.22
      ],
      [
-      1475.0,
-      67.95
+      1177.8,
+      71.68
      ],
      [
-      1485.0,
-      68.29
+      1187.8,
+      72.14
      ],
      [
-      1495.0,
-      68.59
+      1197.8,
+      72.63
      ],
      [
-      1505.1,
-      68.91
+      1207.9,
+      73.07
      ],
      [
-      1515.1,
-      69.21
+      1217.9,
+      73.53
      ],
      [
-      1525.1,
-      69.53
+      1227.9,
+      74.03
      ],
      [
-      1535.1,
-      69.88
+      1237.9,
+      74.5
      ],
      [
-      1545.2,
-      70.21
+      1248.0,
+      74.95
      ],
      [
-      1555.2,
-      70.5
+      1258.0,
+      75.42
      ],
      [
-      1565.2,
-      70.8
-     ],
-     [
-      1575.3,
-      71.09
-     ],
-     [
-      1585.3,
-      71.35
-     ],
-     [
-      1595.3,
-      71.64
-     ],
-     [
-      1605.4,
-      71.91
-     ],
-     [
-      1615.4,
-      72.17
-     ],
-     [
-      1625.4,
-      72.48
-     ],
-     [
-      1635.5,
-      72.81
-     ],
-     [
-      1645.5,
-      73.11
-     ],
-     [
-      1655.5,
-      73.39
-     ],
-     [
-      1665.5,
-      73.73
-     ],
-     [
-      1675.6,
-      74.04
-     ],
-     [
-      1685.6,
-      74.35
-     ],
-     [
-      1695.6,
-      74.65
-     ],
-     [
-      1705.7,
-      74.97
-     ],
-     [
-      1715.7,
-      75.26
-     ],
-     [
-      1725.7,
-      75.56
-     ],
-     [
-      1735.8,
+      1268.0,
       75.89
      ],
      [
-      1745.8,
-      76.22
+      1278.0,
+      76.32
      ],
      [
-      1755.8,
-      76.52
+      1288.1,
+      76.79
      ],
      [
-      1765.8,
-      76.85
+      1298.1,
+      77.27
      ],
      [
-      1775.9,
-      77.18
+      1308.1,
+      77.75
      ],
      [
-      1785.9,
-      77.47
+      1318.1,
+      78.16
      ],
      [
-      1795.9,
-      77.77
-     ],
-     [
-      1806.0,
-      78.08
-     ],
-     [
-      1816.0,
-      78.37
-     ],
-     [
-      1826.0,
+      1328.2,
       78.66
      ],
      [
-      1836.1,
-      78.99
+      1338.2,
+      79.1
      ],
      [
-      1846.1,
-      79.33
+      1348.2,
+      79.56
      ],
      [
-      1856.1,
-      79.66
+      1358.2,
+      80.07
      ],
      [
-      1866.2,
-      80.02
+      1368.3,
+      80.55
      ],
      [
-      1876.2,
-      80.36
+      1378.3,
+      80.99
      ],
      [
-      1886.2,
-      80.69
+      1388.3,
+      81.47
      ],
      [
-      1896.3,
-      81.0
+      1398.4,
+      81.96
      ],
      [
-      1906.3,
-      81.31
+      1408.4,
+      82.45
      ],
      [
-      1916.3,
-      81.64
+      1418.4,
+      82.97
      ],
      [
-      1926.4,
-      81.99
+      1428.4,
+      83.48
      ],
      [
-      1936.4,
-      82.34
+      1438.5,
+      84.05
      ],
      [
-      1946.4,
-      82.68
+      1448.5,
+      84.53
      ],
      [
-      1956.5,
-      83.03
+      1458.5,
+      85.07
      ],
      [
-      1966.5,
-      83.39
+      1468.5,
+      85.57
      ],
      [
-      1976.5,
-      83.74
+      1478.6,
+      86.1
      ],
      [
-      1986.6,
-      84.08
+      1488.6,
+      86.6
      ],
      [
-      1996.6,
-      84.45
+      1498.6,
+      87.14
      ],
      [
-      2006.6,
-      84.79
+      1508.7,
+      87.63
      ],
      [
-      2016.7,
-      85.12
+      1518.7,
+      88.16
      ],
      [
-      2026.7,
-      85.5
+      1528.7,
+      88.7
      ],
      [
-      2036.7,
-      85.87
-     ],
-     [
-      2046.8,
-      86.18
-     ],
-     [
-      2056.8,
-      86.34
-     ],
-     [
-      2066.8,
-      86.72
-     ],
-     [
-      2076.9,
-      87.1
-     ],
-     [
-      2086.9,
-      87.48
-     ],
-     [
-      2096.9,
-      87.91
-     ],
-     [
-      2107.0,
-      88.28
-     ],
-     [
-      2117.0,
-      88.64
-     ],
-     [
-      2127.0,
-      89.02
-     ],
-     [
-      2132.0,
+      1538.7,
       89.23
+     ],
+     [
+      1548.8,
+      89.76
+     ],
+     [
+      1558.8,
+      90.38
+     ],
+     [
+      1568.8,
+      90.97
+     ],
+     [
+      1578.9,
+      91.57
+     ],
+     [
+      1588.9,
+      92.16
+     ],
+     [
+      1598.9,
+      92.79
+     ],
+     [
+      1609.0,
+      93.41
+     ],
+     [
+      1619.0,
+      94.07
+     ],
+     [
+      1629.0,
+      94.74
+     ],
+     [
+      1639.1,
+      95.39
+     ],
+     [
+      1649.1,
+      96.09
+     ],
+     [
+      1659.1,
+      96.77
+     ],
+     [
+      1669.2,
+      97.46
+     ],
+     [
+      1679.2,
+      98.17
+     ],
+     [
+      1689.2,
+      98.89
+     ],
+     [
+      1699.3,
+      99.62
+     ],
+     [
+      1709.3,
+      100.0
+     ],
+     [
+      1719.3,
+      100.0
+     ],
+     [
+      1729.4,
+      100.0
+     ],
+     [
+      1739.4,
+      100.0
+     ],
+     [
+      1749.4,
+      100.0
+     ],
+     [
+      1759.5,
+      100.0
+     ],
+     [
+      1769.5,
+      100.0
+     ],
+     [
+      1779.5,
+      100.0
+     ],
+     [
+      1789.6,
+      100.0
+     ],
+     [
+      1799.6,
+      100.0
+     ],
+     [
+      1809.6,
+      100.0
+     ],
+     [
+      1819.7,
+      100.0
+     ],
+     [
+      1829.7,
+      100.0
+     ],
+     [
+      1839.8,
+      100.0
+     ],
+     [
+      1849.8,
+      100.0
+     ],
+     [
+      1859.8,
+      100.0
+     ],
+     [
+      1869.9,
+      100.0
+     ],
+     [
+      1879.9,
+      100.0
+     ],
+     [
+      1889.9,
+      100.0
+     ],
+     [
+      1900.0,
+      100.0
+     ],
+     [
+      1910.0,
+      100.0
+     ],
+     [
+      1920.1,
+      100.0
+     ],
+     [
+      1930.1,
+      100.0
+     ],
+     [
+      1940.1,
+      100.0
+     ],
+     [
+      1950.2,
+      100.0
+     ],
+     [
+      1960.2,
+      100.0
+     ],
+     [
+      1970.2,
+      100.0
+     ],
+     [
+      1980.3,
+      100.0
+     ],
+     [
+      1990.3,
+      100.0
+     ],
+     [
+      2000.3,
+      100.0
+     ],
+     [
+      2010.4,
+      100.0
+     ],
+     [
+      2020.4,
+      100.0
+     ],
+     [
+      2030.4,
+      100.0
+     ],
+     [
+      2040.5,
+      100.0
+     ],
+     [
+      2050.5,
+      100.0
+     ],
+     [
+      2060.6,
+      100.0
+     ],
+     [
+      2070.6,
+      100.0
+     ],
+     [
+      2080.6,
+      100.0
+     ],
+     [
+      2090.7,
+      100.0
+     ],
+     [
+      2100.7,
+      100.0
+     ],
+     [
+      2110.7,
+      100.0
+     ],
+     [
+      2120.8,
+      100.0
+     ],
+     [
+      2130.8,
+      100.0
+     ],
+     [
+      2135.8,
+      100.0
      ]
     ],
     "awa": [
      [
-      96.6,
+      105.5,
       0.0
      ],
      [
-      106.6,
+      115.5,
       0.0
      ],
      [
-      116.6,
+      125.5,
       0.0
      ],
      [
-      126.6,
-      0.4
+      135.5,
+      0.65
      ],
      [
-      136.6,
-      1.18
+      145.5,
+      1.6
      ],
      [
-      146.6,
-      1.95
+      155.5,
+      2.53
      ],
      [
-      156.6,
-      2.0
+      165.5,
+      3.3
      ],
      [
-      166.6,
-      2.0
+      175.5,
+      4.29
      ],
      [
-      176.6,
-      2.0
+      185.5,
+      5.1
      ],
      [
-      186.6,
-      2.05
+      195.5,
+      6.1
      ],
      [
-      196.6,
-      2.27
+      205.5,
+      7.26
      ],
      [
-      206.6,
-      2.52
+      215.5,
+      8.36
      ],
      [
-      216.6,
-      2.7
+      225.5,
+      9.32
      ],
      [
-      226.6,
-      3.02
+      235.5,
+      10.05
      ],
      [
-      236.6,
-      3.29
+      245.5,
+      10.63
      ],
      [
-      246.6,
-      5.97
+      255.5,
+      12.1
      ],
      [
-      256.6,
-      7.55
+      265.5,
+      12.93
      ],
      [
-      266.6,
-      8.3
+      275.5,
+      13.88
      ],
      [
-      276.6,
-      10.0
+      285.5,
+      14.81
      ],
      [
-      286.6,
-      11.13
+      295.5,
+      15.89
      ],
      [
-      296.6,
-      11.88
+      305.5,
+      16.79
      ],
      [
-      306.6,
-      13.31
+      315.5,
+      17.7
      ],
      [
-      316.6,
-      14.24
+      325.5,
+      18.45
      ],
      [
-      326.6,
-      15.51
+      335.5,
+      19.0
      ],
      [
-      336.6,
-      16.4
+      345.5,
+      19.28
      ],
      [
-      346.6,
-      17.43
+      355.5,
+      20.2
      ],
      [
-      356.6,
-      18.74
+      365.5,
+      20.2
      ],
      [
-      366.6,
-      19.79
+      375.5,
+      22.22
      ],
      [
-      376.6,
-      20.44
+      385.5,
+      23.13
      ],
      [
-      386.6,
-      21.37
+      395.5,
+      23.82
      ],
      [
-      396.6,
-      22.86
+      405.5,
+      25.26
      ],
      [
-      406.6,
-      23.47
+      415.5,
+      25.97
      ],
      [
-      416.6,
-      24.0
+      425.5,
+      26.83
      ],
      [
-      426.6,
-      24.8
+      435.5,
+      27.91
      ],
      [
-      436.6,
-      25.29
+      445.5,
+      28.56
      ],
      [
-      446.6,
-      25.88
+      455.5,
+      29.4
      ],
      [
-      456.6,
-      26.15
+      465.5,
+      30.09
      ],
      [
-      466.6,
-      27.55
+      475.5,
+      30.96
      ],
      [
-      476.6,
-      28.05
+      485.5,
+      31.5
      ],
      [
-      486.6,
-      28.88
+      495.5,
+      31.95
      ],
      [
-      496.6,
-      29.55
+      505.5,
+      32.8
      ],
      [
-      506.6,
-      30.2
+      515.5,
+      33.18
      ],
      [
-      516.6,
-      30.85
+      525.5,
+      33.85
      ],
      [
-      526.6,
-      31.47
+      535.5,
+      34.98
      ],
      [
-      536.6,
-      32.18
+      545.5,
+      35.15
      ],
      [
-      546.6,
-      32.87
+      555.5,
+      36.0
      ],
      [
-      556.6,
-      33.53
+      565.5,
+      36.6
      ],
      [
-      566.6,
-      34.21
+      575.5,
+      37.17
      ],
      [
-      576.6,
-      34.7
+      585.5,
+      38.0
      ],
      [
-      586.6,
-      34.9
+      595.5,
+      38.58
      ],
      [
-      596.6,
-      35.78
+      605.5,
+      39.11
      ],
      [
-      606.6,
-      36.65
+      615.5,
+      39.56
      ],
      [
-      616.6,
-      37.42
+      625.5,
+      40.36
      ],
      [
-      626.6,
-      37.72
+      635.5,
+      41.21
      ],
      [
-      636.6,
-      38.65
+      645.5,
+      41.75
      ],
      [
-      646.6,
-      39.45
+      655.5,
+      42.33
      ],
      [
-      656.6,
-      39.87
+      665.5,
+      43.36
      ],
      [
-      666.6,
-      40.61
+      675.5,
+      44.13
      ],
      [
-      676.6,
-      40.83
+      685.5,
+      45.1
      ],
      [
-      686.6,
-      42.1
+      695.5,
+      46.41
      ],
      [
-      696.6,
-      43.03
+      705.5,
+      46.53
      ],
      [
-      706.6,
-      43.77
+      715.5,
+      47.71
      ],
      [
-      716.6,
-      44.64
+      725.5,
+      48.94
      ],
      [
-      726.6,
-      45.89
+      735.5,
+      49.67
      ],
      [
-      736.6,
-      46.94
+      745.5,
+      51.04
      ],
      [
-      746.6,
-      47.69
+      755.5,
+      52.51
      ],
      [
-      756.6,
-      48.57
+      765.5,
+      53.71
      ],
      [
-      766.6,
-      49.7
+      775.5,
+      54.58
      ],
      [
-      776.6,
-      50.55
+      785.5,
+      56.23
      ],
      [
-      786.6,
-      51.38
+      795.5,
+      57.42
      ],
      [
-      796.6,
-      52.18
+      805.5,
+      59.07
      ],
      [
-      806.6,
-      53.49
+      815.5,
+      61.28
      ],
      [
-      816.6,
-      54.51
+      825.5,
+      62.45
      ],
      [
-      826.6,
-      55.15
+      835.5,
+      63.35
      ],
      [
-      836.6,
-      57.11
+      845.5,
+      64.85
      ],
      [
-      846.6,
-      58.53
+      855.5,
+      66.28
      ],
      [
-      856.6,
-      59.46
+      865.5,
+      67.28
      ],
      [
-      866.6,
-      60.97
+      875.5,
+      69.13
      ],
      [
-      876.6,
-      62.99
+      885.5,
+      69.97
      ],
      [
-      886.6,
-      63.71
+      895.5,
+      71.04
      ],
      [
-      896.6,
-      64.62
+      905.5,
+      71.67
      ],
      [
-      906.6,
-      65.57
+      915.5,
+      73.8
      ],
      [
-      916.6,
-      66.37
+      925.5,
+      74.52
      ],
      [
-      926.6,
-      67.22
-     ],
-     [
-      936.6,
-      67.91
-     ],
-     [
-      946.6,
-      69.0
-     ],
-     [
-      956.6,
-      69.8
-     ],
-     [
-      966.6,
-      70.9
-     ],
-     [
-      976.6,
-      71.42
-     ],
-     [
-      986.6,
-      72.71
-     ],
-     [
-      996.6,
-      73.9
-     ],
-     [
-      1006.6,
-      74.74
-     ],
-     [
-      1016.6,
+      935.5,
       75.44
      ],
      [
-      1026.6,
-      76.05
+      945.5,
+      76.75
      ],
      [
-      1036.6,
-      77.22
+      955.5,
+      77.09
      ],
      [
-      1046.6,
-      77.96
+      965.5,
+      77.51
      ],
      [
-      1056.6,
-      79.19
+      975.5,
+      79.03
      ],
      [
-      1066.6,
-      80.0
+      985.5,
+      79.39
      ],
      [
-      1076.6,
-      80.4
+      995.5,
+      80.37
      ],
      [
-      1086.6,
-      81.73
+      1005.5,
+      81.25
      ],
      [
-      1096.6,
-      82.53
+      1015.5,
+      82.39
      ],
      [
-      1106.6,
-      83.3
+      1025.5,
+      83.15
      ],
      [
-      1116.6,
-      84.09
+      1035.5,
+      84.15
      ],
      [
-      1126.6,
-      84.8
+      1045.5,
+      85.23
      ],
      [
-      1136.6,
-      85.56
+      1055.5,
+      85.86
      ],
      [
-      1146.6,
-      86.16
+      1065.5,
+      86.63
      ],
      [
-      1156.6,
-      86.92
+      1075.5,
+      87.84
      ],
      [
-      1166.6,
-      87.73
+      1085.5,
+      88.76
      ],
      [
-      1176.6,
-      88.64
+      1095.5,
+      89.69
      ],
      [
-      1186.6,
-      88.64
+      1105.5,
+      91.25
      ],
      [
-      1196.6,
-      89.1
+      1115.5,
+      91.68
      ],
      [
-      1206.6,
-      91.13
+      1125.5,
+      92.57
      ],
      [
-      1216.6,
-      91.78
+      1135.5,
+      93.48
      ],
      [
-      1226.6,
-      92.8
+      1145.5,
+      94.42
      ],
      [
-      1236.6,
-      93.4
+      1155.5,
+      95.36
      ],
      [
-      1246.6,
-      94.15
+      1165.5,
+      96.01
      ],
      [
-      1256.6,
-      94.87
+      1175.5,
+      96.45
      ],
      [
-      1266.6,
-      95.7
+      1185.5,
+      96.83
      ],
      [
-      1276.6,
-      96.26
+      1195.5,
+      97.32
      ],
      [
-      1286.6,
-      96.76
+      1205.5,
+      97.61
      ],
      [
-      1296.6,
-      97.39
+      1215.5,
+      98.06
      ],
      [
-      1306.6,
-      97.91
+      1225.5,
+      99.38
      ],
      [
-      1316.6,
-      98.23
+      1235.5,
+      100.0
+     ],
+     [
+      1245.5,
+      100.0
+     ],
+     [
+      1255.5,
+      100.0
+     ],
+     [
+      1265.5,
+      100.0
+     ],
+     [
+      1275.5,
+      100.0
+     ],
+     [
+      1285.5,
+      100.0
+     ],
+     [
+      1295.5,
+      100.0
+     ],
+     [
+      1305.5,
+      100.0
      ],
      [
-      1326.6,
-      98.58
+      1315.5,
+      100.0
+     ],
+     [
+      1325.5,
+      100.0
      ],
      [
-      1336.6,
-      98.97
+      1335.5,
+      100.0
      ],
      [
-      1346.6,
-      99.48
+      1345.5,
+      100.0
      ],
      [
-      1356.6,
-      99.83
+      1355.5,
+      100.0
      ],
      [
-      1366.6,
+      1365.5,
       100.0
      ],
      [
-      1376.6,
+      1375.5,
       100.0
      ],
      [
-      1386.6,
+      1385.5,
       100.0
      ],
      [
-      1396.6,
+      1395.5,
       100.0
      ],
      [
-      1406.6,
+      1405.5,
       100.0
      ],
      [
-      1416.6,
+      1415.5,
       100.0
      ],
      [
-      1426.6,
+      1425.5,
       100.0
      ],
      [
-      1436.6,
+      1435.5,
       100.0
      ],
      [
-      1446.6,
+      1445.5,
       100.0
      ],
      [
-      1456.6,
+      1455.5,
       100.0
      ],
      [
-      1466.6,
+      1465.5,
       100.0
      ],
      [
-      1476.6,
+      1475.5,
       100.0
      ],
      [
-      1486.6,
+      1485.5,
       100.0
      ],
      [
-      1496.6,
+      1495.5,
       100.0
      ],
      [
-      1506.6,
+      1505.5,
       100.0
      ],
      [
-      1516.6,
+      1515.5,
       100.0
      ],
      [
-      1526.6,
+      1525.5,
       100.0
      ],
      [
-      1536.6,
+      1535.5,
       100.0
      ],
      [
-      1546.6,
+      1545.5,
       100.0
      ],
      [
-      1556.6,
+      1555.5,
       100.0
      ],
      [
-      1566.6,
+      1565.5,
       100.0
      ],
      [
-      1576.6,
+      1575.5,
       100.0
      ],
      [
-      1586.6,
+      1585.5,
       100.0
      ],
      [
-      1596.6,
+      1595.5,
       100.0
      ],
      [
-      1606.6,
+      1605.5,
       100.0
      ],
      [
-      1616.6,
+      1615.5,
       100.0
      ],
      [
-      1626.6,
+      1625.5,
       100.0
      ],
      [
-      1636.6,
+      1635.5,
       100.0
      ],
      [
-      1646.6,
+      1645.5,
       100.0
      ],
      [
-      1656.6,
+      1655.5,
       100.0
      ],
      [
-      1666.6,
+      1665.5,
       100.0
      ],
      [
-      1676.6,
+      1675.5,
       100.0
      ],
      [
-      1686.6,
+      1685.5,
       100.0
      ],
      [
-      1696.6,
+      1695.5,
       100.0
      ],
      [
-      1706.6,
+      1705.5,
       100.0
      ],
      [
-      1716.6,
+      1715.5,
       100.0
      ],
      [
-      1726.6,
+      1725.5,
       100.0
      ],
      [
-      1736.6,
+      1735.5,
       100.0
      ],
      [
-      1746.6,
+      1745.5,
       100.0
      ],
      [
-      1756.6,
+      1755.5,
       100.0
      ],
      [
-      1766.6,
+      1765.5,
       100.0
      ],
      [
-      1776.6,
+      1775.5,
       100.0
      ],
      [
-      1786.6,
+      1785.5,
       100.0
      ],
      [
-      1796.6,
+      1795.5,
       100.0
      ],
      [
-      1806.6,
+      1805.5,
       100.0
      ],
      [
-      1816.6,
+      1815.5,
       100.0
      ],
      [
-      1826.6,
+      1825.5,
       100.0
      ],
      [
-      1836.6,
+      1835.5,
       100.0
      ],
      [
-      1846.6,
+      1845.5,
       100.0
      ],
      [
-      1856.6,
+      1855.5,
       100.0
      ],
      [
-      1866.6,
+      1865.5,
       100.0
      ],
      [
-      1876.6,
+      1875.5,
       100.0
      ],
      [
-      1886.6,
+      1885.5,
       100.0
      ],
      [
-      1896.6,
+      1895.5,
       100.0
      ],
      [
-      1906.6,
+      1905.5,
       100.0
      ],
      [
-      1916.6,
+      1915.5,
       100.0
      ],
      [
-      1921.9,
+      1925.5,
       100.0
      ],
      [
-      1931.9,
+      1935.5,
       100.0
      ],
      [
-      1941.9,
+      1945.5,
       100.0
      ],
      [
-      1951.9,
+      1955.5,
       100.0
      ],
      [
-      1961.9,
+      1965.5,
       100.0
      ],
      [
-      1971.9,
+      1975.5,
       100.0
      ],
      [
-      1981.9,
+      1985.5,
       100.0
      ],
      [
-      1991.9,
+      1995.5,
       100.0
      ],
      [
-      2001.9,
+      2005.5,
       100.0
      ],
      [
-      2011.9,
+      2015.5,
       100.0
      ],
      [
-      2021.9,
+      2025.5,
       100.0
      ],
      [
-      2031.9,
+      2035.5,
       100.0
      ],
      [
-      2041.9,
+      2045.5,
       100.0
      ],
      [
-      2051.9,
+      2055.5,
       100.0
      ],
      [
-      2061.9,
+      2065.5,
       100.0
      ],
      [
-      2071.9,
+      2075.5,
       100.0
      ],
      [
-      2081.9,
+      2085.5,
       100.0
      ],
      [
-      2091.9,
+      2095.5,
       100.0
      ],
      [
-      2101.9,
+      2105.5,
       100.0
      ],
      [
-      2111.9,
+      2115.5,
       100.0
      ],
      [
-      2121.9,
+      2125.5,
       100.0
      ],
      [
-      2131.9,
+      2135.5,
       100.0
      ],
      [
-      2141.9,
+      2145.5,
       100.0
      ],
      [
-      2151.9,
+      2155.5,
       100.0
      ],
      [
-      2161.9,
+      2165.5,
       100.0
      ],
      [
-      2171.9,
+      2175.5,
       100.0
      ],
      [
-      2181.9,
+      2185.5,
       100.0
      ],
      [
-      2191.9,
+      2195.5,
       100.0
      ],
      [
-      2201.9,
+      2205.5,
       100.0
      ],
      [
-      2211.9,
+      2215.5,
       100.0
      ],
      [
-      2221.9,
+      2225.5,
       100.0
      ],
      [
-      2226.9,
-      49.89
+      2230.5,
+      100.0
      ]
     ],
     "oban": [
      [
-      12.5,
+      11.5,
       0.0
      ],
      [
-      22.5,
+      21.5,
       0.0
      ],
      [
-      32.5,
+      31.5,
       0.0
      ],
      [
-      42.5,
+      41.5,
       0.0
      ],
      [
-      52.3,
+      47.1,
       0.0
      ],
      [
-      62.3,
+      57.1,
       0.0
      ],
      [
-      72.3,
+      67.1,
       0.0
      ],
      [
-      82.3,
+      77.1,
       0.0
      ],
      [
-      92.3,
+      87.1,
       0.0
      ],
      [
-      102.3,
+      97.1,
       0.0
      ],
      [
-      112.3,
+      107.1,
       0.0
      ],
      [
-      122.3,
+      117.1,
       0.0
      ],
      [
-      132.3,
-      2.85
+      127.1,
+      1.13
      ],
      [
-      142.3,
-      11.04
+      137.1,
+      9.3
      ],
      [
-      152.3,
-      19.24
+      147.1,
+      17.87
      ],
      [
-      162.3,
-      21.04
+      157.1,
+      20.03
      ],
      [
-      172.3,
-      21.04
+      167.1,
+      20.03
      ],
      [
-      182.3,
-      21.04
+      177.1,
+      20.03
      ],
      [
-      192.3,
-      21.04
+      187.1,
+      20.03
      ],
      [
-      202.3,
-      21.04
+      197.1,
+      20.03
      ],
      [
-      212.3,
-      21.04
+      207.1,
+      20.03
      ],
      [
-      222.3,
-      21.04
+      217.1,
+      20.03
      ],
      [
-      232.3,
-      21.04
+      227.1,
+      20.03
      ],
      [
-      242.3,
-      21.04
+      237.1,
+      20.03
      ],
      [
-      252.3,
-      21.04
+      247.1,
+      20.03
      ],
      [
-      262.3,
-      21.04
+      257.1,
+      20.03
      ],
      [
-      272.3,
-      21.04
+      267.1,
+      20.03
      ],
      [
-      282.3,
-      21.04
+      277.2,
+      20.03
      ],
      [
-      292.3,
-      21.04
+      287.2,
+      20.03
      ],
      [
-      302.3,
-      21.04
+      297.2,
+      20.03
      ],
      [
-      312.4,
-      21.04
+      307.2,
+      20.03
      ],
      [
-      322.4,
-      21.04
+      317.2,
+      20.03
      ],
      [
-      332.4,
-      21.04
+      327.2,
+      20.03
      ],
      [
-      342.4,
-      21.04
+      337.2,
+      20.03
      ],
      [
-      352.4,
-      21.04
+      347.2,
+      20.03
      ],
      [
-      362.4,
-      21.04
+      357.2,
+      20.03
      ],
      [
-      372.4,
-      21.04
+      367.2,
+      20.03
      ],
      [
-      382.4,
-      21.04
+      377.2,
+      20.03
      ],
      [
-      392.4,
-      21.04
+      387.2,
+      20.03
      ],
      [
-      402.4,
-      21.04
+      397.2,
+      20.03
      ],
      [
-      412.4,
-      21.04
+      407.2,
+      20.03
      ],
      [
-      422.4,
-      21.04
+      417.2,
+      20.03
      ],
      [
-      432.4,
-      21.04
+      427.2,
+      20.03
      ],
      [
-      442.4,
-      21.04
+      437.2,
+      20.03
      ],
      [
-      452.4,
-      21.04
+      447.2,
+      20.03
      ],
      [
-      462.4,
-      21.04
+      457.2,
+      20.03
      ],
      [
-      472.4,
-      21.04
+      467.2,
+      20.03
      ],
      [
-      482.4,
-      21.04
+      477.2,
+      20.03
      ],
      [
-      492.4,
-      21.04
+      487.2,
+      20.03
      ],
      [
-      502.4,
-      21.04
+      497.2,
+      20.03
      ],
      [
-      512.4,
-      21.04
+      507.2,
+      20.03
      ],
      [
-      522.4,
-      21.04
+      517.3,
+      20.03
      ],
      [
-      532.5,
-      21.04
+      527.3,
+      20.03
      ],
      [
-      542.5,
-      21.04
+      537.3,
+      20.03
      ],
      [
-      552.5,
-      21.04
+      547.3,
+      20.03
      ],
      [
-      562.5,
-      21.04
+      557.3,
+      20.03
      ],
      [
-      572.5,
-      21.04
+      567.3,
+      20.03
      ],
      [
-      582.5,
-      21.04
+      577.3,
+      20.03
      ],
      [
-      592.5,
-      21.04
+      587.3,
+      20.03
      ],
      [
-      602.5,
-      21.04
+      597.3,
+      20.03
      ],
      [
-      612.5,
-      21.04
+      607.3,
+      20.03
      ],
      [
-      622.5,
-      21.04
+      617.3,
+      20.03
      ],
      [
-      632.5,
-      21.04
+      627.3,
+      20.03
      ],
      [
-      642.5,
-      21.04
+      637.3,
+      20.03
      ],
      [
-      652.5,
-      21.04
+      647.3,
+      20.03
      ],
      [
-      662.5,
-      21.04
+      657.3,
+      20.03
      ],
      [
-      672.5,
-      21.04
+      667.3,
+      20.03
      ],
      [
-      682.5,
-      21.04
+      677.3,
+      20.03
      ],
      [
-      692.6,
-      21.04
+      687.3,
+      20.03
      ],
      [
-      702.6,
-      21.04
+      697.4,
+      20.03
      ],
      [
-      712.6,
-      21.04
+      707.4,
+      20.03
      ],
      [
-      722.6,
-      21.04
+      717.4,
+      20.03
      ],
      [
-      732.6,
-      21.04
+      727.4,
+      20.03
      ],
      [
-      742.6,
-      21.04
+      737.4,
+      20.03
      ],
      [
-      752.6,
-      21.04
+      747.4,
+      20.03
      ],
      [
-      762.6,
-      21.04
+      757.4,
+      20.03
      ],
      [
-      772.6,
-      21.04
+      767.4,
+      20.03
      ],
      [
-      782.6,
-      21.04
+      777.4,
+      20.03
      ],
      [
-      792.6,
-      21.04
+      787.4,
+      20.03
      ],
      [
-      802.6,
-      21.04
+      797.4,
+      20.03
      ],
      [
-      812.6,
-      21.04
+      807.4,
+      20.03
      ],
      [
-      822.6,
-      21.04
+      817.4,
+      20.03
      ],
      [
-      832.6,
-      21.04
+      827.4,
+      20.03
      ],
      [
-      842.7,
-      21.04
+      837.4,
+      20.03
      ],
      [
-      852.7,
-      21.04
+      847.4,
+      20.03
      ],
      [
-      862.7,
-      21.04
+      857.5,
+      20.03
      ],
      [
-      872.7,
-      21.04
+      867.5,
+      20.03
      ],
      [
-      882.7,
-      21.04
+      877.5,
+      20.03
      ],
      [
-      892.7,
-      21.04
+      887.5,
+      20.03
      ],
      [
-      902.7,
-      21.04
+      897.5,
+      20.03
      ],
      [
-      912.7,
-      21.04
+      907.5,
+      20.03
      ],
      [
-      922.7,
-      21.04
+      917.5,
+      20.03
      ],
      [
-      932.7,
-      21.04
+      927.5,
+      20.03
      ],
      [
-      942.7,
-      21.04
+      937.5,
+      20.03
      ],
      [
-      952.7,
-      21.04
+      947.5,
+      20.03
      ],
      [
-      962.7,
-      21.04
+      957.5,
+      20.03
      ],
      [
-      972.8,
-      21.04
+      967.5,
+      20.03
      ],
      [
-      982.8,
-      21.04
+      977.5,
+      20.03
      ],
      [
-      992.8,
-      21.04
+      987.5,
+      20.03
      ],
      [
-      1002.8,
-      21.04
+      997.6,
+      20.03
      ],
      [
-      1012.8,
-      21.04
+      1007.6,
+      20.03
      ],
      [
-      1022.8,
-      21.04
+      1017.6,
+      20.03
      ],
      [
-      1032.8,
-      21.04
+      1027.6,
+      20.03
      ],
      [
-      1042.8,
-      21.04
+      1037.6,
+      20.03
      ],
      [
-      1052.8,
-      21.04
+      1047.6,
+      20.03
      ],
      [
-      1062.8,
-      21.04
+      1057.6,
+      20.03
      ],
      [
-      1072.8,
-      21.04
+      1067.6,
+      20.03
      ],
      [
-      1082.8,
-      21.04
+      1077.6,
+      20.03
      ],
      [
-      1092.9,
-      21.04
+      1087.6,
+      20.03
      ],
      [
-      1102.9,
-      21.04
+      1097.6,
+      20.03
      ],
      [
-      1112.9,
-      21.04
+      1107.6,
+      20.03
      ],
      [
-      1122.9,
-      21.04
+      1117.7,
+      20.03
      ],
      [
-      1132.9,
-      21.04
+      1127.7,
+      20.03
      ],
      [
-      1142.9,
-      21.04
+      1137.7,
+      20.03
      ],
      [
-      1152.9,
-      21.04
+      1147.7,
+      20.03
      ],
      [
-      1162.9,
-      21.04
+      1157.7,
+      20.03
      ],
      [
-      1172.9,
-      21.04
+      1167.7,
+      20.03
      ],
      [
-      1182.9,
-      21.04
+      1177.7,
+      20.03
      ],
      [
-      1192.9,
-      21.04
+      1187.7,
+      20.03
      ],
      [
-      1203.0,
-      21.04
+      1197.7,
+      20.03
      ],
      [
-      1213.0,
-      21.04
+      1207.7,
+      20.03
      ],
      [
-      1223.0,
-      21.04
+      1217.7,
+      20.03
      ],
      [
-      1233.0,
-      21.04
+      1227.7,
+      20.03
      ],
      [
-      1243.0,
-      21.04
+      1237.8,
+      20.03
      ],
      [
-      1253.0,
-      21.04
+      1247.8,
+      20.03
      ],
      [
-      1263.0,
-      21.04
+      1257.8,
+      20.03
      ],
      [
-      1273.0,
-      21.04
+      1267.8,
+      20.03
      ],
      [
-      1283.0,
-      21.04
+      1277.8,
+      20.03
      ],
      [
-      1293.0,
-      21.04
+      1287.8,
+      20.03
      ],
      [
-      1303.1,
-      21.04
+      1297.8,
+      20.03
      ],
      [
-      1313.1,
-      21.04
+      1307.8,
+      20.03
      ],
      [
-      1323.1,
-      21.04
+      1317.8,
+      20.03
      ],
      [
-      1333.1,
-      21.04
+      1327.8,
+      20.03
      ],
      [
-      1343.1,
-      21.04
+      1337.8,
+      20.03
      ],
      [
-      1353.1,
-      21.04
+      1347.9,
+      20.03
      ],
      [
-      1363.1,
-      21.04
+      1357.9,
+      20.03
      ],
      [
-      1373.1,
-      21.04
+      1367.9,
+      20.03
      ],
      [
-      1383.1,
-      21.04
+      1377.9,
+      20.03
      ],
      [
-      1393.1,
-      21.04
+      1387.9,
+      20.03
      ],
      [
-      1403.2,
-      21.04
+      1397.9,
+      20.03
      ],
      [
-      1413.2,
-      21.04
+      1407.9,
+      20.03
      ],
      [
-      1423.2,
-      21.04
+      1417.9,
+      20.03
      ],
      [
-      1433.2,
-      21.04
+      1427.9,
+      20.03
      ],
      [
-      1443.2,
-      21.04
+      1437.9,
+      20.03
      ],
      [
-      1453.2,
-      21.04
+      1448.0,
+      20.03
      ],
      [
-      1463.2,
-      21.04
+      1458.0,
+      20.03
      ],
      [
-      1473.2,
-      21.04
+      1468.0,
+      20.03
      ],
      [
-      1483.2,
-      21.04
+      1478.0,
+      20.03
      ],
      [
-      1493.3,
-      21.04
+      1488.0,
+      20.03
      ],
      [
-      1503.3,
-      21.04
+      1498.0,
+      20.03
      ],
      [
-      1513.3,
-      21.04
+      1508.0,
+      20.03
      ],
      [
-      1523.3,
-      21.04
+      1518.0,
+      20.03
      ],
      [
-      1533.3,
-      21.04
+      1528.0,
+      20.03
      ],
      [
-      1543.3,
-      21.04
+      1538.1,
+      20.03
      ],
      [
-      1553.3,
-      21.04
+      1548.1,
+      20.03
      ],
      [
-      1563.3,
-      21.04
+      1558.1,
+      20.03
      ],
      [
-      1573.3,
-      21.04
+      1568.1,
+      20.03
      ],
      [
-      1583.4,
-      21.04
+      1578.1,
+      20.03
      ],
      [
-      1593.4,
-      21.04
+      1588.1,
+      20.03
      ],
      [
-      1603.4,
-      21.04
+      1598.1,
+      20.03
      ],
      [
-      1613.4,
-      21.04
+      1608.1,
+      20.03
      ],
      [
-      1623.4,
-      21.04
+      1618.1,
+      20.03
      ],
      [
-      1633.4,
-      21.04
+      1628.2,
+      20.03
      ],
      [
-      1643.4,
-      21.04
+      1638.2,
+      20.03
      ],
      [
-      1653.5,
-      21.04
+      1648.2,
+      20.03
      ],
      [
-      1663.5,
-      21.04
+      1658.2,
+      20.03
      ],
      [
-      1673.5,
-      21.04
+      1668.2,
+      20.03
      ],
      [
-      1683.5,
-      21.04
+      1678.2,
+      20.03
      ],
      [
-      1693.5,
-      21.04
+      1688.2,
+      20.03
      ],
      [
-      1703.5,
-      21.04
+      1698.2,
+      20.03
      ],
      [
-      1713.5,
-      21.04
+      1708.2,
+      20.03
      ],
      [
-      1723.5,
-      21.04
+      1718.3,
+      20.03
      ],
      [
-      1733.5,
-      21.04
+      1728.3,
+      20.03
      ],
      [
-      1743.6,
-      21.04
+      1738.3,
+      20.03
      ],
      [
-      1753.6,
-      21.04
+      1748.3,
+      20.03
      ],
      [
-      1763.6,
-      21.04
+      1758.3,
+      20.03
      ],
      [
-      1773.6,
-      21.04
+      1768.3,
+      20.03
      ],
      [
-      1783.6,
-      21.04
+      1778.3,
+      20.03
      ],
      [
-      1793.6,
-      21.04
+      1788.3,
+      20.03
      ],
      [
-      1803.6,
-      21.04
+      1798.4,
+      20.03
      ],
      [
-      1813.7,
-      21.04
+      1808.4,
+      20.03
      ],
      [
-      1823.7,
-      21.04
+      1818.4,
+      20.03
      ],
      [
-      1833.7,
-      21.04
+      1828.4,
+      20.03
      ],
      [
-      1843.7,
-      21.04
+      1838.4,
+      20.03
      ],
      [
-      1853.6,
-      21.04
+      1848.4,
+      20.03
      ],
      [
-      1863.6,
-      21.04
+      1857.7,
+      20.03
      ],
      [
-      1873.6,
-      21.04
+      1867.7,
+      20.03
      ],
      [
-      1883.6,
-      21.04
+      1877.8,
+      20.03
      ],
      [
-      1893.6,
-      21.04
+      1887.8,
+      20.03
      ],
      [
-      1903.6,
-      21.04
+      1897.8,
+      20.03
      ],
      [
-      1913.6,
-      21.04
+      1907.8,
+      20.03
      ],
      [
-      1923.6,
-      21.04
+      1917.8,
+      20.03
      ],
      [
-      1933.7,
-      21.04
+      1927.8,
+      20.03
      ],
      [
-      1943.7,
-      21.04
+      1937.8,
+      20.03
      ],
      [
-      1953.7,
-      21.04
+      1947.8,
+      20.03
      ],
      [
-      1963.7,
-      21.04
+      1957.8,
+      20.03
      ],
      [
-      1973.7,
-      21.04
+      1967.9,
+      20.03
      ],
      [
-      1983.7,
-      21.04
+      1977.9,
+      20.03
      ],
      [
-      1993.7,
-      21.04
+      1987.9,
+      20.03
      ],
      [
-      2003.7,
-      21.04
+      1997.9,
+      20.03
      ],
      [
-      2013.8,
-      21.04
+      2007.9,
+      20.03
      ],
      [
-      2023.8,
-      21.04
+      2017.9,
+      20.03
      ],
      [
-      2033.8,
-      21.04
+      2027.9,
+      20.03
      ],
      [
-      2043.8,
-      21.04
+      2037.9,
+      20.03
      ],
      [
-      2053.8,
-      21.04
+      2048.0,
+      20.03
      ],
      [
-      2063.8,
-      21.04
+      2058.0,
+      20.03
      ],
      [
-      2073.8,
-      21.04
+      2068.0,
+      20.03
      ],
      [
-      2083.9,
-      21.04
+      2078.0,
+      20.03
      ],
      [
-      2093.9,
-      21.04
+      2088.0,
+      20.03
      ],
      [
-      2103.9,
-      21.04
+      2098.0,
+      20.03
      ],
      [
-      2113.9,
-      21.04
+      2108.0,
+      20.03
      ],
      [
-      2123.9,
-      21.04
+      2118.0,
+      20.03
      ],
      [
-      2133.9,
-      21.04
+      2128.1,
+      20.03
      ],
      [
-      2143.9,
-      21.04
+      2138.1,
+      20.03
      ],
      [
-      2153.9,
-      21.04
+      2148.1,
+      20.03
      ],
      [
-      2158.9,
-      21.04
+      2158.1,
+      20.03
+     ],
+     [
+      2168.1,
+      20.03
      ]
     ],
     "pg-boss": [

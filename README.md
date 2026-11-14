@@ -22,28 +22,24 @@ A closed-loop harness: producers enqueue at a controlled rate, workers claim and
 
 ### What the latest run found
 
-Eight Postgres-backed queues, same hardware, same harness. Three contracts in the lineup — event bus, job queue, visibility-timeout queue — so the throughput list isn't a single ranking. The [2026-05-09 sweep](results/archive/2026-05-09-full-sweep/SUMMARY.md) has the per-cell numbers, chaos behaviour, and bloat resistance.
+Eight Postgres-backed queues ran on one host, under the same harness and the same scenarios, between 11 and 13 November 2026 (PostgreSQL 18.6, capped at 4 CPUs). The lineup spans four contracts: job frameworks, a durable-workflow engine, a visibility-timeout queue and an event queue. So the list below is not one ranking. [SUMMARY.md](results/2026-11-12-full-sweep/SUMMARY.md) has every cell, which run each number comes from, and resource and lock tables. The [website](https://hardbyte.github.io/postgresql-job-queue-benchmarking/benchmarks/) charts them by scenario.
 
-![Peak throughput by queue contract](results/archive/2026-05-09-full-sweep/plots/headline_throughput.png)
+| System | Contract | Best measured (jobs/s) | Configuration | 1M abandoned jobs done again |
+|---|---|---:|---|---|
+| pgque | event queue (batch ack) | 47,282 | tuned, producer-bound | 16 s |
+| pgmq | visibility-timeout | 12,013 | 16 workers | 5.9 min |
+| river | job framework | 10,905 | tuned, 4 queues | held no claims |
+| awa | job framework | 10,762 | tuned, 4 queues | 20.5 min |
+| oban | job framework | 5,673 | tuned | about a fifth in 30 min |
+| pg-boss | job framework | 3,495 | tuned, Postgres-bound | 14 min |
+| absurd | durable workflow | 1,625 | tuned, 4 queues | 28.5 min |
+| procrastinate | job framework | 1,472 | tuned | 32 min |
 
-![Tail latency at each system's peak throughput](results/archive/2026-05-09-full-sweep/plots/latency_at_peak.png)
-
-| System | Contract | Peak (jobs/s) | Chaos recovery | Pressure cells | Notable caveat |
-|---|---|---:|---:|---:|---|
-| **pgque** *(single-consumer mode)* | event bus | **39,898** | 5/5 | 4/4 | Batched success ack is a different contract (see below). |
-| **awa** | job queue | **14,158** | 5/5 | 4/4 | Full job-queue feature surface; fastest job queue in this run. |
-| pgmq | visibility-timeout | 11,277 | 3/5 | 2/4 | Anti-scales past 16 workers; active-readers cliff ([audit](results/archive/2026-05-09-full-sweep/audit_pgmq.md)). |
-| pg-boss | job queue | 2,387 | 3/5 | 2/4 | Postgres-level chaos exits the worker; times out in two pressure cells. |
-| river | job queue | 501 | 5/5 | 2/4 | Times out in two sustained-pressure cells. |
-| absurd | job queue | 410 | 3/5 | 2/4 | Shutdown timeout under pressure. |
-| oban | job queue | 284 | 4/5 | 4/4 | Handles pressure cells; lower throughput in this run. |
-| procrastinate | job queue | 269 | 3/5 | 2/4 | Weak repeated-kill recovery; times out in two pressure cells. |
-
-Three systems (awa, pgque, river) recover from every chaos scenario; the other five hit zero or produce no recovery samples in at least one cell. Only awa, oban, and pgque complete all four sustained-pressure scenarios.
+"Tuned" means each system at the settings its own documentation points to, within one budget for all: at most 4 processes, 128 handlers and 200 connections. Every system recovers from a Postgres restart. Absurd and Procrastinate recover only once their worker is restarted, as a supervisor would. Only awa gives disk space back after large payloads and backlogs.
 
 ### The three contracts
 
-**Job queues** — send a job, a worker runs it, the queue tracks retries and dead-lettering: awa, pg-boss, river, oban, absurd, procrastinate.
+**Job queues** — send a job, a worker runs it, the queue tracks retries and dead-lettering: awa, pg-boss, river, oban, procrastinate. absurd is a durable-workflow engine driven here as one-step jobs.
 
 **Visibility-timeout queue** — pgmq. Send / read with timeout / ack-or-redeliver. No per-job retry counter, no scheduling, no DLQ beyond an archive table.
 
