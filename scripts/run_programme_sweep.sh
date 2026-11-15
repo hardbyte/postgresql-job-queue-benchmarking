@@ -12,7 +12,8 @@
 # scripts/export_site_results.py.
 #
 # Sections: throughput throughput_tuned ref800 idle chaos neighbour logical scheduled retry
-# fanout payload large_args long_jobs drain abandon (default: all, in that order; abandon
+# fanout payload large_args long_jobs drain abandon (default: all, in that order;
+# operator_find and operator_pause run only when named; abandon
 # goes last because its million-job cells leave the disk busy afterwards).
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -231,6 +232,45 @@ section_drain() {
   run_all drain backlog_drain --producer-rate 2000 --worker-count 64 \
     --phase "warmup=warmup(rate=0):30s" --phase "preload=preload(jobs=200000):3m" \
     --phase drain=drain:6m --phase "settle=idle-background(rate=0):4m"
+}
+
+# Operator scenarios (docs/operator-scenarios.md). Find: a million jobs in an
+# unconsumed haystack queue, then probes (get by id, unique handle, tenant
+# page, kind/state page, count) at 2/s for 3 min beside 200 jobs/s of
+# ordinary load. Pause: two processes at 200 jobs/s each; the bench queue is
+# paused, process 1 is restarted while paused, then the queue is resumed.
+OPERATOR_JOBS="${OPERATOR_JOBS:-1000000}"
+operator_extra() { [[ "$1" == pgmq ]] && echo --pg-image "$PGMQ_IMAGE"; }
+
+section_operator_find() {
+  local system
+  for system in awa absurd oban pgboss procrastinate river pgque pgmq; do
+    want "$system" || continue
+    # shellcheck disable=SC2046
+    run_cell operator "find_${system}" "$system" $(operator_extra "$system") \
+      --producer-rate 200 --worker-count 16 --sample-every 1 \
+      --phase warmup=warmup:30s \
+      --phase "haystack=operator(op=haystack,jobs=${OPERATOR_JOBS},wait=45m):30s" \
+      --phase clean=clean:60s \
+      --phase "probe=operator(op=probe,rate=2,wait=5m):180s" \
+      --phase after=clean:30s
+  done
+}
+
+section_operator_pause() {
+  local system
+  for system in awa absurd oban pgboss procrastinate river pgque pgmq; do
+    want "$system" || continue
+    # shellcheck disable=SC2046
+    run_cell operator "pause_${system}" "$system" $(operator_extra "$system") \
+      --producer-rate 200 --worker-count 16 --replicas 2 --sample-every 1 \
+      --phase warmup=warmup:30s --phase clean=clean:60s \
+      --phase "pause=operator(op=pause):20s" \
+      --phase "kill=kill-worker(instance=1):5s" \
+      --phase "fresh=start-worker(instance=1):30s" \
+      --phase "resume=operator(op=resume):60s" \
+      --phase after=clean:30s
+  done
 }
 
 # Mass abandonment: 4 replicas hold ABANDON_JOBS claims between them, all

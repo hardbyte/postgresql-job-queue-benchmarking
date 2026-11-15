@@ -12,5 +12,14 @@
     "retryable": "SELECT count(*) FROM pgboss.job WHERE name = 'long_horizon_bench' AND state = 'retry'",
     "dead": "SELECT count(*) FROM pgboss.job WHERE name = 'long_horizon_bench' AND state = 'failed'",
     "running": "SELECT count(*) FROM pgboss.job WHERE name LIKE 'long\\_horizon\\_bench%' AND state = 'active'"
-  }
+  },
+  "operator_capabilities": {
+    "get_by_id": "native",
+    "find_handle": "native",
+    "find_tenant_page": "native",
+    "kind_state_page": "native",
+    "count_state": "native",
+    "pause": "emulated"
+  },
+  "operator_notes": "findJobs(queue, {id} | {data: {h}} | {data: {t}} | {data: {kind: 'bench_alt'}, queued: true}) with limit; count is getQueue().queuedCount (monitor-cached, 60 s); haystack via insert() into its own queue; no pause API, so each replica offWork()s on pause and work()s on resume"
 }

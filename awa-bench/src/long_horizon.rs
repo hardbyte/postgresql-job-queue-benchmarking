@@ -26,6 +26,7 @@ use tokio::sync::Mutex;
 use tokio::time::{interval_at, MissedTickBehavior};
 
 use crate::diagnostics::{maintenance_totals, PointReads};
+use crate::operator::{JobStarts, Operator};
 use crate::scenario_controls::{failure_outcome, herd_batches, ScenarioControls};
 
 const PRODUCER_SEQUENCE_STRIDE: i64 = 1_000_000_000_000;
@@ -144,6 +145,7 @@ struct LongHorizonWorker {
     aged_completion_counter: Arc<AtomicU64>,
     controls: Arc<ScenarioControls>,
     point_reads: Option<Arc<PointReads>>,
+    operator_starts: Option<Arc<JobStarts>>,
 }
 
 #[async_trait]
@@ -153,6 +155,9 @@ impl Worker for LongHorizonWorker {
     }
 
     async fn perform(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
+        if let Some(starts) = &self.operator_starts {
+            starts.record();
+        }
         if let Some(point_reads) = &self.point_reads {
             point_reads.observe(ctx.job.id);
         }
@@ -744,6 +749,7 @@ pub async fn run() {
     let producer_target_rate = Arc::new(AtomicU64::new(producer_rate));
     let controls = Arc::new(ScenarioControls::from_env());
     let point_reads = PointReads::from_env();
+    let operator = Operator::from_env(&database_url, &queue_names);
 
     let worker = LongHorizonWorker {
         work_ms,
@@ -759,6 +765,7 @@ pub async fn run() {
         aged_completion_counter: Arc::clone(&aged_completions),
         controls: Arc::clone(&controls),
         point_reads: point_reads.as_ref().map(|(reads, _)| Arc::clone(reads)),
+        operator_starts: operator.as_ref().map(|op| op.starts()),
     };
 
     // LEASE_DEADLINE_MS — per-claim deadline-rescue window in ms.
@@ -841,6 +848,9 @@ pub async fn run() {
             .await
             .expect("Failed to connect point-read pool");
         reads.spawn(read_pool, *rate, 4);
+    }
+    if let Some(operator) = &operator {
+        operator.spawn(instance_id() == 0);
     }
     let shutdown = Arc::new(AtomicBool::new(false));
     if std::env::var("CONSUMER_GATE_FILE").is_ok() {
@@ -1214,7 +1224,7 @@ pub async fn run() {
                                 Ok(counts) => {
                                     queue_depths.0 = counts.available as u64;
                                     queue_depths.1 = counts.running as u64;
-                                    match sqlx::query_as::<_, (i64, i64)>(&format!(
+                                    match sqlx::query_as::<_, (i64, i64)>(super::runtime_sql(&format!(
                                         r#"
                                         SELECT
                                             COALESCE(sum(CASE WHEN state = 'retryable' THEN 1 ELSE 0 END), 0)::bigint AS retryable,
@@ -1223,7 +1233,7 @@ pub async fn run() {
                                         WHERE queue = $1
                                         "#,
                                         depth_store.schema()
-                                    ))
+                                    )))
                                     .bind(q.as_str())
                                     .fetch_one(&depth_pool)
                                     .await
@@ -1323,6 +1333,7 @@ pub async fn run() {
     let sample_target_rate = Arc::clone(&producer_target_rate);
     let sample_controls = Arc::clone(&controls);
     let sample_point_reads = point_reads.as_ref().map(|(reads, _)| Arc::clone(reads));
+    let sample_operator_starts = operator.as_ref().map(|op| op.starts());
     let sample_handle = tokio::spawn(async move {
         // Align first tick to the next wall-clock `sample_every_s` boundary.
         let now_epoch = SystemTime::now()
@@ -1526,6 +1537,14 @@ pub async fn run() {
                     diagnostics.push(("point_read_p50_ms".into(), p50));
                     diagnostics.push(("point_read_p99_ms".into(), p99));
                 }
+            }
+            if let Some(starts) = &sample_operator_starts {
+                diagnostics.extend(
+                    starts
+                        .metrics()
+                        .into_iter()
+                        .map(|(metric, value)| (metric.to_owned(), value)),
+                );
             }
             for (metric, value) in diagnostics {
                 emit(json!({

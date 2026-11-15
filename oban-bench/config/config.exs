@@ -19,6 +19,10 @@ config :oban_bench, ObanBench.Repo,
   pool_size: pool_size,
   timeout: String.to_integer(System.get_env("REPO_TIMEOUT_MS", "15000"))
 
+config :oban_bench, ObanBench.OperatorRepo,
+  url: System.get_env("DATABASE_URL", "postgres://bench:bench@localhost:15555/oban_bench"),
+  pool_size: 2
+
 # Oban config — queues will be overridden at runtime by the benchmark runner
 rescue_after_secs =
   case System.get_env("RESCUE_AFTER_SECS") do

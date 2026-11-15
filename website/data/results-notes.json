@@ -597,6 +597,200 @@
       "headline": "PGMQ and PgQue drain at ~14.5k jobs/s; only Awa shrinks back."
     },
     {
+      "id": "find",
+      "title": "Finding one job among a million",
+      "question": "With a million jobs queued, how long does an operator wait to find one?",
+      "setup": "A million jobs sit in a queue no worker consumes, each tagged with a unique handle and one of 1,000 tenants, while 200 jobs/s of ordinary work runs on another queue. Each probe runs through the system's own API (or SQL where that is the interface) at 2 per second for 3 minutes, on its own connection.",
+      "read": [
+        "The label after each bar says how the answer was obtained: no label is the system's API; SQL means a raw query against its tables; not supported means the system offers no way to ask.",
+        "Where a filter has no index behind it, the probe scans the million jobs; that shows up as seconds rather than milliseconds."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "get_by_id_p99",
+          "modeMetric": "get_by_id_mode",
+          "title": "Get one job by id, p99",
+          "log": true,
+          "missingNote": "not supported",
+          "correctMetric": "get_by_id_correct"
+        },
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "find_handle_p99",
+          "modeMetric": "find_handle_mode",
+          "title": "Find one job by a unique field, p99",
+          "log": true,
+          "missingNote": "not supported",
+          "correctMetric": "find_handle_correct"
+        },
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "find_tenant_page_p99",
+          "modeMetric": "find_tenant_page_mode",
+          "title": "First page of one tenant's 1,000 jobs, p99",
+          "log": true,
+          "missingNote": "not supported",
+          "correctMetric": "find_tenant_page_correct"
+        },
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "kind_state_page_p99",
+          "modeMetric": "kind_state_page_mode",
+          "title": "First page by kind and state, p99",
+          "log": true,
+          "missingNote": "not supported",
+          "correctMetric": "kind_state_page_correct"
+        },
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "count_state_p99",
+          "modeMetric": "count_state_mode",
+          "title": "Count by state, p99",
+          "log": true,
+          "missingNote": "not supported",
+          "correctMetric": "count_state_correct"
+        },
+        {
+          "type": "settings",
+          "title": "How each system finds a job",
+          "rows": [
+            {
+              "system": "absurd",
+              "text": "get_by_id through the SDK (fetch_task_result); the filters and count are the SQL its absurdctl list-tasks builds, against its task tables."
+            },
+            {
+              "system": "awa",
+              "text": "0.6: get_job, list_jobs (tag, kind, state, queue; tags are checked after loading, with no index), queue_overview for counts. 0.7: find_jobs with a per-partition GIN index on tags."
+            },
+            {
+              "system": "oban",
+              "text": "Oban.Job.query (id, args containment, worker, state, queue) through the Repo; GIN index on args."
+            },
+            {
+              "system": "pg-boss",
+              "text": "findJobs by id or data within one queue; getQueue counts are cached by the monitor (refreshed every 60 s)."
+            },
+            {
+              "system": "pgmq",
+              "text": "SQL on the queue table, which is pgmq's interface (by msg_id, message containment); pgmq.metrics for the count."
+            },
+            {
+              "system": "pgque",
+              "text": "Counts only (get_queue_info); events can't be looked up."
+            },
+            {
+              "system": "procrastinate",
+              "text": "list_jobs by id, queue, task and status, with no LIMIT and no filter on arguments; list_queues for counts."
+            },
+            {
+              "system": "river",
+              "text": "JobGet and JobList (metadata containment, kind, state, queue) with a GIN index on metadata; counts by SQL (no count API)."
+            }
+          ]
+        }
+      ],
+      "findings": [
+        "Getting one job by id is fast everywhere it's possible: under 2 ms at p99 for Absurd, Oban, pg-boss, Procrastinate, River and PGMQ, and 103 ms for Awa 0.6, whose get_job checks each of its storage locations. PgQue can't look up an event.",
+        "Finding one job by a unique field: River 2.4 ms at p50 (GIN on metadata); Absurd 73 ms, PGMQ 144 ms, Oban 188 ms and pg-boss 192 ms, which scan. Awa 0.6 timed out at 30 s every time (tags are checked after loading, with no index); Procrastinate and PgQue can't filter on job data.",
+        "A first page by kind and state is quick for PGMQ, pg-boss, River and Oban (1–3 ms at p50); Absurd takes 107 ms, Procrastinate 405 ms (it returns all 50,000 matches, with no LIMIT) and Awa 0.6 1.4 s.",
+        "Procrastinate's ordinary work stalled behind the haystack: with a million jobs queued in another queue, its worker's fetch had to scan past them, and the bench queue fell to 10–18 jobs/s with a pickup p99 of 91–200 s. Probing didn't hurt any other system's live load.",
+        "Awa 0.7 (unreleased) answers every probe, including the tag filters that time out on 0.6, but each takes 0.5–1.2 s. Two queries in the unreleased build are responsible: a job lookup that hash-joins every ready row, and a queue count that walks every available job. Both are being fixed before release."
+      ],
+      "headline": "River finds one job in 2 ms; Awa 0.6 times out; Procrastinate stalls behind the haystack."
+    },
+    {
+      "id": "pause",
+      "title": "Pausing and resuming a queue",
+      "question": "When an operator pauses a busy queue, does work stop everywhere, and how fast does it come back?",
+      "setup": "Two worker processes at 200 jobs/s each. The bench queue is paused; while paused, one process is restarted; then the queue is resumed. Systems without a pause stop each process's workers locally (labelled emulated), which a restarted process doesn't know about.",
+      "read": [
+        "A pause stored in the database survives a restarted process; one held in memory, or a per-process stop, does not, so the restarted process starts working again while the queue should be paused."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "pause",
+          "metric": "starts_after_pause",
+          "modeMetric": "pause_mode",
+          "title": "Jobs started while paused",
+          "caption": "Including the process restarted mid-pause."
+        },
+        {
+          "type": "bars",
+          "cell": "pause",
+          "metric": "quiesce_ms",
+          "modeMetric": "pause_mode",
+          "title": "Last job start after the pause returned",
+          "log": true
+        },
+        {
+          "type": "bars",
+          "cell": "pause",
+          "metric": "first_start_ms",
+          "modeMetric": "pause_mode",
+          "title": "First job start after the resume",
+          "log": true
+        },
+        {
+          "type": "bars",
+          "cell": "pause",
+          "metric": "recovery_s",
+          "modeMetric": "pause_mode",
+          "title": "Back to 90% of the earlier rate"
+        },
+        {
+          "type": "settings",
+          "title": "How each system pauses a queue",
+          "rows": [
+            {
+              "system": "absurd",
+              "text": "No pause; emulated by stopping each process's worker."
+            },
+            {
+              "system": "awa",
+              "text": "pause_queue / resume_queue, stored in the database and checked on every claim."
+            },
+            {
+              "system": "oban",
+              "text": "pause_queue / resume_queue, broadcast to running nodes and held in memory (open source); a restarted node starts unpaused."
+            },
+            {
+              "system": "pg-boss",
+              "text": "No pause; emulated with offWork / work in each process."
+            },
+            {
+              "system": "pgmq",
+              "text": "No pause; emulated by stopping each process's readers."
+            },
+            {
+              "system": "pgque",
+              "text": "ticker_paused queue setting, stored in the database; batches already ticked are still delivered."
+            },
+            {
+              "system": "procrastinate",
+              "text": "No pause; emulated by stopping and restarting each process's worker."
+            },
+            {
+              "system": "river",
+              "text": "QueuePause / QueueResume, stored in the database and signalled by NOTIFY."
+            }
+          ]
+        }
+      ],
+      "findings": [
+        "Awa, River and PgQue store the pause in the database: no job started while paused, including on the process restarted mid-pause, and work resumed within 28–153 ms.",
+        "Oban (open source) holds the pause in memory on the running nodes: the restarted node came up unpaused and started 21,435 jobs while the queue was meant to be paused.",
+        "Absurd, pg-boss, Procrastinate and PGMQ have no pause; stopping each process's workers is the only option, and the restarted process worked through the backlog (7,680–21,014 jobs)."
+      ],
+      "headline": "A pause survives a restart only where it's stored: Awa, River, PgQue."
+    },
+    {
       "id": "abandon",
       "title": "A million abandoned claims",
       "question": "When an entire fleet dies holding about a million claimed jobs, how long until those jobs have run?",

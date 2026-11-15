@@ -16,5 +16,14 @@
     "retryable": "SELECT count(*) FROM oban_jobs WHERE state = 'retryable'",
     "dead": "SELECT count(*) FROM oban_jobs WHERE state = 'discarded'",
     "running": "SELECT count(*) FROM oban_jobs WHERE state = 'executing'"
-  }
+  },
+  "operator_capabilities": {
+    "get_by_id": "native",
+    "find_handle": "native",
+    "find_tenant_page": "native",
+    "kind_state_page": "native",
+    "count_state": "native",
+    "pause": "native"
+  },
+  "operator_notes": "Haystack via Oban.insert_all with args {h,t}; Oban.Job.query (id, args @>, worker/state/queue) with Repo.one/all and Repo.aggregate on a separate 2-connection repo; Oban.pause_queue/resume_queue (broadcast, not persisted: a restarted node runs unpaused)."
 }

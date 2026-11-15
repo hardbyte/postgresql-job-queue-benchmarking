@@ -1052,6 +1052,18 @@ def run_one_system(
         abandon_control_file = control_dir / "abandon.json"
         write_control_json(abandon_control_file, ABANDON_HOLD)
         overrides["JOB_ABANDON_CONTROL_FILE"] = str(abandon_control_file)
+    operator_control_file: Path | None = None
+    operator_result_file: Path | None = None
+    if PhaseType.OPERATOR in phase_types:
+        operator_control_file = control_dir / "operator.json"
+        operator_result_file = control_dir / "operator_result.json"
+        write_control_json(operator_control_file, {})
+        write_control_json(operator_result_file, {})
+        # Docker adapters write the result as root into the shared mount.
+        os.chmod(control_dir, 0o777)
+        os.chmod(operator_result_file, 0o666)
+        overrides["OPERATOR_CONTROL_FILE"] = str(operator_control_file)
+        overrides["OPERATOR_RESULT_FILE"] = str(operator_result_file)
     poll_state_queries = (
         job_failure_control_file is not None
         or schedule_control_file is not None
@@ -1200,6 +1212,12 @@ def run_one_system(
             str(abandon_control_file) if abandon_control_file else None
         ),
         "abandon_running_sql": manifest.state_queries.get("running"),
+        "operator_control_file": (
+            str(operator_control_file) if operator_control_file else None
+        ),
+        "operator_result_file": (
+            str(operator_result_file) if operator_result_file else None
+        ),
         # The launch overrides every replica (re)start reads; abandon-kill
         # rewrites them for the fresh fleet.
         "replica_env_overrides": overrides,

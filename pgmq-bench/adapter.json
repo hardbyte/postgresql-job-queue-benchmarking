@@ -16,5 +16,14 @@
     "retryable": "SELECT count(*) FROM pgmq.q_long_horizon_bench WHERE read_ct > 0",
     "dead": "SELECT count(*) FROM pgmq.q_long_horizon_bench_dlq",
     "running": "SELECT count(*) FROM pgmq.q_long_horizon_bench WHERE read_ct > 0 AND vt > now()"
-  }
+  },
+  "operator_capabilities": {
+    "get_by_id": "sql",
+    "find_handle": "sql",
+    "find_tenant_page": "sql",
+    "kind_state_page": "sql",
+    "count_state": "native",
+    "pause": "emulated"
+  },
+  "operator_notes": "lookups: SQL on pgmq.q_<queue> (msg_id; message @> for handles and kind, vt <= now() for visible); count: pgmq.metrics; pause: consumers stop calling pgmq.read per replica"
 }

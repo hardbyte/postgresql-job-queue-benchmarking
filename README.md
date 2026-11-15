@@ -37,6 +37,10 @@ Eight Postgres-backed queues ran on one host, under the same harness and the sam
 
 "Tuned" means each system at the settings its own documentation points to, within one budget for all: at most 4 processes, 128 handlers and 200 connections. Every system recovers from a Postgres restart. Absurd and Procrastinate recover only once their worker is restarted, as a supervisor would. Only awa gives disk space back after large payloads and backlogs.
 
+**Operator scenarios** ([summary](results/2026-11-16-operator/SUMMARY.md)):
+- **Pause:** a pause survives a process restart only where the system stores it (awa, River, PgQue). Oban holds it in memory, and the other four have no pause.
+- **Find:** River finds one job by a unique field among a million in 2.4 ms. awa 0.6 times out on tag filters. Procrastinate can't filter on job data, and its ordinary queue stalls behind a large backlog in another queue.
+
 ### The three contracts
 
 **Job queues** — send a job, a worker runs it, the queue tracks retries and dead-lettering: awa, pg-boss, river, oban, procrastinate. absurd is a durable-workflow engine driven here as one-step jobs.

@@ -17,5 +17,14 @@
     "retryable": "SELECT count(*) FROM river_job WHERE state = 'retryable'",
     "dead": "SELECT count(*) FROM river_job WHERE state = 'discarded'",
     "running": "SELECT count(*) FROM river_job WHERE state = 'running'"
-  }
+  },
+  "operator_capabilities": {
+    "get_by_id": "native",
+    "find_handle": "native",
+    "find_tenant_page": "native",
+    "kind_state_page": "native",
+    "count_state": "sql",
+    "pause": "native"
+  },
+  "operator_notes": "Haystack via InsertMany with metadata {h,t}; JobGet; JobList with Metadata (@>), Kinds/States/Queues and First; count by SQL on river_job (River has no count API); QueuePause/QueueResume (stored in river_queue)."
 }

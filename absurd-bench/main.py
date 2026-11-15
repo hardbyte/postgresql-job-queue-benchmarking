@@ -21,6 +21,13 @@ from psycopg.rows import dict_row
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter_common"))
 from bench_controls import ScenarioControls, herd_preload_loop  # noqa: E402
+from operator_controls import (  # noqa: E402
+    ALT_KIND,
+    Haystack,
+    OperatorControls,
+    Probe,
+    run_probes,
+)
 
 
 ABSURD_SQL_PATH = Path(os.environ.get("ABSURD_SQL_PATH", "/opt/absurd.sql"))
@@ -198,6 +205,7 @@ def build_app(
     completed_counter: list[int],
     work_ms: int,
     controls: ScenarioControls | None = None,
+    operator: OperatorControls | None = None,
 ) -> AsyncAbsurd:
     app = AsyncAbsurd(
         conn if conn is not None else database_url(), queue_name=queue_name
@@ -205,6 +213,8 @@ def build_app(
 
     @app.register_task(TASK_NAME)
     async def bench_job(params: dict, _ctx) -> None:
+        if operator is not None:
+            operator.record_starts()
         if controls is not None and controls.is_abandon(params):
             await controls.hold_if_abandoning()
         if controls is not None and controls.is_tagged(params):
@@ -315,6 +325,99 @@ async def count_by_state(conn: AsyncConnection, queue_names: list[str]) -> dict[
     return {row["state"]: int(row["count"]) for row in rows}
 
 
+async def spawn_haystack(conn: AsyncConnection, haystack: Haystack, first_seq: int, size: int) -> None:
+    """absurd.spawn_task per job (the SDK's spawn statement), pipelined."""
+    seqs = range(first_seq, first_seq + size)
+    params = []
+    for seq in seqs:
+        handle, tenant = haystack.handles(seq)
+        params.append(
+            (
+                haystack.queue,
+                ALT_KIND if haystack.kind_is_alt(seq) else TASK_NAME,
+                json.dumps({"h": handle, "t": tenant}),
+                "{}",
+            )
+        )
+    async with conn.cursor() as cur:
+        await cur.executemany(
+            "SELECT task_id FROM absurd.spawn_task(%s, %s, %s::jsonb, %s::jsonb)",
+            params,
+            returning=True,
+        )
+        seq_iter = iter(seqs)
+        async for result in cur.results():
+            row = await result.fetchone()
+            haystack.keep(row["task_id"], next(seq_iter))
+
+
+def absurd_probes(
+    conn_ref: list[AsyncConnection], haystack: Haystack, page: int
+) -> list[Probe]:
+    """get_by_id uses the SDK's fetch_task_result. The SDK and absurdctl have
+    no params filter, so the other probes are the SELECT absurdctl list-tasks
+    builds (t_<q> LEFT JOIN r_<q> on last_attempt_run, task_name/state
+    filters, LIMIT) plus a params @> filter for the handles: SQL on Absurd's
+    own tables, the only way."""
+    tasks = sql.Identifier(f"t_{haystack.queue}")
+    runs = sql.Identifier(f"r_{haystack.queue}")
+    list_tasks = sql.SQL(
+        "SELECT t.task_id, r.run_id, t.task_name, t.state, r.attempt, t.max_attempts, "
+        "COALESCE(r.completed_at, r.failed_at, r.started_at, r.created_at) AS updated_at "
+        "FROM absurd.{} t LEFT JOIN absurd.{} r ON r.run_id = t.last_attempt_run "
+        "WHERE {} ORDER BY updated_at DESC LIMIT %s"
+    )
+
+    async def get_by_id(task_id, _seq) -> tuple[int, bool]:
+        # The snapshot carries state, not params, so the handle can't be
+        # compared; an unconsumed haystack task must be found pending.
+        client = AsyncAbsurd(conn_ref[0], queue_name=haystack.queue)
+        snapshot = await client.fetch_task_result(str(task_id))
+        return (0, False) if snapshot is None else (1, snapshot.state == "pending")
+
+    async def find_handle(task_id, seq) -> tuple[int, bool]:
+        handle, _ = haystack.handles(seq)
+        query = list_tasks.format(tasks, runs, sql.SQL("t.params @> %s::jsonb"))
+        async with conn_ref[0].cursor() as cur:
+            await cur.execute(query, (json.dumps({"h": handle}), 2))
+            rows = await cur.fetchall()
+        return len(rows), len(rows) == 1 and str(rows[0]["task_id"]) == str(task_id)
+
+    async def find_tenant_page(_task_id, seq) -> tuple[int, bool]:
+        tenant = seq % haystack.tenants
+        query = list_tasks.format(tasks, runs, sql.SQL("t.params @> %s::jsonb"))
+        async with conn_ref[0].cursor() as cur:
+            await cur.execute(query, (json.dumps({"t": f"t{tenant}"}), page))
+            rows = await cur.fetchall()
+        return len(rows), len(rows) == min(page, haystack.tenant_matches(tenant))
+
+    async def kind_state_page(_task_id, _seq) -> tuple[int, bool]:
+        query = list_tasks.format(
+            tasks, runs, sql.SQL("t.task_name = %s AND t.state = 'pending'")
+        )
+        async with conn_ref[0].cursor() as cur:
+            await cur.execute(query, (ALT_KIND, page))
+            rows = await cur.fetchall()
+        return len(rows), len(rows) == min(page, haystack.alt_matches())
+
+    async def count_state(_task_id, _seq) -> tuple[int, bool]:
+        async with conn_ref[0].cursor() as cur:
+            await cur.execute(
+                sql.SQL("SELECT count(*) AS n FROM absurd.{} WHERE state = 'pending'").format(tasks)
+            )
+            row = await cur.fetchone()
+        count = int(row["n"])
+        return 1, abs(count - haystack.jobs) <= 0.01 * haystack.jobs
+
+    return [
+        Probe("get_by_id", "native", get_by_id),
+        Probe("find_handle", "sql", find_handle),
+        Probe("find_tenant_page", "sql", find_tenant_page),
+        Probe("kind_state_page", "sql", kind_state_page),
+        Probe("count_state", "sql", count_state),
+    ]
+
+
 async def enqueue_batch(
     conn: AsyncConnection, queue_name: str, items: list[dict], options: str = "{}"
 ) -> None:
@@ -343,6 +446,7 @@ async def scenario_long_horizon() -> None:
     ensure_schema()
     schema_version = await installed_schema_version()
     controls = ScenarioControls()
+    operator = OperatorControls("absurd")
     for queue in queues:
         # A replacement fleet must find the claims the killed fleet held, and
         # replicas after the first must not drop the queue it is already using.
@@ -466,6 +570,7 @@ async def scenario_long_horizon() -> None:
             completed_counter=completed_counter,
             work_ms=work_ms,
             controls=controls,
+            operator=operator,
         )
 
     worker_apps = [await make_app(index) for index in range(len(worker_slots))]
@@ -655,6 +760,7 @@ async def scenario_long_horizon() -> None:
                 ("total_backlog", current_total_backlog, 0),
                 ("producer_target_rate", current_producer_target_rate, 0),
                 *controls.metrics(sample_every_s, sample_every_s),
+                *operator.metrics(),
             ):
                 if metric in OBSERVER_METRICS and not observer_enabled():
                     continue
@@ -684,9 +790,13 @@ async def scenario_long_horizon() -> None:
 
     # start_worker() returns when its connection fails. Restart it with a
     # fresh client, as a process supervisor would restart a worker process.
+    resumed = asyncio.Event()
+    resumed.set()
+
     async def run_worker(index: int) -> None:
         await wait_for_consumer_gate(shutdown)
         while not shutdown.is_set():
+            await resumed.wait()
             app = worker_apps[index]
             try:
                 await app.start_worker(
@@ -705,7 +815,66 @@ async def scenario_long_horizon() -> None:
                 await asyncio.sleep(1)
                 worker_apps[index] = await make_app(index)
             else:
-                return
+                # stop_worker() returns start_worker() at shutdown or for an
+                # emulated pause; the loop waits for the resume.
+                if shutdown.is_set():
+                    return
+
+    # Absurd has no queue pause: every replica stops its own workers
+    # (stop_worker lets the claimed batch finish) and starts them on resume.
+    async def operator_seen(command: dict) -> None:
+        if command.get("op") == "pause":
+            resumed.clear()
+            for app in worker_apps:
+                app.stop_worker()
+        elif command.get("op") == "resume":
+            resumed.set()
+
+    async def emulated(_args: dict) -> dict:
+        return {"mode": "emulated", "api_ms": 0.0}
+
+    async def op_haystack(args: dict) -> dict:
+        haystack = Haystack.from_args(args)
+        operator.haystack = None
+        started = monotonic()
+        conn = await connect()
+        try:
+            client = AsyncAbsurd(conn, queue_name=haystack.queue)
+            await client.drop_queue()
+            await client.create_queue()
+            batch = 1000
+            for first in range(0, haystack.jobs, batch):
+                await spawn_haystack(conn, haystack, first, min(batch, haystack.jobs - first))
+        finally:
+            await conn.close()
+        operator.haystack = haystack
+        return {"enqueued": haystack.jobs, "seconds": monotonic() - started}
+
+    async def op_probe(args: dict) -> dict:
+        haystack = operator.haystack
+        if haystack is None:
+            raise RuntimeError("probe before haystack")
+        timeout_ms = int(args.get("timeout_ms", 30_000))
+        probe_conn: list[AsyncConnection] = []
+
+        async def open_conn() -> None:
+            if probe_conn:
+                await probe_conn.pop().close()
+            conn = await connect()
+            await conn.execute(f"SET statement_timeout = {timeout_ms}")
+            probe_conn.append(conn)
+
+        await open_conn()
+        try:
+            return await run_probes(
+                absurd_probes(probe_conn, haystack, int(args.get("page", 100))),
+                haystack,
+                args,
+                on_timeout=open_conn,
+            )
+        finally:
+            for conn in probe_conn:
+                await conn.close()
 
     worker_tasks = [asyncio.create_task(run_worker(i)) for i in range(len(worker_apps))]
     tasks = [
@@ -715,11 +884,24 @@ async def scenario_long_horizon() -> None:
         asyncio.create_task(
             herd_preload_loop(controls, shutdown, enqueue_herd, log_prefix="absurd")
         ),
+        asyncio.create_task(
+            operator.run(
+                shutdown,
+                {
+                    "haystack": op_haystack,
+                    "probe": op_probe,
+                    "pause": emulated,
+                    "resume": emulated,
+                },
+                on_seen=operator_seen,
+            )
+        ),
         *worker_tasks,
     ]
 
     await shutdown.wait()
     controls.exit_if_holding()
+    resumed.set()
     for app in worker_apps:
         app.stop_worker()
     for task in tasks:

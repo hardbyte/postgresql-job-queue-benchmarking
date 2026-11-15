@@ -53,6 +53,9 @@ class PhaseType(str, Enum):
     # SIGKILL every replica while it holds its claims, then start a fresh
     # fleet that must recover them (mass_abandon).
     ABANDON_KILL = "abandon-kill"
+    # Operator actions (find jobs, pause/resume a queue, preload an
+    # unconsumed haystack) sent to instance 0 through OPERATOR_CONTROL_FILE.
+    OPERATOR = "operator"
     # CDC-suite phase types (docs/cdc-harness-design.md §9). Consumer-level
     # chaos is applied through the receiver's control API, not the replica
     # pool — the hooks live in cdc_harness, not bench_harness.hooks.
@@ -90,6 +93,7 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.RETRY_STORM:      ("#C86A8A", 0.30),
     PhaseType.SCHEDULE_PRELOAD: ("#6CAFAF", 0.25),
     PhaseType.ABANDON_KILL:     ("#A02828", 0.45),
+    PhaseType.OPERATOR:         ("#8A8AD8", 0.25),
     PhaseType.CONSUMER_DEAD:    ("#C04A4A", 0.35),
     PhaseType.CONSUMER_SLOW:    ("#D8A03A", 0.30),
     PhaseType.SINK_OUTAGE:      ("#A03030", 0.40),
@@ -122,6 +126,7 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.LOGICAL_STALL:    True,
     PhaseType.RETRY_STORM:      True,
     PhaseType.SCHEDULE_PRELOAD: True,
+    PhaseType.OPERATOR:         True,
     PhaseType.ABANDON_KILL:     True,
     PhaseType.CONSUMER_DEAD:    True,
     PhaseType.CONSUMER_SLOW:    True,
@@ -161,12 +166,15 @@ class Phase:
     def rate_override(self, replicas: int = 1) -> float | None:
         """Per-replica producer rate this phase pins, or None for the base.
 
-        `rate=N` is a per-replica jobs/s value usable on any phase type.
+        `rate=N` is a per-replica jobs/s value usable on any phase type
+        except `operator`, where it is the probe rate.
         `preload(jobs=N)` spreads N jobs evenly over the phase across all
         replicas; `drain` always stops the producer.
         """
         if self.type is PhaseType.DRAIN:
             return 0.0
+        if self.type is PhaseType.OPERATOR:
+            return None
         if self.type is PhaseType.PRELOAD:
             jobs = self.int_param("jobs", 0)
             if jobs <= 0:
@@ -745,6 +753,9 @@ def default_registry() -> HookRegistry:
                       enter=hooks.enter_schedule_preload)
     registry.register(PhaseType.ABANDON_KILL,
                       enter=hooks.enter_abandon_kill)
+    registry.register(PhaseType.OPERATOR,
+                      enter=hooks.enter_operator,
+                      exit=hooks.exit_operator)
     # warmup, clean, recovery, preload — no extra runtime action; the adapter's
     # steady workload carries the load.
     return registry

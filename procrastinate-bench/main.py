@@ -297,6 +297,285 @@ async def scenario_worker_only() -> None:
     print("[procrastinate] worker_only: received signal, exiting.", file=sys.stderr)
 
 
+# ── Operator scenarios (docs/operator-scenarios.md) ──
+# Default-off: OPERATOR_CONTROL_FILE carries {id, op, args}. Every replica
+# counts handler starts relative to the latest op and stops/starts its own
+# worker on pause/resume (procrastinate has no pause API, so the pause is
+# emulated per process). Instance 0 performs haystack and probe ops and
+# reports to OPERATOR_RESULT_FILE.
+
+OPERATOR_PROBES = (
+    "get_by_id",
+    "find_handle",
+    "find_tenant_page",
+    "kind_state_page",
+    "count_state",
+)
+# list_jobs filters on id, queue, task, status, lock, queueing_lock and
+# worker_id only; job args are not filterable through any procrastinate API.
+OPERATOR_UNSUPPORTED = frozenset({"find_handle", "find_tenant_page"})
+OPERATOR_KEPT_PAIRS = 10_000
+HAYSTACK_KIND = "long_horizon_job"
+HAYSTACK_ALT_KIND = "bench_alt"
+
+
+def _read_json_file(path: str) -> dict:
+    try:
+        with open(path) as fh:
+            value = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _quantile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    return values[min(len(values) - 1, max(0, round(p * (len(values) - 1))))]
+
+
+class OperatorControls:
+    def __init__(self) -> None:
+        self.path = os.environ.get("OPERATOR_CONTROL_FILE")
+        self.result_path = os.environ.get("OPERATOR_RESULT_FILE")
+        self.enabled = bool(self.path)
+        # Adopt the current op as seen: a process started mid-pause doesn't act on it.
+        self.last_id = _read_json_file(self.path).get("id") if self.path else None
+        self.job_starts = 0
+        self.last_job_start_ms = 0
+        self.first_start_after_op_ms = 0
+        self.op_seen_ms = 0
+        self.kept: list[tuple[int, int]] = []
+        self.haystack: dict | None = None
+
+    def poll(self) -> dict | None:
+        command = _read_json_file(self.path) if self.path else {}
+        if not command.get("id") or command["id"] == self.last_id:
+            return None
+        self.last_id = command["id"]
+        self.op_seen_ms = _epoch_ms()
+        self.first_start_after_op_ms = 0
+        return command
+
+    def on_start(self) -> None:
+        if not self.enabled:
+            return
+        now = _epoch_ms()
+        self.job_starts += 1
+        self.last_job_start_ms = now
+        if self.op_seen_ms and not self.first_start_after_op_ms:
+            self.first_start_after_op_ms = now
+
+    def keep(self, job_id: int, seq: int, seen: int) -> None:
+        import random
+
+        if len(self.kept) < OPERATOR_KEPT_PAIRS:
+            self.kept.append((job_id, seq))
+            return
+        slot = random.randrange(seen)
+        if slot < OPERATOR_KEPT_PAIRS:
+            self.kept[slot] = (job_id, seq)
+
+    def report(self, op_id: str, outcome: dict) -> None:
+        if not self.result_path:
+            return
+        results = _read_json_file(self.result_path)
+        results[op_id] = {"done_ms": _epoch_ms(), **outcome, "done": True}
+        tmp = f"{self.result_path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as fh:
+            json.dump(results, fh)
+        os.replace(tmp, self.result_path)
+
+    def metrics(self) -> list[tuple[str, float, float]]:
+        if not self.enabled:
+            return []
+        return [
+            ("job_starts_total", float(self.job_starts), 0.0),
+            ("last_job_start_ms", float(self.last_job_start_ms), 0.0),
+            ("first_start_after_op_ms", float(self.first_start_after_op_ms), 0.0),
+        ]
+
+
+def _operator_app(*, statement_timeout_ms: int | None = None) -> procrastinate.App:
+    """A separate small pool, so operator work never takes worker connections."""
+    connection_kwargs = (
+        {"options": f"-c statement_timeout={statement_timeout_ms}"}
+        if statement_timeout_ms
+        else {}
+    )
+    return procrastinate.App(
+        connector=procrastinate.PsycopgConnector(
+            conninfo=database_url(), min_size=1, max_size=2, kwargs=connection_kwargs
+        )
+    )
+
+
+async def operator_haystack(
+    controls: OperatorControls, args: dict, shutdown: asyncio.Event
+) -> dict:
+    jobs = int(args.get("jobs", 0))
+    queue = str(args.get("queue", "haystack"))
+    tenants = int(args.get("tenants", 1000))
+    alt_every = int(args.get("alt_every", 20))
+    started = monotonic()
+    seen = 0
+    batch_size = 1000
+    op_app = _operator_app()
+    async with op_app.open_async():
+        # No worker lists `queue`, so nothing consumes these jobs.
+        usual = op_app.configure_task(name=HAYSTACK_KIND, queue=queue)
+        alt = op_app.configure_task(name=HAYSTACK_ALT_KIND, queue=queue)
+        for first in range(0, jobs, batch_size):
+            if shutdown.is_set():
+                break
+            seqs = range(first, min(jobs, first + batch_size))
+            for deferrer, group in (
+                (usual, [seq for seq in seqs if seq % alt_every != 0]),
+                (alt, [seq for seq in seqs if seq % alt_every == 0]),
+            ):
+                if not group:
+                    continue
+                ids = await deferrer.batch_defer_async(
+                    *({"h": f"h{seq}", "t": f"t{seq % tenants}"} for seq in group)
+                )
+                for job_id, seq in zip(ids, group):
+                    seen += 1
+                    controls.keep(job_id, seq, seen)
+    previous = (
+        controls.haystack["jobs"]
+        if controls.haystack and controls.haystack["queue"] == queue
+        else 0
+    )
+    controls.haystack = {
+        "queue": queue,
+        "jobs": previous + seen,
+        "tenants": tenants,
+        "alt_every": alt_every,
+    }
+    return {"enqueued": seen, "seconds": monotonic() - started}
+
+
+def _is_statement_timeout(exc: BaseException) -> bool:
+    text = repr(exc).lower()
+    while exc is not None:
+        if getattr(exc, "sqlstate", None) == "57014":
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return "statement timeout" in text
+
+
+async def operator_probe(
+    controls: OperatorControls, args: dict, shutdown: asyncio.Event
+) -> dict:
+    import math
+    import random
+
+    hay = controls.haystack
+    if not hay or not controls.kept:
+        raise RuntimeError("probe before haystack: no kept job ids in this process")
+    duration_s = float(args.get("duration_s", 60))
+    rate = max(0.01, float(args.get("rate", 2)))
+    queue = str(args.get("queue", hay["queue"]))
+    page = int(args.get("page", 100))
+    timeout_ms = int(args.get("timeout_ms", 30000))
+    alt_total = math.ceil(hay["jobs"] / hay["alt_every"])
+
+    op_app = _operator_app(statement_timeout_ms=timeout_ms)
+    manager = op_app.job_manager
+
+    # Each returns (rows, correct).
+    async def get_by_id(job_id: int, seq: int) -> tuple[int, bool]:
+        found = list(await manager.list_jobs_async(id=job_id))
+        return len(found), len(found) == 1 and found[0].task_kwargs.get("h") == f"h{seq}"
+
+    # list_jobs has no LIMIT or paging: the call returns every match, and
+    # the first `page` of them is the page an operator would show.
+    async def kind_state_page(job_id: int, seq: int) -> tuple[int, bool]:
+        found = list(
+            await manager.list_jobs_async(queue=queue, task=HAYSTACK_ALT_KIND, status="todo")
+        )
+        first_page = found[:page]
+        return len(found), len(first_page) == min(page, alt_total) and all(
+            job.task_name == HAYSTACK_ALT_KIND for job in first_page
+        )
+
+    async def count_state(job_id: int, seq: int) -> tuple[int, bool]:
+        queues = list(await manager.list_queues_async(queue=queue, status="todo"))
+        count = int(queues[0]["todo"]) if queues else 0
+        return count, abs(count - hay["jobs"]) <= 0.01 * hay["jobs"]
+
+    probes = {
+        "get_by_id": get_by_id,
+        "kind_state_page": kind_state_page,
+        "count_state": count_state,
+    }
+    rotation = [name for name in OPERATOR_PROBES if name in probes]
+    stats = {
+        name: {"latencies": [], "rows": [], "n": 0, "correct": 0, "errors": 0, "timeouts": 0}
+        for name in OPERATOR_PROBES
+    }
+    interval = 1.0 / rate
+    end_at = monotonic() + duration_s
+    next_at = monotonic()
+    turn = 0
+    async with op_app.open_async():
+        while monotonic() < end_at and not shutdown.is_set():
+            wait = next_at - monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            next_at += interval
+            name = rotation[turn % len(rotation)]
+            turn += 1
+            job_id, seq = random.choice(controls.kept)
+            stat = stats[name]
+            stat["n"] += 1
+            started = monotonic()
+            try:
+                rows, correct = await asyncio.wait_for(
+                    probes[name](job_id, seq), timeout=timeout_ms / 1000
+                )
+            except asyncio.TimeoutError:
+                stat["timeouts"] += 1
+                continue
+            except Exception as exc:
+                if _is_statement_timeout(exc):
+                    stat["timeouts"] += 1
+                else:
+                    stat["errors"] += 1
+                    print(f"[procrastinate] probe {name} failed: {exc!r}", file=sys.stderr)
+                continue
+            stat["latencies"].append((monotonic() - started) * 1000)
+            stat["rows"].append(rows)
+            stat["correct"] += int(correct)
+
+    out = {}
+    for name in OPERATOR_PROBES:
+        if name in OPERATOR_UNSUPPORTED:
+            out[name] = {"mode": "unsupported", "n": 0}
+            continue
+        stat = stats[name]
+        latencies = sorted(stat["latencies"])
+        rows = sorted(stat["rows"])
+        out[name] = {
+            "mode": "native",
+            "n": stat["n"],
+            "p50_ms": _quantile(latencies, 0.5),
+            "p99_ms": _quantile(latencies, 0.99),
+            "max_ms": latencies[-1] if latencies else 0.0,
+            "rows_median": _quantile(rows, 0.5),
+            "correct": stat["correct"] / stat["n"] if stat["n"] else 0.0,
+            "errors": stat["errors"],
+            "timeouts": stat["timeouts"],
+        }
+    return {"probes": out}
+
+
+def _epoch_ms() -> int:
+    import time
+
+    return int(time.time() * 1000)
+
+
 async def scenario_long_horizon() -> None:
     """Fixed-rate producer + steady consumer with JSONL telemetry every
     SAMPLE_EVERY_S. Contract: CONTRIBUTING_ADAPTERS.md"""
@@ -384,6 +663,7 @@ async def scenario_long_horizon() -> None:
         ),
     )
     controls = ScenarioControls()
+    operator = OperatorControls()
     if controls.failure_enabled:
         silence_injected_failures("procrastinate.worker")
     # JOB_MAX_ATTEMPTS counts total attempts; procrastinate's
@@ -406,6 +686,7 @@ async def scenario_long_horizon() -> None:
         abandon: int | None = None,
     ) -> None:
         nonlocal completed
+        operator.on_start()
         tags = {
             key: value
             for key, value in (
@@ -475,6 +756,11 @@ async def scenario_long_horizon() -> None:
         shutdown = asyncio.Event()
 
         worker_started = False
+        # Cleared while an emulated operator pause holds this process's worker.
+        unpaused = asyncio.Event()
+        unpaused.set()
+        worker_idle = asyncio.Event()
+        worker_idle.set()
 
         # The worker stops itself when a side task such as the LISTEN
         # listener loses its connection. Restart it, as a process supervisor
@@ -483,15 +769,31 @@ async def scenario_long_horizon() -> None:
             nonlocal worker_started
             await wait_for_consumer_gate(shutdown)
             while not shutdown.is_set():
+                if not unpaused.is_set():
+                    waiters = [
+                        asyncio.create_task(unpaused.wait()),
+                        asyncio.create_task(shutdown.wait()),
+                    ]
+                    _, pending = await asyncio.wait(
+                        waiters, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for waiter in pending:
+                        waiter.cancel()
+                    continue
                 worker_started = True
+                worker_idle.clear()
                 try:
                     await worker.run()
                 except Exception as exc:
                     reason = repr(exc)
                 else:
                     reason = "stopped"
+                finally:
+                    worker_idle.set()
                 if shutdown.is_set():
                     return
+                if not unpaused.is_set():
+                    continue
                 print(
                     f"[procrastinate] worker exited ({reason}); restarting in 1 s",
                     file=sys.stderr,
@@ -606,6 +908,58 @@ async def scenario_long_horizon() -> None:
                 )
             )
 
+        async def operator_loop() -> None:
+            if not operator.enabled:
+                return
+            lead = _instance_id() == 0
+            while not shutdown.is_set():
+                command = operator.poll()
+                if command is None:
+                    await asyncio.sleep(0.1)
+                    continue
+                op = command.get("op")
+                args = command.get("args") or {}
+                started = monotonic()
+                try:
+                    if op == "pause":
+                        if unpaused.is_set():
+                            unpaused.clear()
+                            if worker_started:
+                                worker.stop()
+                            await worker_idle.wait()
+                        if lead:
+                            operator.report(
+                                command["id"],
+                                {"mode": "emulated", "api_ms": (monotonic() - started) * 1000},
+                            )
+                    elif op == "resume":
+                        unpaused.set()
+                        if lead:
+                            operator.report(
+                                command["id"],
+                                {"mode": "emulated", "api_ms": (monotonic() - started) * 1000},
+                            )
+                    elif lead and op == "haystack":
+                        operator.report(
+                            command["id"], await operator_haystack(operator, args, shutdown)
+                        )
+                    elif lead and op == "probe":
+                        operator.report(
+                            command["id"], await operator_probe(operator, args, shutdown)
+                        )
+                    elif lead:
+                        operator.report(command["id"], {"error": f"unknown op {op}"})
+                except Exception as exc:
+                    print(f"[procrastinate] operator {op} failed: {exc!r}", file=sys.stderr)
+                    if lead:
+                        operator.report(command["id"], {"error": repr(exc)})
+                if lead:
+                    print(
+                        f"[procrastinate] operator {op} {command['id']} done in "
+                        f"{(monotonic() - started) * 1000:.0f} ms",
+                        file=sys.stderr,
+                    )
+
         async def depth_poller() -> None:
             nonlocal queue_depth
             if not _observer_enabled():
@@ -675,6 +1029,7 @@ async def scenario_long_horizon() -> None:
                     ("queue_depth", float(queue_depth), 0.0),
                     ("producer_target_rate", current_producer_target_rate, 0.0),
                     *controls.metrics(dt, float(sample_every_s)),
+                    *operator.metrics(),
                 ]:
                     if metric in _OBSERVER_METRICS and not _observer_enabled():
                         continue
@@ -695,6 +1050,7 @@ async def scenario_long_horizon() -> None:
             asyncio.create_task(producer(), name="producer"),
             asyncio.create_task(depth_poller(), name="depth"),
             asyncio.create_task(sampler(), name="sampler"),
+            asyncio.create_task(operator_loop(), name="operator"),
             asyncio.create_task(
                 herd_preload_loop(
                     controls, shutdown, enqueue_herd, log_prefix="procrastinate"
