@@ -102,7 +102,9 @@ test("published results: every scenario with data renders charts with table view
   const html = fs.readFileSync(path.join(out, "benchmarks/index.html"), "utf8");
   const css = fs.readFileSync(path.join(__dirname, "assets/style.css"), "utf8");
   for (const id of results.systems) {
-    assert.ok(catalog.systems.some((s) => s.id === id && s.hasAdapter), `${id} has no adapter profile`);
+    // A variant (such as an unreleased build) shares its base system's profile.
+    const profile = results.variants?.[id]?.base || id;
+    assert.ok(catalog.systems.some((s) => s.id === profile && s.hasAdapter), `${id} has no adapter profile`);
     assert.match(css, new RegExp(`--sys-${id}:\\s*#[0-9a-f]{6}`), `${id} has no colour`);
   }
   for (const section of results.sections) {
@@ -116,7 +118,7 @@ test("published results: every scenario with data renders charts with table view
   assert.ok(figures.length >= results.sections.length);
   assert.equal(figures.length, tables.length, "every chart has a table view");
   for (const root of results.run.roots) assert.ok(html.includes(root.harness_commit.slice(0, 10)));
-  for (const s of results.systems)
+  for (const s of results.systems.filter((id) => !results.variants?.[id]))
     assert.ok(
       fs.readFileSync(path.join(out, "systems", s, "index.html"), "utf8").includes("Measured "),
       `${s} profile lacks measured results`,

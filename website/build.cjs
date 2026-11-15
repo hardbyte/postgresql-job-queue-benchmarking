@@ -200,6 +200,8 @@ function sectionCharts(spec, section) {
         } else if (mode === 2) note = "SQL";
         else if (mode === 3) note = "emulated: each process stops";
       }
+      if (chart.correctMetric && values?.[chart.correctMetric] === 0 && typeof value === "number")
+        note = "timed out (30 s cap)";
       return { id, name: systemName(id), value: typeof value === "number" ? value : null, note, unit: meta?.unit };
     });
   };

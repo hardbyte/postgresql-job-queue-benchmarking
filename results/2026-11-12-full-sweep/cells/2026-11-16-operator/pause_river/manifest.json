@@ -1,0 +1,132 @@
+{
+  "run_id": "custom-20261115T201954Z-fb200e",
+  "scenario": null,
+  "started_at": "2026-11-15T20:24:05+00:00",
+  "cli": [
+    ".venv/bin/bench",
+    "run",
+    "--systems",
+    "river",
+    "--producer-rate",
+    "200",
+    "--worker-count",
+    "16",
+    "--replicas",
+    "2",
+    "--sample-every",
+    "1",
+    "--phase",
+    "warmup=warmup:30s",
+    "--phase",
+    "clean=clean:60s",
+    "--phase",
+    "pause=operator(op=pause):20s",
+    "--phase",
+    "kill=kill-worker(instance=1):5s",
+    "--phase",
+    "fresh=start-worker(instance=1):30s",
+    "--phase",
+    "resume=operator(op=resume):60s",
+    "--phase",
+    "after=clean:30s"
+  ],
+  "systems": [
+    "river"
+  ],
+  "phases": [
+    {
+      "label": "warmup",
+      "type": "warmup",
+      "duration_s": 30
+    },
+    {
+      "label": "clean",
+      "type": "clean",
+      "duration_s": 60
+    },
+    {
+      "label": "pause",
+      "type": "operator",
+      "duration_s": 20
+    },
+    {
+      "label": "kill",
+      "type": "kill-worker",
+      "duration_s": 5
+    },
+    {
+      "label": "fresh",
+      "type": "start-worker",
+      "duration_s": 30
+    },
+    {
+      "label": "resume",
+      "type": "operator",
+      "duration_s": 60
+    },
+    {
+      "label": "after",
+      "type": "clean",
+      "duration_s": 30
+    }
+  ],
+  "engine": "postgres",
+  "pg_image": "postgres:18.6-alpine",
+  "postgres": {
+    "version": "PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "settings": {
+      "shared_buffers": "256MB",
+      "work_mem": "8MB",
+      "maintenance_work_mem": "128MB",
+      "autovacuum": "on",
+      "autovacuum_naptime": "1min",
+      "autovacuum_vacuum_cost_delay": "2ms",
+      "autovacuum_vacuum_cost_limit": "200",
+      "autovacuum_vacuum_scale_factor": "0.2",
+      "autovacuum_analyze_scale_factor": "0.1",
+      "max_connections": "400",
+      "synchronous_commit": "on",
+      "wal_level": "replica",
+      "shared_preload_libraries": ""
+    }
+  },
+  "host": {
+    "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "kernel": "7.0.0-43-generic",
+    "cpu": "x86_64",
+    "cpu_count": 24,
+    "memory_bytes": 65173884928,
+    "python": "3.14.5",
+    "docker": "Docker version 26.1.4, build 5650f9b",
+    "docker_compose": "Docker Compose version v2.27.1"
+  },
+  "adapters": {
+    "river": {
+      "abandon_rescue": "stuck-job rescuer (RESCUE_AFTER_SECS)",
+      "db_name": "river_bench",
+      "event_tables": [
+        "public.river_job"
+      ],
+      "extensions": [],
+      "instance_id": 0,
+      "kind": "descriptor",
+      "schema_version": "current",
+      "started_at": "2026-11-15T20:20:07.412Z",
+      "system": "river",
+      "version": "0.1.0",
+      "revision": {
+        "source": "river-bench/go.mod",
+        "library": "github.com/riverqueue/river",
+        "pinned_version": "v0.51.2",
+        "benchmark_harness": {
+          "source": "benchmark repo",
+          "git_sha": "728683164e0526c6d0b52e03ec3b9a9a0bdeb0f0",
+          "git_short": "7286831",
+          "git_branch": "brian/operator-scenarios",
+          "git_tag": null,
+          "dirty": true
+        }
+      }
+    }
+  }
+}
