@@ -597,6 +597,105 @@
       "headline": "PGMQ and PgQue drain at ~14.5k jobs/s; only Awa shrinks back."
     },
     {
+      "id": "find",
+      "title": "Finding one job among a million",
+      "question": "With a million jobs queued, how long does an operator wait to find one?",
+      "setup": "A million jobs sit in a queue no worker consumes, each tagged with a unique handle and one of 1,000 tenants, while 200 jobs/s of ordinary work runs on another queue. Each probe runs through the system's own API (or SQL where that is the interface) at 2 per second for 3 minutes, on its own connection.",
+      "read": [
+        "The label after each bar says how the answer was obtained: no label is the system's API; SQL means a raw query against its tables; not supported means the system offers no way to ask.",
+        "Where a filter has no index behind it, the probe scans the million jobs; that shows up as seconds rather than milliseconds."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "get_by_id_p99",
+          "modeMetric": "get_by_id_mode",
+          "title": "Get one job by id, p99",
+          "log": true,
+          "missingNote": "not supported"
+        },
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "find_handle_p99",
+          "modeMetric": "find_handle_mode",
+          "title": "Find one job by a unique field, p99",
+          "log": true,
+          "missingNote": "not supported"
+        },
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "find_tenant_page_p99",
+          "modeMetric": "find_tenant_page_mode",
+          "title": "First page of one tenant's 1,000 jobs, p99",
+          "log": true,
+          "missingNote": "not supported"
+        },
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "kind_state_page_p99",
+          "modeMetric": "kind_state_page_mode",
+          "title": "First page by kind and state, p99",
+          "log": true,
+          "missingNote": "not supported"
+        },
+        {
+          "type": "bars",
+          "cell": "find",
+          "metric": "count_state_p99",
+          "modeMetric": "count_state_mode",
+          "title": "Count by state, p99",
+          "log": true,
+          "missingNote": "not supported"
+        }
+      ]
+    },
+    {
+      "id": "pause",
+      "title": "Pausing and resuming a queue",
+      "question": "When an operator pauses a busy queue, does work stop everywhere, and how fast does it come back?",
+      "setup": "Two worker processes at 200 jobs/s each. The bench queue is paused; while paused, one process is restarted; then the queue is resumed. Systems without a pause stop each process's workers locally (labelled emulated), which a restarted process doesn't know about.",
+      "read": [
+        "A pause stored in the database survives a restarted process; one held in memory, or a per-process stop, does not, so the restarted process starts working again while the queue should be paused."
+      ],
+      "charts": [
+        {
+          "type": "bars",
+          "cell": "pause",
+          "metric": "starts_after_pause",
+          "modeMetric": "pause_mode",
+          "title": "Jobs started while paused",
+          "caption": "Including the process restarted mid-pause."
+        },
+        {
+          "type": "bars",
+          "cell": "pause",
+          "metric": "quiesce_ms",
+          "modeMetric": "pause_mode",
+          "title": "Last job start after the pause returned",
+          "log": true
+        },
+        {
+          "type": "bars",
+          "cell": "pause",
+          "metric": "first_start_ms",
+          "modeMetric": "pause_mode",
+          "title": "First job start after the resume",
+          "log": true
+        },
+        {
+          "type": "bars",
+          "cell": "pause",
+          "metric": "recovery_s",
+          "modeMetric": "pause_mode",
+          "title": "Back to 90% of the earlier rate"
+        }
+      ]
+    },
+    {
       "id": "abandon",
       "title": "A million abandoned claims",
       "question": "When an entire fleet dies holding about a million claimed jobs, how long until those jobs have run?",

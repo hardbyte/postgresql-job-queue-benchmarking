@@ -182,6 +182,15 @@ function sectionCharts(spec, section) {
       if (chart.missingNote && values && typeof value !== "number") note = chart.missingNote;
       if (!values && cell?.excluded?.[id]) note = cell.excluded[id];
       if (chart.noteField && typeof values?.[chart.noteField] === "string") note = values[chart.noteField];
+      // Operator results: how the number was obtained (hooks.OPERATOR_MODES).
+      if (chart.modeMetric && values) {
+        const mode = values[chart.modeMetric];
+        if (mode === 0) {
+          value = null;
+          note = "not supported";
+        } else if (mode === 2) note = "SQL";
+        else if (mode === 3) note = "emulated: each process stops";
+      }
       return { id, name: systemName(id), value: typeof value === "number" ? value : null, note, unit: meta?.unit };
     });
   };
