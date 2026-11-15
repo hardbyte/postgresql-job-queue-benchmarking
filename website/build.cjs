@@ -49,10 +49,18 @@ const readOptional = (file) => {
 const results = readOptional("data/results.json");
 const resultNotes = readOptional("data/results-notes.json");
 const measured = Boolean(results && resultNotes);
-const systemName = (id) => catalog.systems.find((s) => s.id === id)?.name || id;
+const systemName = (id) =>
+  catalog.systems.find((s) => s.id === id)?.name || results?.variants?.[id]?.label || id;
+// Variants (such as an unreleased build) appear only in the sections they ran.
 const resultSystems = measured
-  ? [...results.systems].sort((a, b) => systemName(a).localeCompare(systemName(b)))
+  ? results.systems
+      .filter((id) => !results.variants?.[id])
+      .sort((a, b) => systemName(a).localeCompare(systemName(b)))
   : [];
+const sectionSystems = (section) => [
+  ...resultSystems,
+  ...Object.keys(results?.variants || {}).filter((id) => section.cells.some((c) => c.values[id])),
+];
 const sectionData = (id) => results?.sections.find((s) => s.id === id);
 const cellData = (section, cell) => section?.cells.find((c) => c.id === cell);
 const metricMeta = (section, key) => section?.metrics.find((m) => m.key === key);
@@ -169,9 +177,10 @@ function overviewGrid() {
 }
 
 function sectionCharts(spec, section) {
+  const systems = sectionSystems(section);
   const rowsFor = (cell, metric, chart) => {
     const meta = metricMeta(section, metric);
-    return resultSystems.map((id) => {
+    return systems.map((id) => {
       const values = cell?.values[id];
       let value = values?.[metric];
       if (typeof value === "number" && chart.scale) value *= chart.scale;
@@ -222,7 +231,7 @@ function sectionCharts(spec, section) {
       if (!cellA || !cellB) continue;
       const meta = metricMeta(section, chart.a);
       out = charts.dumbbell(
-        resultSystems.map((id) => ({
+        systems.map((id) => ({
           id,
           name: systemName(id),
           a: cellA.values[id]?.[chart.a],
@@ -233,7 +242,7 @@ function sectionCharts(spec, section) {
     } else if (chart.type === "multiples") {
       const cell = cellData(section, "abandon");
       out = charts.smallMultiples(
-        resultSystems
+        systems
           .filter((id) => section.curves?.[id]?.length)
           .map((id) => {
             const v = cell?.values[id] || {};
@@ -264,18 +273,19 @@ function sectionCharts(spec, section) {
 }
 
 function allMeasurements(section) {
+  const systems = sectionSystems(section);
   return section.cells
     .map((cell) => {
       const heading = cell.label ? `<h4>${esc(cell.label)}</h4>` : "";
-      const head = `<tr><th scope="col">Measurement</th>${resultSystems.map((id) => `<th scope="col" class="num">${esc(systemName(id))}</th>`).join("")}</tr>`;
+      const head = `<tr><th scope="col">Measurement</th>${systems.map((id) => `<th scope="col" class="num">${esc(systemName(id))}</th>`).join("")}</tr>`;
       const body = section.metrics
-        .filter((m) => resultSystems.some((id) => typeof cell.values[id]?.[m.key] === "number"))
+        .filter((m) => systems.some((id) => typeof cell.values[id]?.[m.key] === "number"))
         .map(
           (m) =>
-            `<tr><th scope="row">${esc(m.label)} <small>(${m.better} is better)</small></th>${resultSystems.map((id) => `<td class="num">${esc(charts.format(cell.values[id]?.[m.key], m.unit))}</td>`).join("")}</tr>`,
+            `<tr><th scope="row">${esc(m.label)} <small>(${m.better} is better)</small></th>${systems.map((id) => `<td class="num">${esc(charts.format(cell.values[id]?.[m.key], m.unit))}</td>`).join("")}</tr>`,
         )
         .join("");
-      const sources = resultSystems
+      const sources = systems
         .filter((id) => cell.source[id])
         .map((id) => `<a href="${resultsSource(cell.source[id])}">${esc(systemName(id))} ↗</a>`)
         .join("");

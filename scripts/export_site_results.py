@@ -375,7 +375,25 @@ def main() -> None:
     parser.add_argument("results_roots", type=Path, nargs="+")
     parser.add_argument("--cells-dir", type=Path)
     parser.add_argument("--out", type=Path, default=REPO / "website/data/results.json")
+    parser.add_argument(
+        "--variant",
+        action="append",
+        default=[],
+        metavar="ROOT:SYSTEM=ID:LABEL",
+        help="report SYSTEM's cells from results root ROOT as a separate variant ID "
+        "(e.g. an unreleased build), shown only where it has results",
+    )
     args = parser.parse_args()
+    variant_map: dict[tuple[str, str], str] = {}
+    variants: dict[str, dict] = {}
+    for spec in args.variant:
+        root_part, _, rest = spec.partition(":")
+        system_part, _, rest = rest.partition("=")
+        variant_id, _, label = rest.partition(":")
+        if not (root_part and system_part and variant_id and label):
+            parser.error(f"--variant {spec!r}: expected ROOT:SYSTEM=ID:LABEL")
+        variant_map[(Path(root_part).resolve().name, system_part)] = variant_id
+        variants[variant_id] = {"base": CATALOG_ID.get(system_part, system_part), "label": label}
     root = args.results_roots[0].resolve()
 
     # (root order, cell_id) -> row; later roots and later rows win per system.
@@ -412,6 +430,7 @@ def main() -> None:
             sha = ((adapter.get("revision") or {}).get("benchmark_harness") or {}).get("git_sha")
             meta["harness"] = meta["harness"] or sha
         for system, blob in summary.get("systems", {}).items():
+            system = variant_map.get((row["root"], system), system)
             if cell == "abandon" and not dig(blob.get("abandon") or {}, "running_before_kill"):
                 print(f"skipping {cell_id}/{system}: no claims held at the kill", file=sys.stderr)
                 excluded[cell][CATALOG_ID.get(system, system)] = "held no claims at the kill"
@@ -480,7 +499,10 @@ def main() -> None:
 
     versions = {}
     for system, manifest in manifests.items():
-        revision = manifest["adapters"].get(system, {}).get("revision", {})
+        adapter = manifest["adapters"].get(system) or manifest["adapters"].get(
+            variants.get(system, {}).get("base", ""), {}
+        )
+        revision = adapter.get("revision", {})
         if revision.get("pgque_submodule_sha"):
             version = revision.get("pgque_submodule_describe") or revision["pgque_submodule_sha"][:12]
         else:
@@ -559,6 +581,7 @@ def main() -> None:
             "versions": versions,
         },
         "systems": [CATALOG_ID.get(s, s) for s in systems],
+        "variants": variants,
         "sections": sections_out,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
