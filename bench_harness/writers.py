@@ -1085,8 +1085,11 @@ def _operator_summary(
         done = out[pause.label]["op_done_ms"]
         end = labels.index(resume.label) if resume else len(labels)
         window = labels[labels.index(pause.label):end]
-        starts = [v for _, _, v in adapter_rows("last_job_start_ms", window) if v > 0]
-        last = max(starts, default=None)
+        start_rows = [(iid, v) for iid, _, v in adapter_rows("last_job_start_ms", window) if v > 0]
+        last = max((v for _, v in start_rows), default=None)
+        # Replicas that started a job more than 1 s after the pause returned
+        # (a restarted node that forgot the pause, or a pause that didn't hold).
+        leaking_instances = {iid for iid, v in start_rows if v > done + 1000}
         # Sum each replica's increments after done + 1 s; a counter that drops
         # belongs to a restarted process, so its new value is all increment.
         leaked = 0.0
@@ -1094,10 +1097,7 @@ def _operator_summary(
         for iid, at, value in sorted(adapter_rows("job_starts_total", labels[:end]), key=lambda r: (r[0], r[1])):
             prior = previous.get(iid)
             if at > done + 1000:
-                increment = value if prior is None or value < prior else value - prior
-                leaked += increment
-                if increment > 0:
-                    leaking_instances.add(iid)
+                leaked += value if prior is None or value < prior else value - prior
             previous[iid] = value
         out[pause.label]["quiesce_ms"] = max(0.0, last - done) if last is not None else 0.0
         out[pause.label]["starts_after_pause"] = leaked
@@ -1110,7 +1110,9 @@ def _operator_summary(
             if v > 0 and iid not in leaking_instances
         ]
         if firsts:
-            out[resume.label]["first_start_ms"] = min(firsts) - done
+            # A per-process (emulated) resume can start a job a moment before
+            # instance 0 records that it finished; nothing starts before it.
+            out[resume.label]["first_start_ms"] = max(0.0, min(firsts) - done)
         before = labels[: labels.index(pause.label)] if pause else []
         clean_before = [p.label for p in phases if p.label in before and p.type is PhaseType.CLEAN]
         def fleet_rate(phase_labels: list[str]) -> list[tuple[float, float]]:
