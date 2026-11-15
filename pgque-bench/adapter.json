@@ -18,5 +18,14 @@
     "retryable": "SELECT count(*) FROM pgque.retry_queue",
     "dead": "SELECT count(*) FROM pgque.dead_letter",
     "running": "SELECT coalesce(sum(next_tick.tick_event_seq - last_tick.tick_event_seq), 0) FROM pgque.subscription s JOIN pgque.tick last_tick ON last_tick.tick_queue = s.sub_queue AND last_tick.tick_id = s.sub_last_tick JOIN pgque.tick next_tick ON next_tick.tick_queue = s.sub_queue AND next_tick.tick_id = s.sub_next_tick WHERE s.sub_batch IS NOT NULL"
-  }
+  },
+  "operator_capabilities": {
+    "get_by_id": "unsupported",
+    "find_handle": "unsupported",
+    "find_tenant_page": "unsupported",
+    "kind_state_page": "unsupported",
+    "count_state": "native",
+    "pause": "native"
+  },
+  "operator_notes": "count: pgque.get_queue_info(queue).ev_new on an unticked, unconsumed queue; no job lookup API; pause: set_queue_config(queue, 'ticker_paused', ...), batches already ticked are still delivered"
 }

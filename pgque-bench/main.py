@@ -38,6 +38,14 @@ from psycopg.rows import dict_row
 ADAPTER_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ADAPTER_DIR.parent / "adapter_common"))
 from bench_controls import ScenarioControls, failure_outcome  # noqa: E402
+from operator_controls import (  # noqa: E402
+    ALT_KIND,
+    Haystack,
+    OperatorControls,
+    Probe,
+    run_probes,
+    timed,
+)
 PGQUE_SQL = ADAPTER_DIR / "vendor" / "pgque" / "sql" / "pgque.sql"
 
 QUEUE_NAME = "long_horizon_bench"
@@ -345,6 +353,7 @@ async def scenario_long_horizon() -> None:
 
     db_name = database_url().rsplit("/", 1)[-1]
     controls = ScenarioControls()
+    operator = OperatorControls("pgque")
 
     # Setup connection — used for create_queue/subscribe + descriptor query.
     setup_conn = await aconnect()
@@ -690,7 +699,13 @@ async def scenario_long_horizon() -> None:
             try:
                 async with ticker_conn.cursor() as cur:
                     for q in ticker_queues:
-                        await cur.execute("SELECT pgque.ticker(%s)", (q,))
+                        try:
+                            await cur.execute("SELECT pgque.ticker(%s)", (q,))
+                        except psycopg.errors.RaiseException as exc:
+                            # pgque.ticker(queue) raises for a ticker-paused
+                            # queue; the batch ticker skips it the same way.
+                            if "paused" not in str(exc):
+                                raise
             except Exception as exc:
                 print(f"[pgque] ticker failed: {exc}", file=sys.stderr)
                 await ticker_conn.reconnect()
@@ -751,6 +766,7 @@ async def scenario_long_horizon() -> None:
     async def process_tagged(msg: dict) -> None:
         nonlocal completed
         async with work_sem:
+            operator.record_starts()
             controls.on_start(msg)
             if work_ms:
                 await asyncio.sleep(work_ms / 1000.0)
@@ -761,6 +777,7 @@ async def scenario_long_horizon() -> None:
     async def process_one(msg: dict) -> None:
         nonlocal completed
         async with work_sem:
+            operator.record_starts()
             try:
                 ev_time = msg["created_at"]
                 if isinstance(ev_time, str):
@@ -1122,6 +1139,7 @@ async def scenario_long_horizon() -> None:
                 ("queue_depth", float(queue_depth), 0.0),
                 ("producer_target_rate", current_producer_target_rate, 0.0),
                 *controls.metrics(dt, float(sample_every_s)),
+                *operator.metrics(),
             ]:
                 if metric in _OBSERVER_METRICS and not _observer_enabled():
                     continue
@@ -1138,7 +1156,110 @@ async def scenario_long_horizon() -> None:
                     }
                 )
 
+    async def op_haystack(args: dict) -> dict:
+        # A queue with no consumer and no ticker task: nothing reads it.
+        haystack = Haystack.from_args(args)
+        operator.haystack = None
+        started = time.monotonic()
+        conn = await aconnect()
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT pgque.drop_queue(%s, true) FROM pgque.queue WHERE queue_name = %s", (haystack.queue, haystack.queue))
+                await cur.execute("SELECT pgque.create_queue(%s)", (haystack.queue,))
+                batch = 1000
+                for first in range(0, haystack.jobs, batch):
+                    by_type: dict[str, list[str]] = {"default": [], ALT_KIND: []}
+                    for seq in range(first, min(first + batch, haystack.jobs)):
+                        handle, tenant = haystack.handles(seq)
+                        ev_type = ALT_KIND if haystack.kind_is_alt(seq) else "default"
+                        by_type[ev_type].append(json.dumps({"h": handle, "t": tenant}))
+                    for ev_type, payloads in by_type.items():
+                        if payloads:
+                            await cur.execute(
+                                "SELECT pgque.send_batch(%s, %s, %s::text[])",
+                                (haystack.queue, ev_type, payloads),
+                            )
+        finally:
+            await conn.close()
+        # No probe looks a job up, so only the count needs the haystack.
+        haystack.pairs.append((None, 0))
+        operator.haystack = haystack
+        return {"enqueued": haystack.jobs, "seconds": time.monotonic() - started}
+
+    def pgque_probes(conn_ref: list[psycopg.AsyncConnection], haystack: Haystack) -> list[Probe]:
+        """pgque keeps events in rotating tables with no lookup API: only the
+        count is available, as get_queue_info's ev_new (events since the
+        queue's last tick; the haystack queue is never ticked)."""
+
+        async def count_state(_id, _seq) -> tuple[int, bool]:
+            async with conn_ref[0].cursor() as cur:
+                await cur.execute("SELECT ev_new FROM pgque.get_queue_info(%s)", (haystack.queue,))
+                row = await cur.fetchone()
+            count = int(row["ev_new"])
+            return 1, abs(count - haystack.jobs) <= 0.01 * haystack.jobs
+
+        return [
+            Probe("get_by_id", "unsupported"),
+            Probe("find_handle", "unsupported"),
+            Probe("find_tenant_page", "unsupported"),
+            Probe("kind_state_page", "unsupported"),
+            Probe("count_state", "native", count_state),
+        ]
+
+    async def op_probe(args: dict) -> dict:
+        haystack = operator.haystack
+        if haystack is None:
+            raise RuntimeError("probe before haystack")
+        timeout_ms = int(args.get("timeout_ms", 30_000))
+        probe_conn: list[psycopg.AsyncConnection] = []
+
+        async def open_conn() -> None:
+            if probe_conn:
+                await probe_conn.pop().close()
+            conn = await aconnect()
+            await conn.execute(f"SET statement_timeout = {timeout_ms}")
+            probe_conn.append(conn)
+
+        await open_conn()
+        try:
+            return await run_probes(pgque_probes(probe_conn, haystack), haystack, args, on_timeout=open_conn)
+        finally:
+            for conn in probe_conn:
+                await conn.close()
+
+    def ticker_pause(paused: bool):
+        # Stored on the queue row, so it holds for every consumer and for
+        # processes started later; batches already ticked are still delivered.
+        async def call(args: dict) -> dict:
+            conn = await aconnect()
+            try:
+                async def set_all() -> None:
+                    async with conn.cursor() as cur:
+                        for q in _queue_names():
+                            await cur.execute(
+                                "SELECT pgque.set_queue_config(%s, 'ticker_paused', %s)",
+                                (q, "true" if paused else "false"),
+                            )
+
+                return {"mode": "native", **(await timed(set_all))}
+            finally:
+                await conn.close()
+
+        return call
+
     tasks: list[asyncio.Task[None]] = [
+        asyncio.create_task(
+            operator.run(
+                shutdown,
+                {
+                    "haystack": op_haystack,
+                    "probe": op_probe,
+                    "pause": ticker_pause(True),
+                    "resume": ticker_pause(False),
+                },
+            ),
+            name="operator",
+        ),
         asyncio.create_task(producer(), name="producer"),
         asyncio.create_task(ticker_task(), name="ticker"),
         asyncio.create_task(maint_task(), name="maint"),
