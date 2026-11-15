@@ -10,8 +10,10 @@ import json
 import os
 import platform
 import shutil
+import statistics
 import subprocess
 import sys
+from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -670,6 +672,9 @@ def compute_summary(
             if drain is not None and label in system_block["phases"]:
                 system_block["phases"][label]["drain"] = drain
         run_block = _run_totals(rows, system=system, phases=phases)
+        operator = _operator_summary(rows, system=system, phases=phases)
+        if operator is not None:
+            system_block["operator"] = operator
         abandon = _abandon_summary(rows, system=system, phases=phases)
         if abandon is not None:
             system_block["abandon"] = abandon
@@ -998,6 +1003,119 @@ def _cumulative_after(
     out: list[tuple[float, float]] = []
     for label in labels:
         out.extend(_adapter_series(rows, system=system, phase_label=label, metric=metric))
+    return out
+
+
+def _sample_epoch_ms(row: dict) -> float | None:
+    raw = row.get("sampled_at")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp() * 1000
+    except ValueError:
+        return None
+
+
+def _operator_summary(
+    rows: list[dict], *, system: str, phases: list[Phase]
+) -> dict | None:
+    """Outcome of each `operator` phase, keyed by phase label, plus derived
+    pause/resume timings.
+
+    Each label carries the op name and the `op_*` fields instance 0
+    reported (see hooks.exit_operator; `*_mode` codes are
+    hooks.OPERATOR_MODES). For the first pause and the resume after it:
+
+    - `quiesce_ms`: the last job start any replica reported while paused,
+      minus the moment the pause call returned (0 if none started after it).
+    - `starts_after_pause`: job starts more than 1 s after the pause returned,
+      summed over replicas, including any replica started while paused.
+    - `first_start_ms`: the earliest job start after the resume returned,
+      minus that moment.
+    - `recovery_s`: time from the resume until the fleet's completion rate
+      reached 90% of its median over the clean phase before the pause.
+    """
+    op_phases = [p for p in phases if p.type is PhaseType.OPERATOR]
+    if not op_phases:
+        return None
+    out: dict[str, dict] = {}
+    for phase in op_phases:
+        block: dict = {"op": phase.param("op")}
+        for row in rows:
+            if (
+                row["system"] == system
+                and row.get("subject_kind") == "operator"
+                and row.get("subject") == phase.label
+                and str(row["metric"]).startswith("op_")
+            ):
+                try:
+                    block[row["metric"]] = float(row["value"])
+                except (TypeError, ValueError):
+                    continue
+        out[phase.label] = block
+
+    labels = [p.label for p in phases]
+    pause = next((p for p in op_phases if p.param("op") == "pause"), None)
+    resume = next(
+        (p for p in op_phases if p.param("op") == "resume" and pause and labels.index(p.label) > labels.index(pause.label)),
+        None,
+    )
+
+    def adapter_rows(metric: str, phase_labels: list[str]) -> list[tuple[str, float, float]]:
+        found = []
+        for row in rows:
+            if (
+                row["system"] != system
+                or row["metric"] != metric
+                or row.get("subject_kind") != "adapter"
+                or row["phase_label"] not in phase_labels
+            ):
+                continue
+            at = _sample_epoch_ms(row)
+            try:
+                value = float(row["value"])
+            except (TypeError, ValueError):
+                continue
+            if at is not None:
+                found.append((str(row.get("instance_id") or "0"), at, value))
+        return found
+
+    if pause is not None and "op_done_ms" in out[pause.label]:
+        done = out[pause.label]["op_done_ms"]
+        end = labels.index(resume.label) if resume else len(labels)
+        window = labels[labels.index(pause.label):end]
+        starts = [v for _, _, v in adapter_rows("last_job_start_ms", window) if v > 0]
+        last = max(starts, default=None)
+        # Sum each replica's increments after done + 1 s; a counter that drops
+        # belongs to a restarted process, so its new value is all increment.
+        leaked = 0.0
+        previous: dict[str, float] = {}
+        for iid, at, value in sorted(adapter_rows("job_starts_total", labels[:end]), key=lambda r: (r[0], r[1])):
+            prior = previous.get(iid)
+            if at > done + 1000:
+                leaked += value if prior is None or value < prior else value - prior
+            previous[iid] = value
+        out[pause.label]["quiesce_ms"] = max(0.0, last - done) if last is not None else 0.0
+        out[pause.label]["starts_after_pause"] = leaked
+    if resume is not None and "op_done_ms" in out[resume.label]:
+        done = out[resume.label]["op_done_ms"]
+        later = labels[labels.index(resume.label):]
+        firsts = [v for _, _, v in adapter_rows("first_start_after_op_ms", later) if v > 0]
+        if firsts:
+            out[resume.label]["first_start_ms"] = min(firsts) - done
+        before = labels[: labels.index(pause.label)] if pause else []
+        clean_before = [p.label for p in phases if p.label in before and p.type is PhaseType.CLEAN]
+        def fleet_rate(phase_labels: list[str]) -> list[tuple[float, float]]:
+            ticks: dict[int, float] = defaultdict(float)
+            for _, at, value in adapter_rows("completion_rate", phase_labels):
+                ticks[int(round(at / 1000))] += value
+            return sorted((t * 1000.0, v) for t, v in ticks.items())
+        baseline = statistics.median([v for _, v in fleet_rate(clean_before[-1:])]) if clean_before and fleet_rate(clean_before[-1:]) else None
+        if baseline:
+            recovered = next((at for at, v in fleet_rate(later) if at >= done and v >= 0.9 * baseline), None)
+            if recovered is not None:
+                out[resume.label]["recovery_s"] = (recovered - done) / 1000
+            out[resume.label]["baseline_rate"] = baseline
     return out
 
 

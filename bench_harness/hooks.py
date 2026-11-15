@@ -1280,3 +1280,97 @@ def enter_abandon_kill(runtime: PhaseRuntime) -> None:
         f"[abandon-kill] killed replicas {killed}, restarted after {down_s}s",
         file=sys.stderr,
     )
+
+
+# ─── operator ────────────────────────────────────────────────────────────
+#
+# `operator(op=<name>, k=v, ...)` writes {"id", "op", "args", "issued_ms"} to
+# OPERATOR_CONTROL_FILE. Every replica watches the file (each one counts job
+# starts relative to the latest op); instance 0 performs the op through the
+# system's public API and writes its outcome to OPERATOR_RESULT_FILE as
+# {"<id>": {"done": true, ...}}. The exit hook waits for that outcome (up to
+# `wait`, default 30 min, for ops such as a 1M-job haystack that outlast the
+# phase) and records its numeric fields as `op_*` samples. See
+# docs/operator-scenarios.md for the adapter contract.
+
+OPERATOR_MODES = {"unsupported": 0, "native": 1, "sql": 2, "emulated": 3}
+OPERATOR_OPS = {"haystack", "probe", "pause", "resume"}
+
+
+def operator_command(runtime: PhaseRuntime, *, now_s: float | None = None) -> dict[str, Any]:
+    op = runtime.phase.param("op")
+    if op not in OPERATOR_OPS:
+        raise ValueError(
+            f"phase {runtime.phase.label!r}: op must be one of {sorted(OPERATOR_OPS)}, got {op!r}"
+        )
+    args: dict[str, Any] = {}
+    for key, raw in runtime.phase.params:
+        if key in ("op", "wait"):
+            continue
+        try:
+            args[key] = int(raw)
+        except ValueError:
+            try:
+                args[key] = float(raw)
+            except ValueError:
+                args[key] = raw
+    args.setdefault("duration_s", runtime.phase.duration_s)
+    now_ms = int((time.time() if now_s is None else now_s) * 1000)
+    return {"id": f"{runtime.phase.label}-{now_ms}", "op": op, "args": args, "issued_ms": now_ms}
+
+
+def enter_operator(runtime: PhaseRuntime) -> None:
+    command = operator_command(runtime)
+    runtime.state.setdefault("operator_ops", {})[runtime.phase.label] = command
+    write_control_json(_control_file(runtime, "operator_control_file"), command)
+
+
+def _flatten_operator_result(result: dict[str, Any]) -> dict[str, float]:
+    """Numeric fields as `op_<field>` and per-probe fields as
+    `op_<probe>_<field>`; `mode` strings become OPERATOR_MODES codes."""
+    flat: dict[str, float] = {}
+
+    def put(prefix: str, block: dict[str, Any]) -> None:
+        for key, value in block.items():
+            if key == "mode" and isinstance(value, str):
+                flat[f"{prefix}mode"] = float(OPERATOR_MODES.get(value, -1))
+            elif isinstance(value, bool):
+                flat[f"{prefix}{key}"] = float(value)
+            elif isinstance(value, (int, float)) and math.isfinite(value):
+                flat[f"{prefix}{key}"] = float(value)
+
+    put("op_", {k: v for k, v in result.items() if k != "probes"})
+    for name, block in (result.get("probes") or {}).items():
+        if isinstance(block, dict):
+            put(f"op_{name}_", block)
+    return flat
+
+
+def exit_operator(runtime: PhaseRuntime) -> None:
+    command = (runtime.state.get("operator_ops") or {}).get(runtime.phase.label)
+    path = runtime.state.get("operator_result_file")
+    if not command or not path:
+        return
+    wait_raw = runtime.phase.param("wait")
+    from .phases import parse_duration
+
+    deadline = time.time() + (parse_duration(wait_raw) if wait_raw else 1800)
+    result: dict[str, Any] | None = None
+    while time.time() < deadline:
+        try:
+            outcome = json.loads(Path(path).read_text() or "{}").get(command["id"])
+        except (OSError, json.JSONDecodeError):
+            outcome = None
+        if isinstance(outcome, dict) and outcome.get("done"):
+            result = outcome
+            break
+        time.sleep(0.5)
+    emit = _emit(runtime.state)
+    if result is None:
+        print(f"[operator] {runtime.phase.label}: no result for {command['op']} before the deadline", file=sys.stderr)
+        emit("operator", runtime.phase.label, "op_timeout", 1.0)
+        return
+    print(f"[operator] {runtime.phase.label}: {json.dumps(result, sort_keys=True)[:400]}", file=sys.stderr)
+    emit("operator", runtime.phase.label, "op_issued_ms", float(command["issued_ms"]))
+    for metric, value in _flatten_operator_result(result).items():
+        emit("operator", runtime.phase.label, metric, value)
