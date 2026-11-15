@@ -483,9 +483,11 @@ type LongHorizonWorker struct {
 	river.WorkerDefaults[LongHorizonArgs]
 	state    *longHorizonState
 	controls *scenarioControls
+	operator *operatorState
 }
 
 func (w *LongHorizonWorker) Work(ctx context.Context, job *river.Job[LongHorizonArgs]) error {
+	w.operator.onJobStart()
 	if job.Args.Abandon != 0 {
 		if w.controls.abandonState().Hold {
 			w.controls.holdAbandoned()
@@ -662,8 +664,9 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 
 	padding := payloadPadding(payloadBytes - 32)
 	controls := newScenarioControls()
+	operator := newOperatorState()
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &LongHorizonWorker{state: state, controls: controls})
+	river.AddWorker(workers, &LongHorizonWorker{state: state, controls: controls, operator: operator})
 
 	queues := queueNames(workerCount)
 	perQueueWorkers := maxInt(1, workerCount/len(queues))
@@ -860,6 +863,14 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 		})
 	}()
 
+	// Operator ops (OPERATOR_CONTROL_FILE; instance 0 performs them).
+	var operatorWG sync.WaitGroup
+	operatorWG.Add(1)
+	go func() {
+		defer operatorWG.Done()
+		runOperator(ctx, shutdown, operator, queues)
+	}()
+
 	// Queue-depth poller
 	var depthWG sync.WaitGroup
 	depthWG.Add(1)
@@ -947,6 +958,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 					{"producer_target_rate", targetRate, 0},
 				}
 				metrics = append(metrics, controls.metrics(dt, float64(sampleEveryS))...)
+				metrics = append(metrics, operator.metrics()...)
 				for _, m := range metrics {
 					if _, isObserver := observerMetrics[m.name]; isObserver && !observerEnabled() {
 						continue
@@ -975,6 +987,7 @@ func runLongHorizon(ctx context.Context, pool *pgxpool.Pool, workerCount int) {
 	go func() {
 		producerWG.Wait()
 		herdWG.Wait()
+		operatorWG.Wait()
 		depthWG.Wait()
 		samplerWG.Wait()
 		close(done)
