@@ -1031,7 +1031,7 @@ def _operator_summary(
     - `starts_after_pause`: job starts more than 1 s after the pause returned,
       summed over replicas, including any replica started while paused.
     - `first_start_ms`: the earliest job start after the resume returned,
-      minus that moment.
+      minus that moment, over replicas that started no job while paused.
     - `recovery_s`: time from the resume until the fleet's completion rate
       reached 90% of its median over the clean phase before the pause.
     """
@@ -1080,6 +1080,7 @@ def _operator_summary(
                 found.append((str(row.get("instance_id") or "0"), at, value))
         return found
 
+    leaking_instances: set[str] = set()
     if pause is not None and "op_done_ms" in out[pause.label]:
         done = out[pause.label]["op_done_ms"]
         end = labels.index(resume.label) if resume else len(labels)
@@ -1093,14 +1094,21 @@ def _operator_summary(
         for iid, at, value in sorted(adapter_rows("job_starts_total", labels[:end]), key=lambda r: (r[0], r[1])):
             prior = previous.get(iid)
             if at > done + 1000:
-                leaked += value if prior is None or value < prior else value - prior
+                increment = value if prior is None or value < prior else value - prior
+                leaked += increment
+                if increment > 0:
+                    leaking_instances.add(iid)
             previous[iid] = value
         out[pause.label]["quiesce_ms"] = max(0.0, last - done) if last is not None else 0.0
         out[pause.label]["starts_after_pause"] = leaked
     if resume is not None and "op_done_ms" in out[resume.label]:
         done = out[resume.label]["op_done_ms"]
         later = labels[labels.index(resume.label):]
-        firsts = [v for _, _, v in adapter_rows("first_start_after_op_ms", later) if v > 0]
+        firsts = [
+            v
+            for iid, _, v in adapter_rows("first_start_after_op_ms", later)
+            if v > 0 and iid not in leaking_instances
+        ]
         if firsts:
             out[resume.label]["first_start_ms"] = min(firsts) - done
         before = labels[: labels.index(pause.label)] if pause else []
