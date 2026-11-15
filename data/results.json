@@ -2,8 +2,8 @@
  "run": {
   "id": "2026-11-12-full-sweep",
   "started": "2026-11-11T21:39:13Z",
-  "ended": "2026-11-13T22:14:59Z",
-  "cells": 143,
+  "ended": "2026-11-15T21:36:04Z",
+  "cells": 161,
   "roots": [
    {
     "id": "2026-11-12-full-sweep",
@@ -22,6 +22,18 @@
     "started": "2026-11-13T08:50:42Z",
     "ended": "2026-11-13T22:14:59Z",
     "harness_commit": "50b978ae46d2a81a856abc47d55bf8c7c6c2b43f"
+   },
+   {
+    "id": "2026-11-16-operator",
+    "started": "2026-11-15T19:57:15Z",
+    "ended": "2026-11-15T21:24:28Z",
+    "harness_commit": "728683164e0526c6d0b52e03ec3b9a9a0bdeb0f0"
+   },
+   {
+    "id": "2026-11-16-operator-awa07",
+    "started": "2026-11-15T21:24:28Z",
+    "ended": "2026-11-15T21:36:04Z",
+    "harness_commit": "7ea04c3fecd34c70e80d71a4e54c5b76b737c0de"
    }
   ],
   "host": {
@@ -51,7 +63,7 @@
     "shared_preload_libraries": ""
    }
   },
-  "harness_commit": "50b978ae46d2a81a856abc47d55bf8c7c6c2b43f",
+  "harness_commit": "728683164e0526c6d0b52e03ec3b9a9a0bdeb0f0",
   "versions": {
    "absurd": {
     "library": "absurd-sdk",
@@ -84,12 +96,17 @@
    "river": {
     "library": "github.com/riverqueue/river",
     "version": "v0.51.2"
+   },
+   "awa-v07": {
+    "library": "awa",
+    "version": "0.7.0-alpha.2+git.53e1fc97"
    }
   }
  },
  "systems": [
   "absurd",
   "awa",
+  "awa-v07",
   "oban",
   "pg-boss",
   "pgmq",
@@ -97,6 +114,12 @@
   "procrastinate",
   "river"
  ],
+ "variants": {
+  "awa-v07": {
+   "base": "awa",
+   "label": "Awa 0.7 (unreleased)"
+  }
+ },
  "sections": [
   {
    "id": "saturation",
@@ -2555,6 +2578,569 @@
     ],
     "2026-11-13-rerun": [
      "oban"
+    ]
+   }
+  },
+  {
+   "id": "find",
+   "metrics": [
+    {
+     "key": "haystack_s",
+     "label": "Time to enqueue the haystack",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "get_by_id_p50",
+     "label": "Get by id, p50",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "get_by_id_p99",
+     "label": "Get by id, p99",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "get_by_id_mode",
+     "label": "Get by id: API",
+     "unit": "mode",
+     "better": "higher"
+    },
+    {
+     "key": "get_by_id_correct",
+     "label": "Get by id: correct answers",
+     "unit": "fraction",
+     "better": "higher"
+    },
+    {
+     "key": "find_handle_p50",
+     "label": "Find one job by a unique field, p50",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "find_handle_p99",
+     "label": "Find one job by a unique field, p99",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "find_handle_mode",
+     "label": "Find one job by a unique field: API",
+     "unit": "mode",
+     "better": "higher"
+    },
+    {
+     "key": "find_handle_correct",
+     "label": "Find one job by a unique field: correct answers",
+     "unit": "fraction",
+     "better": "higher"
+    },
+    {
+     "key": "find_tenant_page_p50",
+     "label": "First page for one tenant, p50",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "find_tenant_page_p99",
+     "label": "First page for one tenant, p99",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "find_tenant_page_mode",
+     "label": "First page for one tenant: API",
+     "unit": "mode",
+     "better": "higher"
+    },
+    {
+     "key": "find_tenant_page_correct",
+     "label": "First page for one tenant: correct answers",
+     "unit": "fraction",
+     "better": "higher"
+    },
+    {
+     "key": "kind_state_page_p50",
+     "label": "First page by kind and state, p50",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "kind_state_page_p99",
+     "label": "First page by kind and state, p99",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "kind_state_page_mode",
+     "label": "First page by kind and state: API",
+     "unit": "mode",
+     "better": "higher"
+    },
+    {
+     "key": "kind_state_page_correct",
+     "label": "First page by kind and state: correct answers",
+     "unit": "fraction",
+     "better": "higher"
+    },
+    {
+     "key": "count_state_p50",
+     "label": "Count by state, p50",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "count_state_p99",
+     "label": "Count by state, p99",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "count_state_mode",
+     "label": "Count by state: API",
+     "unit": "mode",
+     "better": "higher"
+    },
+    {
+     "key": "count_state_correct",
+     "label": "Count by state: correct answers",
+     "unit": "fraction",
+     "better": "higher"
+    },
+    {
+     "key": "claim_p99_clean",
+     "label": "Claim p99, ordinary load",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "claim_p99_probe",
+     "label": "Claim p99 while probing",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "jobs_probe",
+     "label": "Jobs/s while probing",
+     "unit": "jobs/s",
+     "better": "higher"
+    }
+   ],
+   "cells": [
+    {
+     "id": "find",
+     "label": null,
+     "values": {
+      "absurd": {
+       "haystack_s": 133.7178,
+       "get_by_id_p50": 0.7571,
+       "get_by_id_p99": 1.218,
+       "get_by_id_mode": 1,
+       "get_by_id_correct": 1,
+       "find_handle_p50": 72.5514,
+       "find_handle_p99": 79.6913,
+       "find_handle_mode": 2,
+       "find_handle_correct": 1,
+       "find_tenant_page_p50": 76.463,
+       "find_tenant_page_p99": 92.6165,
+       "find_tenant_page_mode": 2,
+       "find_tenant_page_correct": 1,
+       "kind_state_page_p50": 107.17,
+       "kind_state_page_p99": 125.9977,
+       "kind_state_page_mode": 2,
+       "kind_state_page_correct": 1,
+       "count_state_p50": 51.4176,
+       "count_state_p99": 57.808,
+       "count_state_mode": 2,
+       "count_state_correct": 1,
+       "claim_p99_clean": 63,
+       "claim_p99_probe": 17,
+       "jobs_probe": 204
+      },
+      "awa": {
+       "haystack_s": 34.6473,
+       "get_by_id_p50": 9.8417,
+       "get_by_id_p99": 102.6785,
+       "get_by_id_mode": 1,
+       "get_by_id_correct": 1,
+       "find_handle_p50": 30000.7375,
+       "find_handle_p99": 30001.2176,
+       "find_handle_mode": 1,
+       "find_handle_correct": 0,
+       "find_tenant_page_p50": 30000.8874,
+       "find_tenant_page_p99": 30001.4448,
+       "find_tenant_page_mode": 1,
+       "find_tenant_page_correct": 0,
+       "kind_state_page_p50": 1413.467,
+       "kind_state_page_p99": 2404.7068,
+       "kind_state_page_mode": 1,
+       "kind_state_page_correct": 1,
+       "count_state_p50": 56.3288,
+       "count_state_p99": 148.8762,
+       "count_state_mode": 1,
+       "count_state_correct": 1,
+       "claim_p99_clean": 44.511,
+       "claim_p99_probe": 13.007,
+       "jobs_probe": 200.9214
+      },
+      "oban": {
+       "haystack_s": 72.749,
+       "get_by_id_p50": 0.361,
+       "get_by_id_p99": 1.125,
+       "get_by_id_mode": 1,
+       "get_by_id_correct": 1,
+       "find_handle_p50": 188.362,
+       "find_handle_p99": 205.62,
+       "find_handle_mode": 1,
+       "find_handle_correct": 1,
+       "find_tenant_page_p50": 14.63,
+       "find_tenant_page_p99": 28.369,
+       "find_tenant_page_mode": 1,
+       "find_tenant_page_correct": 1,
+       "kind_state_page_p50": 2.97,
+       "kind_state_page_p99": 4.1,
+       "kind_state_page_mode": 1,
+       "kind_state_page_correct": 1,
+       "count_state_p50": 119.73,
+       "count_state_p99": 147.053,
+       "count_state_mode": 1,
+       "count_state_correct": 1,
+       "claim_p99_clean": 14,
+       "claim_p99_probe": 13,
+       "jobs_probe": 199.4018
+      },
+      "pg-boss": {
+       "haystack_s": 49.902,
+       "get_by_id_p50": 1,
+       "get_by_id_p99": 2,
+       "get_by_id_mode": 1,
+       "get_by_id_correct": 1,
+       "find_handle_p50": 192,
+       "find_handle_p99": 205,
+       "find_handle_mode": 1,
+       "find_handle_correct": 1,
+       "find_tenant_page_p50": 65,
+       "find_tenant_page_p99": 70,
+       "find_tenant_page_mode": 1,
+       "find_tenant_page_correct": 1,
+       "kind_state_page_p50": 2,
+       "kind_state_page_p99": 3,
+       "kind_state_page_mode": 1,
+       "kind_state_page_correct": 1,
+       "count_state_p50": 1,
+       "count_state_p99": 1,
+       "count_state_mode": 1,
+       "count_state_correct": 1,
+       "claim_p99_clean": 474,
+       "claim_p99_probe": 236,
+       "jobs_probe": 200
+      },
+      "pgmq": {
+       "haystack_s": 13.3283,
+       "get_by_id_p50": 0.3178,
+       "get_by_id_p99": 0.8841,
+       "get_by_id_mode": 2,
+       "get_by_id_correct": 1,
+       "find_handle_p50": 144.2573,
+       "find_handle_p99": 164.4157,
+       "find_handle_mode": 2,
+       "find_handle_correct": 1,
+       "find_tenant_page_p50": 20.3159,
+       "find_tenant_page_p99": 60.1001,
+       "find_tenant_page_mode": 2,
+       "find_tenant_page_correct": 1,
+       "kind_state_page_p50": 0.9153,
+       "kind_state_page_p99": 1.8709,
+       "kind_state_page_mode": 2,
+       "kind_state_page_correct": 1,
+       "count_state_p50": 38.253,
+       "count_state_p99": 48.2354,
+       "count_state_mode": 1,
+       "count_state_correct": 1,
+       "claim_p99_clean": 46,
+       "claim_p99_probe": 43,
+       "jobs_probe": 204
+      },
+      "pgque": {
+       "haystack_s": 11.5218,
+       "get_by_id_mode": 0,
+       "find_handle_mode": 0,
+       "find_tenant_page_mode": 0,
+       "kind_state_page_mode": 0,
+       "count_state_p50": 0.5326,
+       "count_state_p99": 0.9356,
+       "count_state_mode": 1,
+       "count_state_correct": 1,
+       "claim_p99_clean": 107.195,
+       "claim_p99_probe": 106.929,
+       "jobs_probe": 202.9851
+      },
+      "procrastinate": {
+       "haystack_s": 90.6521,
+       "get_by_id_p50": 0.9597,
+       "get_by_id_p99": 1.7246,
+       "get_by_id_mode": 1,
+       "get_by_id_correct": 1,
+       "find_handle_mode": 0,
+       "find_tenant_page_mode": 0,
+       "kind_state_page_p50": 405.1506,
+       "kind_state_page_p99": 433.4449,
+       "kind_state_page_mode": 1,
+       "kind_state_page_correct": 1,
+       "count_state_p50": 431.3721,
+       "count_state_p99": 654.977,
+       "count_state_mode": 1,
+       "count_state_correct": 1,
+       "claim_p99_clean": 90864.0795,
+       "claim_p99_probe": 200306.215,
+       "jobs_probe": 9.9812
+      },
+      "river": {
+       "haystack_s": 29.8005,
+       "get_by_id_p50": 0.273,
+       "get_by_id_p99": 0.85,
+       "get_by_id_mode": 1,
+       "get_by_id_correct": 1,
+       "find_handle_p50": 2.418,
+       "find_handle_p99": 289.637,
+       "find_handle_mode": 1,
+       "find_handle_correct": 1,
+       "find_tenant_page_p50": 13.136,
+       "find_tenant_page_p99": 29.317,
+       "find_tenant_page_mode": 1,
+       "find_tenant_page_correct": 1,
+       "kind_state_page_p50": 2.812,
+       "kind_state_page_p99": 3.995,
+       "kind_state_page_mode": 1,
+       "kind_state_page_correct": 1,
+       "count_state_p50": 125.084,
+       "count_state_p99": 137.843,
+       "count_state_mode": 2,
+       "count_state_correct": 1,
+       "claim_p99_clean": 112,
+       "claim_p99_probe": 52,
+       "jobs_probe": 201.8807
+      },
+      "awa-v07": {
+       "haystack_s": 46.936,
+       "get_by_id_p50": 470.8833,
+       "get_by_id_p99": 551.2675,
+       "get_by_id_mode": 1,
+       "get_by_id_correct": 1,
+       "find_handle_p50": 509.7572,
+       "find_handle_p99": 588.4678,
+       "find_handle_mode": 1,
+       "find_handle_correct": 1,
+       "find_tenant_page_p50": 532.826,
+       "find_tenant_page_p99": 665.1568,
+       "find_tenant_page_mode": 1,
+       "find_tenant_page_correct": 1,
+       "kind_state_page_p50": 720.5556,
+       "kind_state_page_p99": 902.7711,
+       "kind_state_page_mode": 1,
+       "kind_state_page_correct": 1,
+       "count_state_p50": 1038.3045,
+       "count_state_p99": 1185.2966,
+       "count_state_mode": 1,
+       "count_state_correct": 1,
+       "claim_p99_clean": 29.007,
+       "claim_p99_probe": 19.007,
+       "jobs_probe": 200.9246
+      }
+     },
+     "excluded": {},
+     "source": {
+      "absurd": "2026-11-16-operator/find_absurd",
+      "awa": "2026-11-16-operator/find_awa",
+      "oban": "2026-11-16-operator/find_oban",
+      "pg-boss": "2026-11-16-operator/find_pgboss",
+      "pgmq": "2026-11-16-operator/find_pgmq",
+      "pgque": "2026-11-16-operator/find_pgque",
+      "procrastinate": "2026-11-16-operator/find_procrastinate",
+      "river": "2026-11-16-operator/find_river",
+      "awa-v07": "2026-11-16-operator-awa07/find_awa"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-16-operator": [
+     "absurd",
+     "awa",
+     "oban",
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-16-operator-awa07": [
+     "awa-v07"
+    ]
+   }
+  },
+  {
+   "id": "pause",
+   "metrics": [
+    {
+     "key": "pause_mode",
+     "label": "Pause: API",
+     "unit": "mode",
+     "better": "higher"
+    },
+    {
+     "key": "pause_api_ms",
+     "label": "Pause call",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "quiesce_ms",
+     "label": "Last job start after the pause",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "starts_after_pause",
+     "label": "Jobs started while paused (incl. a restarted process)",
+     "unit": "jobs",
+     "better": "lower"
+    },
+    {
+     "key": "resume_api_ms",
+     "label": "Resume call",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "first_start_ms",
+     "label": "First job start after the resume",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "recovery_s",
+     "label": "Back to 90% of the earlier rate",
+     "unit": "s",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "pause",
+     "label": null,
+     "values": {
+      "absurd": {
+       "pause_mode": 3,
+       "pause_api_ms": 0,
+       "quiesce_ms": 55480,
+       "starts_after_pause": 11584,
+       "resume_api_ms": 0,
+       "first_start_ms": 23,
+       "recovery_s": 0.393
+      },
+      "awa": {
+       "pause_mode": 1,
+       "pause_api_ms": 1.9703,
+       "quiesce_ms": 0,
+       "starts_after_pause": 0,
+       "resume_api_ms": 1.4383,
+       "first_start_ms": 28,
+       "recovery_s": 0.611
+      },
+      "oban": {
+       "pause_mode": 1,
+       "pause_api_ms": 0.424,
+       "quiesce_ms": 58015,
+       "starts_after_pause": 21435,
+       "resume_api_ms": 0.362,
+       "first_start_ms": 16,
+       "recovery_s": 0.174
+      },
+      "pg-boss": {
+       "pause_mode": 3,
+       "pause_api_ms": 0,
+       "quiesce_ms": 54882,
+       "starts_after_pause": 7680,
+       "resume_api_ms": 0,
+       "first_start_ms": 3,
+       "recovery_s": 0.71
+      },
+      "pgmq": {
+       "pause_mode": 3,
+       "pause_api_ms": 0,
+       "quiesce_ms": 55492,
+       "starts_after_pause": 21014,
+       "resume_api_ms": 0,
+       "first_start_ms": 53,
+       "recovery_s": 0.22
+      },
+      "pgque": {
+       "pause_mode": 1,
+       "pause_api_ms": 3.9314,
+       "quiesce_ms": 0,
+       "starts_after_pause": 0,
+       "resume_api_ms": 3.7901,
+       "first_start_ms": 153,
+       "recovery_s": 1.02
+      },
+      "procrastinate": {
+       "pause_mode": 3,
+       "pause_api_ms": 131.7971,
+       "quiesce_ms": 55008,
+       "starts_after_pause": 16203,
+       "resume_api_ms": 0.0048,
+       "first_start_ms": 8,
+       "recovery_s": 0.066
+      },
+      "river": {
+       "pause_mode": 1,
+       "pause_api_ms": 9.454,
+       "quiesce_ms": 0,
+       "starts_after_pause": 0,
+       "resume_api_ms": 1.409,
+       "first_start_ms": 28,
+       "recovery_s": 0.777
+      },
+      "awa-v07": {
+       "pause_mode": 1,
+       "pause_api_ms": 2.2907,
+       "quiesce_ms": 0,
+       "starts_after_pause": 0,
+       "resume_api_ms": 1.9025,
+       "first_start_ms": 37,
+       "recovery_s": 1.312
+      }
+     },
+     "excluded": {},
+     "source": {
+      "absurd": "2026-11-16-operator/pause_absurd",
+      "awa": "2026-11-16-operator/pause_awa",
+      "oban": "2026-11-16-operator/pause_oban",
+      "pg-boss": "2026-11-16-operator/pause_pgboss",
+      "pgmq": "2026-11-16-operator/pause_pgmq",
+      "pgque": "2026-11-16-operator/pause_pgque",
+      "procrastinate": "2026-11-16-operator/pause_procrastinate",
+      "river": "2026-11-16-operator/pause_river",
+      "awa-v07": "2026-11-16-operator-awa07/pause_awa"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-16-operator": [
+     "absurd",
+     "awa",
+     "oban",
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-16-operator-awa07": [
+     "awa-v07"
     ]
    }
   },
