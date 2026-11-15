@@ -166,12 +166,15 @@ class Phase:
     def rate_override(self, replicas: int = 1) -> float | None:
         """Per-replica producer rate this phase pins, or None for the base.
 
-        `rate=N` is a per-replica jobs/s value usable on any phase type.
+        `rate=N` is a per-replica jobs/s value usable on any phase type
+        except `operator`, where it is the probe rate.
         `preload(jobs=N)` spreads N jobs evenly over the phase across all
         replicas; `drain` always stops the producer.
         """
         if self.type is PhaseType.DRAIN:
             return 0.0
+        if self.type is PhaseType.OPERATOR:
+            return None
         if self.type is PhaseType.PRELOAD:
             jobs = self.int_param("jobs", 0)
             if jobs <= 0:
