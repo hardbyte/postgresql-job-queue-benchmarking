@@ -8,7 +8,7 @@
 //!
 //! The probes use awa's public admin API. The default build targets 0.6
 //! (`get_job`, `list_jobs`, `queue_overview`); the `awa07` feature targets
-//! 0.7 (`get_job`, `find_jobs`, `count_jobs`, and the tag-index build after
+//! 0.7 (`get_job`, `find_jobs`, `queue_overview`, and the tag-index build after
 //! the haystack).
 
 use awa_model::{admin, insert_many_copy_from_pool, AwaError, InsertOpts, InsertParams, JobRow};
@@ -602,8 +602,8 @@ mod api {
 }
 
 /// awa 0.7 (ADR-049): `find_jobs`/`count_jobs` over a `JobFilter`, served by
-/// the per-partition tag GIN index. `count_jobs` is exact up to
-/// `COUNT_CAP` (10,000) and reports more as `AtLeast(10_000)`.
+/// the per-partition tag GIN index. (`count_jobs` is exact only up to
+/// `COUNT_CAP` (10,000), so counts use `queue_overview`.)
 #[cfg(feature = "awa07")]
 mod api {
     use awa_model::tag_index::{build_tag_indexes, BuildMode};
@@ -633,9 +633,12 @@ mod api {
         admin::find_jobs(pool, &filter, JobPage::first(limit)).await
     }
 
+    /// An exact per-queue count comes from `queue_overview`, as on 0.6;
+    /// `count_jobs` stops at 10,000 by design and reports "10,000+".
     pub async fn count_available(pool: &PgPool, queue: &str) -> Result<i64, AwaError> {
-        let filter = JobFilter::new().queue(queue).state(JobState::Available);
-        Ok(admin::count_jobs(pool, &filter).await?.value())
+        Ok(admin::queue_overview(pool, queue)
+            .await?
+            .map_or(0, |overview| overview.available))
     }
 
     /// The operator step `awa storage build-tag-index` (one pass), as its
