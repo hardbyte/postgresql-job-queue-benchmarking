@@ -13,5 +13,14 @@
     "retryable": "SELECT count(*) FROM absurd.t_long_horizon_bench WHERE state IN ('pending', 'running') AND attempts > 1",
     "dead": "SELECT count(*) FROM absurd.t_long_horizon_bench WHERE state = 'failed'",
     "running": "SELECT count(*) FROM absurd.t_long_horizon_bench WHERE state = 'running'"
-  }
+  },
+  "operator_capabilities": {
+    "get_by_id": "native",
+    "find_handle": "sql",
+    "find_tenant_page": "sql",
+    "kind_state_page": "sql",
+    "count_state": "sql",
+    "pause": "emulated"
+  },
+  "operator_notes": "get_by_id: AsyncAbsurd.fetch_task_result (state only, so the handle is not checked); filters: the absurdctl list-tasks SELECT plus params @>; count: SQL on t_<queue>; pause: stop_worker/start_worker per replica"
 }
