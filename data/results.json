@@ -1,0 +1,8769 @@
+{
+ "run": {
+  "id": "2026-11-12-full-sweep",
+  "started": "2026-11-11T21:39:13Z",
+  "ended": "2026-11-13T22:14:59Z",
+  "cells": 143,
+  "roots": [
+   {
+    "id": "2026-11-12-full-sweep",
+    "started": "2026-11-11T21:39:13Z",
+    "ended": "2026-11-13T04:11:02Z",
+    "harness_commit": "62f22cd2084dc334168f4c1630b72a74defbb967"
+   },
+   {
+    "id": "2026-11-13-rerun",
+    "started": "2026-11-13T04:14:47Z",
+    "ended": "2026-11-13T08:50:24Z",
+    "harness_commit": "1964ee5be1917d91e5e85204198e1a34df3d1a7b"
+   },
+   {
+    "id": "2026-11-13-followup",
+    "started": "2026-11-13T08:50:42Z",
+    "ended": "2026-11-13T22:14:59Z",
+    "harness_commit": "50b978ae46d2a81a856abc47d55bf8c7c6c2b43f"
+   }
+  ],
+  "host": {
+   "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+   "threads": 24,
+   "memory_gb": 61,
+   "kernel": "7.0.0-43-generic",
+   "docker": "Docker version 26.1.4, build 5650f9b"
+  },
+  "postgres": {
+   "version": "PostgreSQL 18.6",
+   "image": "postgres:18.6-alpine",
+   "cpus": 4,
+   "settings": {
+    "shared_buffers": "256MB",
+    "work_mem": "8MB",
+    "maintenance_work_mem": "128MB",
+    "autovacuum": "on",
+    "autovacuum_naptime": "1min",
+    "autovacuum_vacuum_cost_delay": "2ms",
+    "autovacuum_vacuum_cost_limit": "200",
+    "autovacuum_vacuum_scale_factor": "0.2",
+    "autovacuum_analyze_scale_factor": "0.1",
+    "max_connections": "400",
+    "synchronous_commit": "on",
+    "wal_level": "replica",
+    "shared_preload_libraries": ""
+   }
+  },
+  "harness_commit": "50b978ae46d2a81a856abc47d55bf8c7c6c2b43f",
+  "versions": {
+   "absurd": {
+    "library": "absurd-sdk",
+    "version": "0.5.1"
+   },
+   "awa": {
+    "library": "awa",
+    "version": "0.6.17+git.1a53fd9e"
+   },
+   "oban": {
+    "library": "oban",
+    "version": "2.24.2"
+   },
+   "pg-boss": {
+    "library": "pg-boss",
+    "version": "12.38.2"
+   },
+   "pgmq": {
+    "library": "pgmq extension",
+    "version": "v1.13.1"
+   },
+   "pgque": {
+    "library": "pgque",
+    "version": "v0.3.0-alpha.1-30-g8e3064c"
+   },
+   "procrastinate": {
+    "library": "procrastinate",
+    "version": "3.11.0"
+   },
+   "river": {
+    "library": "github.com/riverqueue/river",
+    "version": "v0.51.2"
+   }
+  }
+ },
+ "systems": [
+  "absurd",
+  "awa",
+  "oban",
+  "pg-boss",
+  "pgmq",
+  "pgque",
+  "procrastinate",
+  "river"
+ ],
+ "sections": [
+  {
+   "id": "saturation",
+   "metrics": [
+    {
+     "key": "jobs_per_s",
+     "label": "Completed jobs/s",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "peak_dead_tup",
+     "label": "Peak dead tuples",
+     "unit": "tuples",
+     "better": "lower"
+    },
+    {
+     "key": "wal_per_job",
+     "label": "WAL per job",
+     "unit": "bytes",
+     "better": "lower"
+    },
+    {
+     "key": "pg_cores",
+     "label": "Postgres CPU",
+     "unit": "cores",
+     "better": "lower"
+    },
+    {
+     "key": "worker_cores",
+     "label": "Worker CPU",
+     "unit": "cores",
+     "better": "lower"
+    },
+    {
+     "key": "pg_mem",
+     "label": "Postgres private memory, peak",
+     "unit": "MB",
+     "better": "lower"
+    },
+    {
+     "key": "worker_mem",
+     "label": "Worker memory, peak",
+     "unit": "MB",
+     "better": "lower"
+    },
+    {
+     "key": "aas",
+     "label": "Database load (active sessions)",
+     "unit": "sessions",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "sat_w4",
+     "label": "4 workers",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 3494.4,
+       "peak_dead_tup": 447939,
+       "wal_per_job": 1702.2848,
+       "pg_cores": 0.295,
+       "worker_cores": 0.127,
+       "pg_mem": 27.6875,
+       "worker_mem": 43.3047,
+       "aas": 0.5067
+      },
+      "pgque": {
+       "jobs_per_s": 3214.5484,
+       "peak_dead_tup": 438,
+       "wal_per_job": 427.7399,
+       "pg_cores": 0.0576,
+       "worker_cores": 0.1362,
+       "pg_mem": 28.0508,
+       "worker_mem": 55.8398,
+       "aas": 0.0467
+      },
+      "awa": {
+       "jobs_per_s": 487.7594,
+       "peak_dead_tup": 355,
+       "wal_per_job": 2368.7116,
+       "pg_cores": 1.3362,
+       "worker_cores": 0.1515,
+       "pg_mem": 296.9375,
+       "worker_mem": 11.5078,
+       "aas": 1.4667
+      },
+      "absurd": {
+       "jobs_per_s": 274,
+       "peak_dead_tup": 239,
+       "wal_per_job": 2251.6015,
+       "pg_cores": 0.8233,
+       "worker_cores": 0.1343,
+       "pg_mem": 18.5898,
+       "worker_mem": 44.8438,
+       "aas": 0.9733
+      },
+      "oban": {
+       "jobs_per_s": 384.5693,
+       "peak_dead_tup": 46155,
+       "wal_per_job": 4302.7352,
+       "pg_cores": 0.2224,
+       "worker_cores": 0.3563,
+       "pg_mem": 45.8477,
+       "worker_mem": 2125.4492,
+       "aas": 0.68
+      },
+      "pg-boss": {
+       "jobs_per_s": 512,
+       "peak_dead_tup": 58316,
+       "wal_per_job": 2545.0357,
+       "pg_cores": 0.4809,
+       "worker_cores": 0.0788,
+       "pg_mem": 25.0195,
+       "worker_mem": 64.9609,
+       "aas": 0.4467
+      },
+      "procrastinate": {
+       "jobs_per_s": 473.7471,
+       "peak_dead_tup": 49675,
+       "wal_per_job": 2473.4392,
+       "pg_cores": 0.7793,
+       "worker_cores": 0.6989,
+       "pg_mem": 29.3438,
+       "worker_mem": 40.3867,
+       "aas": 1.86
+      },
+      "river": {
+       "jobs_per_s": 79.1975,
+       "peak_dead_tup": 9500,
+       "wal_per_job": 3702.1876,
+       "pg_cores": 0.0457,
+       "worker_cores": 0.0201,
+       "pg_mem": 24.5156,
+       "worker_mem": 10.2734,
+       "aas": 0.0667
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/sat_w4_pgmq",
+      "pgque": "2026-11-13-followup/sat_w4_pgque",
+      "awa": "2026-11-13-followup/sat_w4_shared",
+      "absurd": "2026-11-13-followup/sat_w4_shared",
+      "oban": "2026-11-13-followup/sat_w4_shared",
+      "pg-boss": "2026-11-13-followup/sat_w4_shared",
+      "procrastinate": "2026-11-13-followup/sat_w4_shared",
+      "river": "2026-11-13-followup/sat_w4_shared"
+     }
+    },
+    {
+     "id": "sat_w16",
+     "label": "16 workers",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 12012.8,
+       "peak_dead_tup": 2143975,
+       "wal_per_job": 2052.646,
+       "pg_cores": 1.7298,
+       "worker_cores": 0.3249,
+       "pg_mem": 67.5039,
+       "worker_mem": 45.293,
+       "aas": 3.0533
+      },
+      "pgque": {
+       "jobs_per_s": 9750.645,
+       "peak_dead_tup": 725,
+       "wal_per_job": 431.8007,
+       "pg_cores": 0.1185,
+       "worker_cores": 0.3212,
+       "pg_mem": 30.625,
+       "worker_mem": 55.5508,
+       "aas": 0.16
+      },
+      "awa": {
+       "jobs_per_s": 1716.8881,
+       "peak_dead_tup": 353,
+       "wal_per_job": 1703.536,
+       "pg_cores": 1.4417,
+       "worker_cores": 0.2022,
+       "pg_mem": 344.5742,
+       "worker_mem": 20.9922,
+       "aas": 1.4667
+      },
+      "absurd": {
+       "jobs_per_s": 440,
+       "peak_dead_tup": 11606,
+       "wal_per_job": 2346.0468,
+       "pg_cores": 0.7375,
+       "worker_cores": 0.1955,
+       "pg_mem": 19.4141,
+       "worker_mem": 44.832,
+       "aas": 0.8733
+      },
+      "oban": {
+       "jobs_per_s": 1312.3192,
+       "peak_dead_tup": 153851,
+       "wal_per_job": 4749.6084,
+       "pg_cores": 0.5757,
+       "worker_cores": 1.3624,
+       "pg_mem": 76.3633,
+       "worker_mem": 2159.8125,
+       "aas": 1
+      },
+      "pg-boss": {
+       "jobs_per_s": 2048,
+       "peak_dead_tup": 243272,
+       "wal_per_job": 2769.5622,
+       "pg_cores": 1.9473,
+       "worker_cores": 0.3167,
+       "pg_mem": 47.8594,
+       "worker_mem": 92.1094,
+       "aas": 2.1133
+      },
+      "procrastinate": {
+       "jobs_per_s": 454.3267,
+       "peak_dead_tup": 54203,
+       "wal_per_job": 2475.5741,
+       "pg_cores": 0.8086,
+       "worker_cores": 0.6955,
+       "pg_mem": 29.5664,
+       "worker_mem": 40.3711,
+       "aas": 1.7467
+      },
+      "river": {
+       "jobs_per_s": 316.7938,
+       "peak_dead_tup": 37600,
+       "wal_per_job": 3772.0811,
+       "pg_cores": 0.0636,
+       "worker_cores": 0.0346,
+       "pg_mem": 21.7383,
+       "worker_mem": 14.2578,
+       "aas": 0.0533
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/sat_w16_pgmq",
+      "pgque": "2026-11-13-followup/sat_w16_pgque",
+      "awa": "2026-11-13-followup/sat_w16_shared",
+      "absurd": "2026-11-13-followup/sat_w16_shared",
+      "oban": "2026-11-13-followup/sat_w16_shared",
+      "pg-boss": "2026-11-13-followup/sat_w16_shared",
+      "procrastinate": "2026-11-13-followup/sat_w16_shared",
+      "river": "2026-11-13-followup/sat_w16_shared"
+     }
+    },
+    {
+     "id": "sat_w64",
+     "label": "64 workers",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 5378.5,
+       "peak_dead_tup": 866781,
+       "wal_per_job": 2014.9152,
+       "pg_cores": 3.9416,
+       "worker_cores": 0.272,
+       "pg_mem": 200.0039,
+       "worker_mem": 50.2305,
+       "aas": 41.5733
+      },
+      "pgque": {
+       "jobs_per_s": 18906.8619,
+       "peak_dead_tup": 1138,
+       "wal_per_job": 435.5154,
+       "pg_cores": 0.208,
+       "worker_cores": 0.6227,
+       "pg_mem": 30.8398,
+       "worker_mem": 55.5586,
+       "aas": 0.2467
+      },
+      "awa": {
+       "jobs_per_s": 5688.583,
+       "peak_dead_tup": 585,
+       "wal_per_job": 1523.7269,
+       "pg_cores": 1.5716,
+       "worker_cores": 0.373,
+       "pg_mem": 329.4062,
+       "worker_mem": 63.7383,
+       "aas": 1.9933
+      },
+      "absurd": {
+       "jobs_per_s": 577.8,
+       "peak_dead_tup": 33967,
+       "wal_per_job": 2470.4346,
+       "pg_cores": 0.6629,
+       "worker_cores": 0.2454,
+       "pg_mem": 18.5547,
+       "worker_mem": 45.1211,
+       "aas": 0.7933
+      },
+      "oban": {
+       "jobs_per_s": 3992.7496,
+       "peak_dead_tup": 557559,
+       "wal_per_job": 5399.0698,
+       "pg_cores": 1.5509,
+       "worker_cores": 4.1307,
+       "pg_mem": 257.9258,
+       "worker_mem": 2199.5078,
+       "aas": 11.0267
+      },
+      "pg-boss": {
+       "jobs_per_s": 2247.7,
+       "peak_dead_tup": 464236,
+       "wal_per_job": 3129.6864,
+       "pg_cores": 2.8907,
+       "worker_cores": 0.3482,
+       "pg_mem": 104.2109,
+       "worker_mem": 200.5156,
+       "aas": 2.7748
+      },
+      "procrastinate": {
+       "jobs_per_s": 459.063,
+       "peak_dead_tup": 54569,
+       "wal_per_job": 2465.2833,
+       "pg_cores": 0.8181,
+       "worker_cores": 0.7045,
+       "pg_mem": 32.5742,
+       "worker_mem": 40.3672,
+       "aas": 1.96
+      },
+      "river": {
+       "jobs_per_s": 1267.0619,
+       "peak_dead_tup": 147969,
+       "wal_per_job": 4051.6608,
+       "pg_cores": 0.1332,
+       "worker_cores": 0.0926,
+       "pg_mem": 24.9609,
+       "worker_mem": 16.1875,
+       "aas": 0.2267
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/sat_w64_pgmq",
+      "pgque": "2026-11-13-followup/sat_w64_pgque",
+      "awa": "2026-11-13-followup/sat_w64_shared",
+      "absurd": "2026-11-13-followup/sat_w64_shared",
+      "oban": "2026-11-13-followup/sat_w64_shared",
+      "pg-boss": "2026-11-13-followup/sat_w64_shared",
+      "procrastinate": "2026-11-13-followup/sat_w64_shared",
+      "river": "2026-11-13-followup/sat_w64_shared"
+     }
+    },
+    {
+     "id": "sat_w128",
+     "label": "128 workers",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 3678.4,
+       "peak_dead_tup": 594649,
+       "wal_per_job": 1967.1223,
+       "pg_cores": 3.9964,
+       "worker_cores": 0.2719,
+       "pg_mem": 344.668,
+       "worker_mem": 52.4062,
+       "aas": 73.0733
+      },
+      "pgque": {
+       "jobs_per_s": 23320.9995,
+       "peak_dead_tup": 1308,
+       "wal_per_job": 434.432,
+       "pg_cores": 0.2486,
+       "worker_cores": 0.7569,
+       "pg_mem": 30.3945,
+       "worker_mem": 55.5938,
+       "aas": 0.3267
+      },
+      "awa": {
+       "jobs_per_s": 8572.7627,
+       "peak_dead_tup": 570,
+       "wal_per_job": 1512.5328,
+       "pg_cores": 1.6388,
+       "worker_cores": 0.5025,
+       "pg_mem": 331.9453,
+       "worker_mem": 69.3242,
+       "aas": 1.7
+      },
+      "absurd": {
+       "jobs_per_s": 614.4,
+       "peak_dead_tup": 32479,
+       "wal_per_job": 2521.4195,
+       "pg_cores": 0.6261,
+       "worker_cores": 0.2562,
+       "pg_mem": 18.4023,
+       "worker_mem": 45.4961,
+       "aas": 0.8067
+      },
+      "oban": {
+       "jobs_per_s": 5418.3636,
+       "peak_dead_tup": 910516,
+       "wal_per_job": 5580.143,
+       "pg_cores": 2.3317,
+       "worker_cores": 6.7043,
+       "pg_mem": 432.3867,
+       "worker_mem": 2228.0078,
+       "aas": 12.8609
+      },
+      "pg-boss": {
+       "jobs_per_s": 2240,
+       "peak_dead_tup": 471434,
+       "wal_per_job": 3149.6262,
+       "pg_cores": 2.9968,
+       "worker_cores": 0.3571,
+       "pg_mem": 128.3984,
+       "worker_mem": 187.5156,
+       "aas": 2.8867
+      },
+      "procrastinate": {
+       "jobs_per_s": 450.7802,
+       "peak_dead_tup": 52611,
+       "wal_per_job": 2464.4235,
+       "pg_cores": 0.7563,
+       "worker_cores": 0.6719,
+       "pg_mem": 33.9453,
+       "worker_mem": 40.3828,
+       "aas": 2.06
+      },
+      "river": {
+       "jobs_per_s": 2509.034,
+       "peak_dead_tup": 324958,
+       "wal_per_job": 4276.7847,
+       "pg_cores": 0.2305,
+       "worker_cores": 0.1764,
+       "pg_mem": 27.8633,
+       "worker_mem": 17.9414,
+       "aas": 0.3067
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/sat_w128_pgmq",
+      "pgque": "2026-11-13-followup/sat_w128_pgque",
+      "awa": "2026-11-13-followup/sat_w128_shared",
+      "absurd": "2026-11-13-followup/sat_w128_shared",
+      "oban": "2026-11-13-followup/sat_w128_shared",
+      "pg-boss": "2026-11-13-followup/sat_w128_shared",
+      "procrastinate": "2026-11-13-followup/sat_w128_shared",
+      "river": "2026-11-13-followup/sat_w128_shared"
+     }
+    },
+    {
+     "id": "sat_tuned",
+     "label": "Tuned, 1 queue",
+     "values": {
+      "absurd": {
+       "jobs_per_s": 1382.4,
+       "peak_dead_tup": 92160,
+       "wal_per_job": 2641.4893,
+       "pg_cores": 2.6924,
+       "worker_cores": 0.6421,
+       "pg_mem": 43.8789,
+       "worker_mem": 172.5547,
+       "aas": 3.86
+      },
+      "awa": {
+       "jobs_per_s": 8550.0356,
+       "peak_dead_tup": 548,
+       "wal_per_job": 1541.3152,
+       "pg_cores": 1.5692,
+       "worker_cores": 0.5079,
+       "pg_mem": 353.3828,
+       "worker_mem": 71.8008,
+       "aas": 1.96
+      },
+      "oban": {
+       "jobs_per_s": 5672.5372,
+       "peak_dead_tup": 1045237,
+       "wal_per_job": 6446.8143,
+       "pg_cores": 3.7802,
+       "worker_cores": 6.2047,
+       "pg_mem": 417.875,
+       "worker_mem": 8653.8125,
+       "aas": 23.2583
+      },
+      "pg-boss": {
+       "jobs_per_s": 3494.6,
+       "peak_dead_tup": 639069,
+       "wal_per_job": 3787.1412,
+       "pg_cores": 3.9361,
+       "worker_cores": 0.7669,
+       "pg_mem": 376.7695,
+       "worker_mem": 339.9336,
+       "aas": 38.3245
+      },
+      "pgmq": {
+       "jobs_per_s": 7387.9,
+       "peak_dead_tup": 1551084,
+       "wal_per_job": 1346.3302,
+       "pg_cores": 3.9998,
+       "worker_cores": 0.3928,
+       "pg_mem": 343.2773,
+       "worker_mem": 176.6094,
+       "aas": 104.4172
+      },
+      "pgque": {
+       "jobs_per_s": 47281.6887,
+       "peak_dead_tup": 6342,
+       "wal_per_job": 442.8172,
+       "pg_cores": 1.0893,
+       "worker_cores": 1.9019,
+       "pg_mem": 215.9727,
+       "worker_mem": 259.8633,
+       "aas": 5.3933
+      },
+      "procrastinate": {
+       "jobs_per_s": 1472.1283,
+       "peak_dead_tup": 172468,
+       "wal_per_job": 2470.1666,
+       "pg_cores": 2.2295,
+       "worker_cores": 2.0234,
+       "pg_mem": 76.4453,
+       "worker_mem": 162.3828,
+       "aas": 5.3867
+      },
+      "river": {
+       "jobs_per_s": 8113.4877,
+       "peak_dead_tup": 1514412,
+       "wal_per_job": 4701.5545,
+       "pg_cores": 1.0526,
+       "worker_cores": 0.5177,
+       "pg_mem": 45.9492,
+       "worker_mem": 19.9297,
+       "aas": 1.702
+      }
+     },
+     "excluded": {},
+     "source": {
+      "absurd": "2026-11-13-followup/sat_tuned_absurd",
+      "awa": "2026-11-13-followup/sat_tuned_awa",
+      "oban": "2026-11-13-followup/sat_tuned_oban",
+      "pg-boss": "2026-11-13-followup/sat_tuned_pgboss",
+      "pgmq": "2026-11-13-followup/sat_tuned_pgmq",
+      "pgque": "2026-11-13-followup/sat_tuned_pgque",
+      "procrastinate": "2026-11-13-followup/sat_tuned_procrastinate",
+      "river": "2026-11-13-followup/sat_tuned_river"
+     }
+    },
+    {
+     "id": "sat_tuned_k4",
+     "label": "Tuned, 4 queues",
+     "values": {
+      "absurd": {
+       "jobs_per_s": 1625,
+       "peak_dead_tup": 40780,
+       "wal_per_job": 3211.9485,
+       "pg_cores": 3.993,
+       "worker_cores": 0.9453,
+       "pg_mem": 102.5039,
+       "worker_mem": 172.9531,
+       "aas": 12.5467
+      },
+      "awa": {
+       "jobs_per_s": 10762.1562,
+       "peak_dead_tup": 708,
+       "wal_per_job": 1618.8831,
+       "pg_cores": 3.9572,
+       "worker_cores": 0.8336,
+       "pg_mem": 456.1289,
+       "worker_mem": 76.9531,
+       "aas": 5.0133
+      },
+      "river": {
+       "jobs_per_s": 10905.0835,
+       "peak_dead_tup": 2195052,
+       "wal_per_job": 5251.3902,
+       "pg_cores": 2.1645,
+       "worker_cores": 0.7432,
+       "pg_mem": 55.0859,
+       "worker_mem": 22.082,
+       "aas": 4.4106
+      }
+     },
+     "excluded": {},
+     "source": {
+      "absurd": "2026-11-13-followup/sat_tuned_k4_absurd",
+      "awa": "2026-11-13-followup/sat_tuned_k4_awa",
+      "river": "2026-11-13-followup/sat_tuned_k4_river"
+     }
+    },
+    {
+     "id": "sat_tuned_k16",
+     "label": "Tuned, 16 queues",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 5709.6,
+       "peak_dead_tup": 61712,
+       "wal_per_job": 1331.4332,
+       "pg_cores": 4.0008,
+       "worker_cores": 0.8836,
+       "pg_mem": 381.8945,
+       "worker_mem": 176.7461,
+       "aas": 69.8543
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/sat_tuned_k16_pgmq"
+     }
+    },
+    {
+     "id": "sat_best",
+     "label": "Best measured configuration",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 12012.8,
+       "peak_dead_tup": 2143975,
+       "wal_per_job": 2052.646,
+       "pg_cores": 1.7298,
+       "worker_cores": 0.3249,
+       "pg_mem": 67.5039,
+       "worker_mem": 45.293,
+       "aas": 3.0533,
+       "config": "16 workers, 1 process"
+      },
+      "pgque": {
+       "jobs_per_s": 47281.6887,
+       "peak_dead_tup": 6342,
+       "wal_per_job": 442.8172,
+       "pg_cores": 1.0893,
+       "worker_cores": 1.9019,
+       "pg_mem": 215.9727,
+       "worker_mem": 259.8633,
+       "aas": 5.3933,
+       "config": "tuned, 1 queue"
+      },
+      "awa": {
+       "jobs_per_s": 10762.1562,
+       "peak_dead_tup": 708,
+       "wal_per_job": 1618.8831,
+       "pg_cores": 3.9572,
+       "worker_cores": 0.8336,
+       "pg_mem": 456.1289,
+       "worker_mem": 76.9531,
+       "aas": 5.0133,
+       "config": "tuned, 4 queues"
+      },
+      "absurd": {
+       "jobs_per_s": 1625,
+       "peak_dead_tup": 40780,
+       "wal_per_job": 3211.9485,
+       "pg_cores": 3.993,
+       "worker_cores": 0.9453,
+       "pg_mem": 102.5039,
+       "worker_mem": 172.9531,
+       "aas": 12.5467,
+       "config": "tuned, 4 queues"
+      },
+      "oban": {
+       "jobs_per_s": 5672.5372,
+       "peak_dead_tup": 1045237,
+       "wal_per_job": 6446.8143,
+       "pg_cores": 3.7802,
+       "worker_cores": 6.2047,
+       "pg_mem": 417.875,
+       "worker_mem": 8653.8125,
+       "aas": 23.2583,
+       "config": "tuned, 1 queue"
+      },
+      "pg-boss": {
+       "jobs_per_s": 3494.6,
+       "peak_dead_tup": 639069,
+       "wal_per_job": 3787.1412,
+       "pg_cores": 3.9361,
+       "worker_cores": 0.7669,
+       "pg_mem": 376.7695,
+       "worker_mem": 339.9336,
+       "aas": 38.3245,
+       "config": "tuned, 1 queue"
+      },
+      "procrastinate": {
+       "jobs_per_s": 1472.1283,
+       "peak_dead_tup": 172468,
+       "wal_per_job": 2470.1666,
+       "pg_cores": 2.2295,
+       "worker_cores": 2.0234,
+       "pg_mem": 76.4453,
+       "worker_mem": 162.3828,
+       "aas": 5.3867,
+       "config": "tuned, 1 queue"
+      },
+      "river": {
+       "jobs_per_s": 10905.0835,
+       "peak_dead_tup": 2195052,
+       "wal_per_job": 5251.3902,
+       "pg_cores": 2.1645,
+       "worker_cores": 0.7432,
+       "pg_mem": 55.0859,
+       "worker_mem": 22.082,
+       "aas": 4.4106,
+       "config": "tuned, 4 queues"
+      }
+     },
+     "source": {
+      "pgmq": "2026-11-13-followup/sat_w16_pgmq",
+      "pgque": "2026-11-13-followup/sat_tuned_pgque",
+      "awa": "2026-11-13-followup/sat_tuned_k4_awa",
+      "absurd": "2026-11-13-followup/sat_tuned_k4_absurd",
+      "oban": "2026-11-13-followup/sat_tuned_oban",
+      "pg-boss": "2026-11-13-followup/sat_tuned_pgboss",
+      "procrastinate": "2026-11-13-followup/sat_tuned_procrastinate",
+      "river": "2026-11-13-followup/sat_tuned_k4_river"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-13-followup": [
+     "absurd",
+     "awa",
+     "oban",
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ]
+   }
+  },
+  {
+   "id": "ref800",
+   "metrics": [
+    {
+     "key": "jobs_per_s",
+     "label": "Completed jobs/s",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "e2e_p99",
+     "label": "End-to-end p99",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "claim_p99",
+     "label": "Claim p99",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "depth",
+     "label": "Queue depth",
+     "unit": "jobs",
+     "better": "lower"
+    },
+    {
+     "key": "wal_per_job",
+     "label": "WAL per job",
+     "unit": "bytes",
+     "better": "lower"
+    },
+    {
+     "key": "pg_cores",
+     "label": "Postgres CPU",
+     "unit": "cores",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "ref800",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 803.4,
+       "e2e_p99": 14,
+       "claim_p99": 7,
+       "depth": 1,
+       "wal_per_job": 1465.1168,
+       "pg_cores": 0.5937
+      },
+      "pgque": {
+       "jobs_per_s": 804.0483,
+       "e2e_p99": 108.473,
+       "claim_p99": 106.994,
+       "depth": 0,
+       "wal_per_job": 457.1069,
+       "pg_cores": 0.0686
+      },
+      "awa": {
+       "jobs_per_s": 798.7882,
+       "e2e_p99": 21.007,
+       "claim_p99": 19.007,
+       "depth": 0,
+       "wal_per_job": 1703.1468,
+       "pg_cores": 0.6057
+      },
+      "absurd": {
+       "jobs_per_s": 223.3,
+       "e2e_p99": 119537.5,
+       "claim_p99": 119536.5,
+       "depth": 95699.5,
+       "wal_per_job": 5186.7219,
+       "pg_cores": 1.0444
+      },
+      "oban": {
+       "jobs_per_s": 800.1398,
+       "claim_p99": 19.5,
+       "depth": 9,
+       "wal_per_job": 4982.6742,
+       "pg_cores": 0.3624
+      },
+      "pg-boss": {
+       "jobs_per_s": 826.9,
+       "e2e_p99": 426,
+       "claim_p99": 409.5,
+       "depth": 140.5,
+       "wal_per_job": 2804.33,
+       "pg_cores": 0.8316
+      },
+      "procrastinate": {
+       "jobs_per_s": 442.3586,
+       "claim_p99": 47062.7475,
+       "depth": 28941.5,
+       "wal_per_job": 3104.5466,
+       "pg_cores": 0.9141
+      },
+      "river": {
+       "jobs_per_s": 633.5953,
+       "claim_p99": 43710,
+       "depth": 34987,
+       "wal_per_job": 4568.6519,
+       "pg_cores": 0.142
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/ref800_pgmq",
+      "pgque": "2026-11-12-full-sweep/ref800_pgque",
+      "awa": "2026-11-13-followup/ref800_shared",
+      "absurd": "2026-11-13-followup/ref800_shared",
+      "oban": "2026-11-13-rerun/ref800_shared",
+      "pg-boss": "2026-11-12-full-sweep/ref800_shared",
+      "procrastinate": "2026-11-12-full-sweep/ref800_shared",
+      "river": "2026-11-12-full-sweep/ref800_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "idle",
+   "metrics": [
+    {
+     "key": "xacts_per_s",
+     "label": "Transactions/s",
+     "unit": "xacts/s",
+     "better": "lower"
+    },
+    {
+     "key": "wal_per_s",
+     "label": "WAL written",
+     "unit": "bytes/s",
+     "better": "lower"
+    },
+    {
+     "key": "relfile_per_s",
+     "label": "Table rewrites",
+     "unit": "per s",
+     "better": "lower"
+    },
+    {
+     "key": "pg_cores",
+     "label": "Postgres CPU",
+     "unit": "cores",
+     "better": "lower"
+    },
+    {
+     "key": "pg_mem",
+     "label": "Postgres private memory",
+     "unit": "MB",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "idle",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "xacts_per_s": 160.3429,
+       "wal_per_s": 428.758,
+       "relfile_per_s": 0,
+       "pg_cores": 0.0587,
+       "pg_mem": 37.8359
+      },
+      "pgque": {
+       "xacts_per_s": 40.5798,
+       "wal_per_s": 7666.5025,
+       "relfile_per_s": 0,
+       "pg_cores": 0.0292,
+       "pg_mem": 29.0664
+      },
+      "awa": {
+       "xacts_per_s": 60.0941,
+       "wal_per_s": 3909.4252,
+       "relfile_per_s": 0.3681,
+       "pg_cores": 0.0531,
+       "pg_mem": 276.1992
+      },
+      "absurd": {
+       "xacts_per_s": 23.4706,
+       "wal_per_s": 991.2756,
+       "relfile_per_s": 0,
+       "pg_cores": 0.0507,
+       "pg_mem": 17.6914
+      },
+      "oban": {
+       "xacts_per_s": 15.9933,
+       "wal_per_s": 4189.7815,
+       "relfile_per_s": 0,
+       "pg_cores": 0.0152,
+       "pg_mem": 58.7344
+      },
+      "pg-boss": {
+       "xacts_per_s": 21.9176,
+       "wal_per_s": 1770.4487,
+       "relfile_per_s": 0,
+       "pg_cores": 0.0308,
+       "pg_mem": 24.6562
+      },
+      "procrastinate": {
+       "xacts_per_s": 65.4975,
+       "wal_per_s": 459.3429,
+       "relfile_per_s": 0,
+       "pg_cores": 0.0681,
+       "pg_mem": 32.7344
+      },
+      "river": {
+       "xacts_per_s": 24.0487,
+       "wal_per_s": 11387.4034,
+       "relfile_per_s": 0,
+       "pg_cores": 0.0233,
+       "pg_mem": 23.4844
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/idle_pgmq",
+      "pgque": "2026-11-12-full-sweep/idle_pgque",
+      "awa": "2026-11-13-followup/idle_shared",
+      "absurd": "2026-11-13-followup/idle_shared",
+      "oban": "2026-11-13-rerun/idle_shared",
+      "pg-boss": "2026-11-12-full-sweep/idle_shared",
+      "procrastinate": "2026-11-12-full-sweep/idle_shared",
+      "river": "2026-11-12-full-sweep/idle_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "chaos",
+   "metrics": [
+    {
+     "key": "baseline_jobs",
+     "label": "Before restart",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "recovery_jobs",
+     "label": "After restart",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "workers_back_s",
+     "label": "Workers back",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "backlog_clear_s",
+     "label": "Backlog cleared",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "recovery_e2e_p99",
+     "label": "End-to-end p99 after restart",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "recovery_depth",
+     "label": "Queue depth after restart",
+     "unit": "jobs",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "pg_restart",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "baseline_jobs": 401,
+       "recovery_jobs": 398.6,
+       "workers_back_s": 5.007,
+       "backlog_clear_s": 5.007,
+       "recovery_e2e_p99": 28,
+       "recovery_depth": 1
+      },
+      "pgque": {
+       "baseline_jobs": 800.6272,
+       "recovery_jobs": 805.1953,
+       "workers_back_s": 5.012,
+       "backlog_clear_s": 5.012,
+       "recovery_e2e_p99": 108.693,
+       "recovery_depth": 0
+      },
+      "awa": {
+       "baseline_jobs": 798.1752,
+       "recovery_jobs": 802.1088,
+       "workers_back_s": 5.001,
+       "backlog_clear_s": 10,
+       "recovery_e2e_p99": 30.015,
+       "recovery_depth": 4
+      },
+      "absurd": {
+       "baseline_jobs": 794.2,
+       "recovery_jobs": 801.8,
+       "workers_back_s": 5.018,
+       "backlog_clear_s": 10.036,
+       "recovery_e2e_p99": 1197.5,
+       "recovery_depth": 6
+      },
+      "oban": {
+       "baseline_jobs": 793.0862,
+       "recovery_jobs": 801.7982,
+       "workers_back_s": 5.006,
+       "backlog_clear_s": 5.005,
+       "recovery_depth": 0
+      },
+      "pg-boss": {
+       "baseline_jobs": 668,
+       "recovery_jobs": 667.8,
+       "workers_back_s": 5.009,
+       "recovery_e2e_p99": 399.5,
+       "recovery_depth": 175.5
+      },
+      "procrastinate": {
+       "baseline_jobs": 776.8329,
+       "recovery_jobs": 774.8566,
+       "workers_back_s": 5.005,
+       "backlog_clear_s": 5.005,
+       "recovery_depth": 2
+      },
+      "river": {
+       "baseline_jobs": 633.569,
+       "recovery_jobs": 633.58,
+       "workers_back_s": 5,
+       "recovery_depth": 37708.5
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/pg_restart_pgmq",
+      "pgque": "2026-11-13-followup/pg_restart_pgque",
+      "awa": "2026-11-13-followup/pg_restart_shared",
+      "absurd": "2026-11-13-followup/pg_restart_shared",
+      "oban": "2026-11-13-followup/pg_restart_shared",
+      "pg-boss": "2026-11-13-followup/pg_restart_shared",
+      "procrastinate": "2026-11-13-followup/pg_restart_shared",
+      "river": "2026-11-13-followup/pg_restart_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-13-followup": [
+     "absurd",
+     "awa",
+     "oban",
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ]
+   }
+  },
+  {
+   "id": "neighbour",
+   "metrics": [
+    {
+     "key": "p99_baseline",
+     "label": "Neighbour p99, queue idle",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "p99_1x",
+     "label": "Neighbour p99, queue at 1×",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "p99_4x",
+     "label": "Neighbour p99, queue at 4×",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "tps_ratio_4x",
+     "label": "Neighbour TPS vs idle",
+     "unit": "ratio",
+     "better": "higher"
+    },
+    {
+     "key": "queue_jobs_4x",
+     "label": "Queue jobs/s at 4×",
+     "unit": "jobs/s",
+     "better": "higher"
+    }
+   ],
+   "cells": [
+    {
+     "id": "neighbour",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "p99_baseline": 2.067,
+       "p99_1x": 4.578,
+       "p99_4x": 18.341,
+       "tps_ratio_4x": 1.0041,
+       "queue_jobs_4x": 1607.2
+      },
+      "pgque": {
+       "p99_baseline": 2.112,
+       "p99_1x": 3.238,
+       "p99_4x": 2.396,
+       "tps_ratio_4x": 1.0017,
+       "queue_jobs_4x": 1605.644
+      },
+      "awa": {
+       "p99_baseline": 2.258,
+       "p99_1x": 4.474,
+       "p99_4x": 6.478,
+       "tps_ratio_4x": 0.9889,
+       "queue_jobs_4x": 1600.4357
+      },
+      "absurd": {
+       "p99_baseline": 2.255,
+       "p99_1x": 6.313,
+       "p99_4x": 14.359,
+       "tps_ratio_4x": 0.9954,
+       "queue_jobs_4x": 80
+      },
+      "oban": {
+       "p99_baseline": 3.959,
+       "p99_1x": 4.956,
+       "p99_4x": 11.548,
+       "tps_ratio_4x": 0.999,
+       "queue_jobs_4x": 1390.9137
+      },
+      "pg-boss": {
+       "p99_baseline": 2.141,
+       "p99_1x": 4.5,
+       "p99_4x": 10.126,
+       "tps_ratio_4x": 1.0108,
+       "queue_jobs_4x": 512
+      },
+      "procrastinate": {
+       "p99_baseline": 2.133,
+       "p99_1x": 5.097,
+       "p99_4x": 5.346,
+       "tps_ratio_4x": 1.0027,
+       "queue_jobs_4x": 426.9667
+      },
+      "river": {
+       "p99_baseline": 2.175,
+       "p99_1x": 8.863,
+       "p99_4x": 7.403,
+       "tps_ratio_4x": 1.0047,
+       "queue_jobs_4x": 316.804
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/neighbour_pgmq",
+      "pgque": "2026-11-12-full-sweep/neighbour_pgque",
+      "awa": "2026-11-13-followup/neighbour_shared",
+      "absurd": "2026-11-13-followup/neighbour_shared",
+      "oban": "2026-11-13-rerun/neighbour_shared",
+      "pg-boss": "2026-11-12-full-sweep/neighbour_shared",
+      "procrastinate": "2026-11-12-full-sweep/neighbour_shared",
+      "river": "2026-11-12-full-sweep/neighbour_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "logical",
+   "metrics": [
+    {
+     "key": "no_replica_identity",
+     "label": "Tables without replica identity",
+     "unit": "tables",
+     "better": "lower"
+    },
+    {
+     "key": "retained_wal",
+     "label": "WAL retained by the stalled slot",
+     "unit": "bytes",
+     "better": "lower"
+    },
+    {
+     "key": "catalog_dead",
+     "label": "Dead catalog tuples during the stall",
+     "unit": "tuples",
+     "better": "lower"
+    },
+    {
+     "key": "wal_per_job",
+     "label": "WAL per job while streaming",
+     "unit": "bytes",
+     "better": "lower"
+    },
+    {
+     "key": "stream_jobs",
+     "label": "Jobs/s while streaming",
+     "unit": "jobs/s",
+     "better": "higher"
+    }
+   ],
+   "cells": [
+    {
+     "id": "logical",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "no_replica_identity": 2,
+       "retained_wal": 168812288,
+       "catalog_dead": 20,
+       "wal_per_job": 1794.8739,
+       "stream_jobs": 401.6
+      },
+      "pgque": {
+       "no_replica_identity": 5,
+       "retained_wal": 48076624,
+       "catalog_dead": 114,
+       "wal_per_job": 489.5652,
+       "stream_jobs": 401.8439
+      },
+      "awa": {
+       "no_replica_identity": 0,
+       "retained_wal": 200520832,
+       "catalog_dead": 11374,
+       "wal_per_job": 2008.4774,
+       "stream_jobs": 399.4481
+      },
+      "absurd": {
+       "no_replica_identity": 0,
+       "retained_wal": 189640600,
+       "catalog_dead": 22,
+       "wal_per_job": 3228.4583,
+       "stream_jobs": 401.6
+      },
+      "oban": {
+       "no_replica_identity": 0,
+       "retained_wal": 569002728,
+       "catalog_dead": 115,
+       "wal_per_job": 5017.311,
+       "stream_jobs": 399.9201
+      },
+      "pg-boss": {
+       "no_replica_identity": 0,
+       "retained_wal": 255485144,
+       "catalog_dead": 139,
+       "wal_per_job": 3246.0038,
+       "stream_jobs": 334
+      },
+      "procrastinate": {
+       "no_replica_identity": 0,
+       "retained_wal": 347823136,
+       "catalog_dead": 25,
+       "wal_per_job": 2867.622,
+       "stream_jobs": 394.5365
+      },
+      "river": {
+       "no_replica_identity": 0,
+       "retained_wal": 388671960,
+       "catalog_dead": 214,
+       "wal_per_job": 4818.9948,
+       "stream_jobs": 316.7894
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/logical_pgmq",
+      "pgque": "2026-11-12-full-sweep/logical_pgque",
+      "awa": "2026-11-13-followup/logical_shared",
+      "absurd": "2026-11-13-followup/logical_shared",
+      "oban": "2026-11-13-rerun/logical_shared",
+      "pg-boss": "2026-11-12-full-sweep/logical_shared",
+      "procrastinate": "2026-11-12-full-sweep/logical_shared",
+      "river": "2026-11-12-full-sweep/logical_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "scheduled",
+   "metrics": [
+    {
+     "key": "lateness_p50",
+     "label": "Herd lateness p50",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "lateness_p99",
+     "label": "Herd lateness p99",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "herd_drain_s",
+     "label": "Herd drained",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "immediate_claim_p99",
+     "label": "Immediate jobs, claim p99",
+     "unit": "ms",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "scheduled_burst",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "lateness_p50": 957.998,
+       "lateness_p99": 1937.5581,
+       "herd_drain_s": 1.9536,
+       "immediate_claim_p99": 43
+      },
+      "pgque": {
+       "immediate_claim_p99": 106.541
+      },
+      "awa": {
+       "lateness_p50": 6334,
+       "lateness_p99": 11975,
+       "herd_drain_s": 12.082,
+       "immediate_claim_p99": 18.511
+      },
+      "absurd": {
+       "lateness_p50": 96588.3694,
+       "lateness_p99": 136800.3855,
+       "herd_drain_s": 137.6658,
+       "immediate_claim_p99": 113193
+      },
+      "oban": {
+       "lateness_p50": 11653,
+       "lateness_p99": 20544,
+       "herd_drain_s": 20.686,
+       "immediate_claim_p99": 13
+      },
+      "pg-boss": {
+       "lateness_p50": 39316,
+       "lateness_p99": 77366,
+       "herd_drain_s": 78.335,
+       "immediate_claim_p99": 53107
+      },
+      "procrastinate": {
+       "lateness_p50": 20743.2898,
+       "lateness_p99": 40985.5208,
+       "herd_drain_s": 41.405,
+       "immediate_claim_p99": 9.0425
+      },
+      "river": {
+       "lateness_p50": 31634,
+       "lateness_p99": 62592,
+       "herd_drain_s": 63.199,
+       "immediate_claim_p99": 9209.5
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/scheduled_burst_pgmq",
+      "pgque": "2026-11-12-full-sweep/scheduled_burst_pgque",
+      "awa": "2026-11-13-followup/scheduled_burst_shared",
+      "absurd": "2026-11-13-followup/scheduled_burst_shared",
+      "oban": "2026-11-13-rerun/scheduled_burst_shared",
+      "pg-boss": "2026-11-12-full-sweep/scheduled_burst_shared",
+      "procrastinate": "2026-11-12-full-sweep/scheduled_burst_shared",
+      "river": "2026-11-12-full-sweep/scheduled_burst_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "retry",
+   "metrics": [
+    {
+     "key": "baseline_jobs",
+     "label": "Before the storm",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "storm_good_jobs",
+     "label": "Good jobs/s during the storm",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "storm_claim_p99",
+     "label": "Claim p99 during the storm",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "backlog_drain_s",
+     "label": "Retry backlog cleared",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "peak_dead_tup",
+     "label": "Peak dead tuples",
+     "unit": "tuples",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "retry_storm",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "baseline_jobs": 200.6,
+       "storm_good_jobs": 138.4,
+       "storm_claim_p99": 42,
+       "backlog_drain_s": 125,
+       "peak_dead_tup": 26908
+      },
+      "pgque": {
+       "baseline_jobs": 200.9958,
+       "storm_good_jobs": 138.4443,
+       "storm_claim_p99": 107.351,
+       "backlog_drain_s": 245,
+       "peak_dead_tup": 5089
+      },
+      "awa": {
+       "baseline_jobs": 199.7982,
+       "storm_good_jobs": 137.9981,
+       "storm_claim_p99": 24.015,
+       "backlog_drain_s": 39.408,
+       "peak_dead_tup": 4572
+      },
+      "absurd": {
+       "baseline_jobs": 200.6,
+       "storm_good_jobs": 138.5,
+       "storm_claim_p99": 12,
+       "backlog_drain_s": 3.149,
+       "peak_dead_tup": 7651
+      },
+      "oban": {
+       "baseline_jobs": 200.04,
+       "storm_good_jobs": 137.9172,
+       "storm_claim_p99": 44,
+       "backlog_drain_s": 95,
+       "peak_dead_tup": 34611
+      },
+      "pg-boss": {
+       "baseline_jobs": 200,
+       "storm_good_jobs": 131.9,
+       "storm_claim_p99": 8326,
+       "backlog_drain_s": 9.131,
+       "peak_dead_tup": 29980
+      },
+      "procrastinate": {
+       "baseline_jobs": 199.9149,
+       "storm_good_jobs": 137.862,
+       "storm_claim_p99": 10.961,
+       "backlog_drain_s": 4.371,
+       "peak_dead_tup": 31628
+      },
+      "river": {
+       "baseline_jobs": 200.012,
+       "storm_good_jobs": 138.0053,
+       "storm_claim_p99": 52,
+       "peak_dead_tup": 32291
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/retry_storm_pgmq",
+      "pgque": "2026-11-12-full-sweep/retry_storm_pgque",
+      "awa": "2026-11-13-followup/retry_storm_shared",
+      "absurd": "2026-11-13-followup/retry_storm_shared",
+      "oban": "2026-11-13-rerun/retry_storm_shared",
+      "pg-boss": "2026-11-12-full-sweep/retry_storm_shared",
+      "procrastinate": "2026-11-12-full-sweep/retry_storm_shared",
+      "river": "2026-11-12-full-sweep/retry_storm_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "fanout",
+   "metrics": [
+    {
+     "key": "jobs_per_s",
+     "label": "Completed jobs/s",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "claim_p99",
+     "label": "Claim p99",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "backends",
+     "label": "Postgres connections",
+     "unit": "backends",
+     "better": "lower"
+    },
+    {
+     "key": "listen",
+     "label": "LISTEN connections",
+     "unit": "backends",
+     "better": "lower"
+    },
+    {
+     "key": "idle_xacts",
+     "label": "Idle transactions/s",
+     "unit": "xacts/s",
+     "better": "lower"
+    },
+    {
+     "key": "idle_pg_cores",
+     "label": "Idle Postgres CPU",
+     "unit": "cores",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "fanout_q1",
+     "label": "1 queue",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 200.6,
+       "claim_p99": 4,
+       "backends": 19,
+       "listen": 1,
+       "idle_xacts": 36.3086,
+       "idle_pg_cores": 0.0335
+      },
+      "pgque": {
+       "jobs_per_s": 200.0998,
+       "claim_p99": 136.762,
+       "backends": 22,
+       "listen": 1,
+       "idle_xacts": 35.1829,
+       "idle_pg_cores": 0.0307
+      },
+      "awa": {
+       "jobs_per_s": 199.7851,
+       "claim_p99": 19.007,
+       "backends": 11,
+       "listen": 2,
+       "idle_xacts": 60.0686,
+       "idle_pg_cores": 0.0629
+      },
+      "absurd": {
+       "jobs_per_s": 200.6,
+       "claim_p99": 10,
+       "backends": 3,
+       "listen": 0,
+       "idle_xacts": 8.3714,
+       "idle_pg_cores": 0.0237
+      },
+      "oban": {
+       "jobs_per_s": 200.04,
+       "claim_p99": 13,
+       "backends": 25,
+       "listen": 1,
+       "idle_xacts": 163.4514,
+       "idle_pg_cores": 0.0182
+      },
+      "pg-boss": {
+       "jobs_per_s": 200.4,
+       "claim_p99": 5,
+       "backends": 19,
+       "listen": 0,
+       "idle_xacts": 16.0571,
+       "idle_pg_cores": 0.0544
+      },
+      "procrastinate": {
+       "jobs_per_s": 199.9446,
+       "claim_p99": 5.875,
+       "backends": 6,
+       "listen": 1,
+       "idle_xacts": 374.48,
+       "idle_pg_cores": 0.0305
+      },
+      "river": {
+       "jobs_per_s": 200.1074,
+       "claim_p99": 51,
+       "backends": 5,
+       "listen": 0,
+       "idle_xacts": 7.76,
+       "idle_pg_cores": 0.016
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/fanout_q1_pgmq",
+      "pgque": "2026-11-13-followup/fanout_q1_pgque",
+      "awa": "2026-11-13-followup/fanout_q1_awa",
+      "absurd": "2026-11-13-followup/fanout_q1_absurd",
+      "oban": "2026-11-13-followup/fanout_q1_oban",
+      "pg-boss": "2026-11-13-followup/fanout_q1_pgboss",
+      "procrastinate": "2026-11-13-followup/fanout_q1_procrastinate",
+      "river": "2026-11-13-followup/fanout_q1_river"
+     }
+    },
+    {
+     "id": "fanout_q200",
+     "label": "200 queues",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 200.6,
+       "claim_p99": 3,
+       "backends": 19,
+       "listen": 1,
+       "idle_xacts": 401.0514,
+       "idle_pg_cores": 0.1083
+      },
+      "pgque": {
+       "jobs_per_s": 199.9819,
+       "claim_p99": 105.463,
+       "backends": 22,
+       "listen": 1,
+       "idle_xacts": 1498.2171,
+       "idle_pg_cores": 1.0539
+      },
+      "awa": {
+       "jobs_per_s": 199.8032,
+       "claim_p99": 85.023,
+       "backends": 20,
+       "listen": 2,
+       "idle_xacts": 667.2686,
+       "idle_pg_cores": 0.2359
+      },
+      "absurd": {
+       "jobs_per_s": 200.7,
+       "claim_p99": 255,
+       "backends": 18,
+       "listen": 0,
+       "idle_xacts": 808.56,
+       "idle_pg_cores": 1.6794
+      },
+      "oban": {
+       "jobs_per_s": 200.04,
+       "claim_p99": 13,
+       "backends": 25,
+       "listen": 1,
+       "idle_xacts": 168.4343,
+       "idle_pg_cores": 0.019
+      },
+      "pg-boss": {
+       "jobs_per_s": 200.4,
+       "claim_p99": 5,
+       "backends": 6,
+       "listen": 0,
+       "idle_xacts": 48.9143,
+       "idle_pg_cores": 0.9783
+      },
+      "procrastinate": {
+       "jobs_per_s": 199.9109,
+       "claim_p99": 11.008,
+       "backends": 6,
+       "listen": 1,
+       "idle_xacts": 373.8743,
+       "idle_pg_cores": 0.0361
+      },
+      "river": {
+       "jobs_per_s": 199.9978,
+       "claim_p99": 42,
+       "backends": 15,
+       "listen": 0,
+       "idle_xacts": 203.08,
+       "idle_pg_cores": 0.0456
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-13-followup/fanout_q200_pgmq",
+      "pgque": "2026-11-13-followup/fanout_q200_pgque",
+      "awa": "2026-11-13-followup/fanout_q200_awa",
+      "absurd": "2026-11-13-followup/fanout_q200_absurd",
+      "oban": "2026-11-13-followup/fanout_q200_oban",
+      "pg-boss": "2026-11-13-followup/fanout_q200_pgboss",
+      "procrastinate": "2026-11-13-followup/fanout_q200_procrastinate",
+      "river": "2026-11-13-followup/fanout_q200_river"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-13-followup": [
+     "absurd",
+     "awa",
+     "oban",
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ]
+   }
+  },
+  {
+   "id": "payload",
+   "metrics": [
+    {
+     "key": "jobs_per_s",
+     "label": "Completed jobs/s",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "wal_per_job",
+     "label": "WAL per job",
+     "unit": "bytes",
+     "better": "lower"
+    },
+    {
+     "key": "toast_after",
+     "label": "TOAST after draining",
+     "unit": "MB",
+     "better": "lower"
+    },
+    {
+     "key": "db_after",
+     "label": "Database after draining",
+     "unit": "MB",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "payload_64k",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 50,
+       "wal_per_job": 205006.6662,
+       "toast_after": 1176.9375,
+       "db_after": 1187.8024
+      },
+      "pgque": {
+       "jobs_per_s": 50.1468,
+       "wal_per_job": 70852.8185,
+       "toast_after": 1177.375,
+       "db_after": 1188.6462
+      },
+      "awa": {
+       "jobs_per_s": 50.0001,
+       "wal_per_job": 75272.2312,
+       "toast_after": 0.625,
+       "db_after": 22.2243
+      },
+      "absurd": {
+       "jobs_per_s": 50,
+       "wal_per_job": 86672.3352,
+       "toast_after": 1174,
+       "db_after": 1193.3571
+      },
+      "oban": {
+       "jobs_per_s": 49.98,
+       "wal_per_job": 83078.206,
+       "toast_after": 1173.8047,
+       "db_after": 1192.2399
+      },
+      "pg-boss": {
+       "jobs_per_s": 50,
+       "wal_per_job": 84170.1176,
+       "toast_after": 1174.0469,
+       "db_after": 1190.0524
+      },
+      "procrastinate": {
+       "jobs_per_s": 49.7781,
+       "wal_per_job": 80650.152,
+       "toast_after": 1163.0703,
+       "db_after": 1179.5368
+      },
+      "river": {
+       "jobs_per_s": 50.0025,
+       "wal_per_job": 80991.7343,
+       "toast_after": 1173.9531,
+       "db_after": 1191.3493
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/payload_64k_pgmq",
+      "pgque": "2026-11-12-full-sweep/payload_64k_pgque",
+      "awa": "2026-11-13-followup/payload_64k_shared",
+      "absurd": "2026-11-13-followup/payload_64k_shared",
+      "oban": "2026-11-13-rerun/payload_64k_shared",
+      "pg-boss": "2026-11-12-full-sweep/payload_64k_shared",
+      "procrastinate": "2026-11-12-full-sweep/payload_64k_shared",
+      "river": "2026-11-12-full-sweep/payload_64k_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "large_args",
+   "metrics": [
+    {
+     "key": "jobs_per_s",
+     "label": "Completed jobs/s",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "wal_per_job",
+     "label": "WAL per job",
+     "unit": "bytes",
+     "better": "lower"
+    },
+    {
+     "key": "worker_mem",
+     "label": "Worker memory, peak",
+     "unit": "MB",
+     "better": "lower"
+    },
+    {
+     "key": "preloaded",
+     "label": "Jobs preloaded",
+     "unit": "jobs",
+     "better": "higher"
+    },
+    {
+     "key": "drain_jobs",
+     "label": "Drain rate",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "drain_worker_mem",
+     "label": "Worker memory while draining",
+     "unit": "MB",
+     "better": "lower"
+    },
+    {
+     "key": "db_peak",
+     "label": "Database, peak",
+     "unit": "MB",
+     "better": "lower"
+    },
+    {
+     "key": "db_final",
+     "label": "Database after the drain",
+     "unit": "MB",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "sat_65536",
+     "label": "64 KiB args, saturating",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 424.4,
+       "wal_per_job": 188197.4333,
+       "worker_mem": 232.7266,
+       "db_peak": 24674.5446,
+       "db_final": 24674.5446
+      },
+      "pgque": {
+       "jobs_per_s": 383.0124,
+       "wal_per_job": 71025.4529,
+       "worker_mem": 98.8203,
+       "db_peak": 3904.9196,
+       "db_final": 3904.9196
+      },
+      "awa": {
+       "jobs_per_s": 691.1991,
+       "wal_per_job": 94792.0457,
+       "worker_mem": 88.0156,
+       "db_peak": 1689.0161,
+       "db_final": 1218.3649
+      },
+      "absurd": {
+       "jobs_per_s": 268.8,
+       "wal_per_job": 113468.0322,
+       "worker_mem": 59.7656,
+       "db_peak": 3306.4899,
+       "db_final": 3306.4899
+      },
+      "oban": {
+       "jobs_per_s": 663.7398,
+       "wal_per_job": 102725.7866,
+       "worker_mem": 2255.4141,
+       "db_peak": 9920.4196,
+       "db_final": 9920.4196
+      },
+      "pg-boss": {
+       "jobs_per_s": 563.2,
+       "wal_per_job": 73642.3485,
+       "worker_mem": 366.1133,
+       "db_peak": 6369.9274,
+       "db_final": 6369.9274
+      },
+      "procrastinate": {
+       "jobs_per_s": 199.0696,
+       "wal_per_job": 109604.5033,
+       "worker_mem": 40.6484,
+       "db_peak": 1893.2165,
+       "db_final": 1893.2165
+      },
+      "river": {
+       "jobs_per_s": 797.7134,
+       "wal_per_job": 86528.8831,
+       "worker_mem": 52.9102,
+       "db_peak": 12029.0446,
+       "db_final": 12029.0446
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/sat_65536_pgmq",
+      "pgque": "2026-11-12-full-sweep/sat_65536_pgque",
+      "awa": "2026-11-13-followup/sat_65536_shared",
+      "absurd": "2026-11-13-followup/sat_65536_shared",
+      "oban": "2026-11-13-rerun/sat_65536_shared",
+      "pg-boss": "2026-11-12-full-sweep/sat_65536_shared",
+      "procrastinate": "2026-11-12-full-sweep/sat_65536_shared",
+      "river": "2026-11-12-full-sweep/sat_65536_shared"
+     }
+    },
+    {
+     "id": "sat_1048576",
+     "label": "1 MiB args, saturating",
+     "values": {
+      "pgmq": {
+       "jobs_per_s": 25.6,
+       "wal_per_job": 3624393.0418,
+       "worker_mem": 3076.2383,
+       "db_peak": 16992.2946,
+       "db_final": 16992.2946
+      },
+      "pgque": {
+       "jobs_per_s": 25.443,
+       "wal_per_job": 1120775.6972,
+       "worker_mem": 807.6523,
+       "db_peak": 4051.6931,
+       "db_final": 4051.6931
+      },
+      "awa": {
+       "jobs_per_s": 51.197,
+       "wal_per_job": 1415768.8395,
+       "worker_mem": 944.1758,
+       "db_peak": 1626.6646,
+       "db_final": 822.7946
+      },
+      "absurd": {
+       "jobs_per_s": 38.4,
+       "wal_per_job": 1274797.4746,
+       "worker_mem": 372.125,
+       "db_peak": 15859.5681,
+       "db_final": 15859.5681
+      },
+      "oban": {
+       "jobs_per_s": 44.891,
+       "wal_per_job": 1203763.6667,
+       "worker_mem": 2550.3555,
+       "db_peak": 10255.4274,
+       "db_final": 10255.4274
+      },
+      "pg-boss": {
+       "jobs_per_s": 25.6,
+       "wal_per_job": 1494354.9778,
+       "worker_mem": 551.6523,
+       "db_peak": 7245.8911,
+       "db_final": 7245.8911
+      },
+      "procrastinate": {
+       "jobs_per_s": 21.9682,
+       "wal_per_job": 1957641.2445,
+       "worker_mem": 57.1133,
+       "db_peak": 3442.1227,
+       "db_final": 3442.1227
+      },
+      "river": {
+       "jobs_per_s": 51.207,
+       "wal_per_job": 1240379.1172,
+       "worker_mem": 530.957,
+       "db_peak": 19563.1618,
+       "db_final": 19563.1618
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/sat_1048576_pgmq",
+      "pgque": "2026-11-12-full-sweep/sat_1048576_pgque",
+      "awa": "2026-11-13-followup/sat_1048576_shared",
+      "absurd": "2026-11-13-followup/sat_1048576_shared",
+      "oban": "2026-11-13-rerun/sat_1048576_shared",
+      "pg-boss": "2026-11-12-full-sweep/sat_1048576_shared",
+      "procrastinate": "2026-11-12-full-sweep/sat_1048576_shared",
+      "river": "2026-11-12-full-sweep/sat_1048576_shared"
+     }
+    },
+    {
+     "id": "backlog_1m",
+     "label": "1 MiB backlog, drained",
+     "values": {
+      "pgmq": {
+       "preloaded": 7684,
+       "drain_jobs": 45.1931,
+       "drain_worker_mem": 997.7227,
+       "db_peak": 16023.4665,
+       "db_final": 16022.4821
+      },
+      "pgque": {
+       "preloaded": 7993.9434,
+       "drain_jobs": 231.4724,
+       "drain_worker_mem": 216.5273,
+       "db_peak": 8330.9352,
+       "db_final": 8330.9352
+      },
+      "awa": {
+       "preloaded": 6494.0091,
+       "drain_jobs": 169.5389,
+       "drain_worker_mem": 259.3867,
+       "db_peak": 6773.6696,
+       "db_final": 21.3102
+      },
+      "absurd": {
+       "preloaded": 7684,
+       "drain_jobs": 243.3879,
+       "drain_worker_mem": 365.7891,
+       "db_peak": 8003.3181,
+       "db_final": 8003.3181
+      },
+      "oban": {
+       "preloaded": 7675.4559,
+       "drain_jobs": 257.5241,
+       "drain_worker_mem": 8712.8477,
+       "db_peak": 8001.0524,
+       "db_final": 8001.0524
+      },
+      "pg-boss": {
+       "preloaded": 8004,
+       "drain_jobs": 616.3086,
+       "drain_worker_mem": 5319.2617,
+       "db_peak": 8346.3806,
+       "db_final": 8346.3806
+      },
+      "procrastinate": {
+       "preloaded": 7055.8997,
+       "drain_jobs": 183.6868,
+       "drain_worker_mem": 216.4062,
+       "db_peak": 7353.2712,
+       "db_final": 7353.2712
+      },
+      "river": {
+       "preloaded": 7680.0096,
+       "drain_jobs": 279.0501,
+       "drain_worker_mem": 378.6953,
+       "db_peak": 7997.2946,
+       "db_final": 7997.2868
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/backlog_1m_pgmq",
+      "pgque": "2026-11-12-full-sweep/backlog_1m_pgque",
+      "awa": "2026-11-13-followup/backlog_1m_shared",
+      "absurd": "2026-11-13-followup/backlog_1m_shared",
+      "oban": "2026-11-13-rerun/backlog_1m_shared",
+      "pg-boss": "2026-11-12-full-sweep/backlog_1m_shared",
+      "procrastinate": "2026-11-12-full-sweep/backlog_1m_shared",
+      "river": "2026-11-12-full-sweep/backlog_1m_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "long_jobs",
+   "metrics": [
+    {
+     "key": "wal_per_s",
+     "label": "WAL written",
+     "unit": "bytes/s",
+     "better": "lower"
+    },
+    {
+     "key": "xacts_per_s",
+     "label": "Transactions/s",
+     "unit": "xacts/s",
+     "better": "lower"
+    },
+    {
+     "key": "tup_updated_per_s",
+     "label": "Rows updated/s",
+     "unit": "rows/s",
+     "better": "lower"
+    },
+    {
+     "key": "duplicates",
+     "label": "Duplicate completions",
+     "unit": "jobs",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "long_jobs",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "wal_per_s": 4638.3718,
+       "xacts_per_s": 243.9352,
+       "tup_updated_per_s": 5.8901,
+       "duplicates": 610
+      },
+      "pgque": {
+       "wal_per_s": 6255.2873,
+       "xacts_per_s": 47.0338,
+       "tup_updated_per_s": 0.7155,
+       "duplicates": -841.8222
+      },
+      "awa": {
+       "wal_per_s": 27929.338,
+       "xacts_per_s": 114.6056,
+       "tup_updated_per_s": 24.2028,
+       "duplicates": 0.0057
+      },
+      "absurd": {
+       "wal_per_s": 12321.2479,
+       "xacts_per_s": 14.3634,
+       "tup_updated_per_s": 17.0028,
+       "duplicates": 1134
+      },
+      "oban": {
+       "wal_per_s": 11244.4197,
+       "xacts_per_s": 15.9296,
+       "tup_updated_per_s": 5.507,
+       "duplicates": 297.9404
+      },
+      "pg-boss": {
+       "wal_per_s": 6518.4479,
+       "xacts_per_s": 259.7211,
+       "tup_updated_per_s": 4.8225,
+       "duplicates": 0
+      },
+      "procrastinate": {
+       "wal_per_s": 5952.7155,
+       "xacts_per_s": 102.9521,
+       "tup_updated_per_s": 4.4676,
+       "duplicates": 0.0021
+      },
+      "river": {
+       "wal_per_s": 11465.0056,
+       "xacts_per_s": 52.307,
+       "tup_updated_per_s": 6.1324,
+       "duplicates": 359.9896
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/long_jobs_pgmq",
+      "pgque": "2026-11-12-full-sweep/long_jobs_pgque",
+      "awa": "2026-11-13-followup/long_jobs_shared",
+      "absurd": "2026-11-13-followup/long_jobs_shared",
+      "oban": "2026-11-13-rerun/long_jobs_shared",
+      "pg-boss": "2026-11-12-full-sweep/long_jobs_shared",
+      "procrastinate": "2026-11-12-full-sweep/long_jobs_shared",
+      "river": "2026-11-12-full-sweep/long_jobs_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "drain",
+   "metrics": [
+    {
+     "key": "drain_jobs",
+     "label": "Drain rate",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "drain_s",
+     "label": "Time to empty",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "db_baseline",
+     "label": "Database before",
+     "unit": "MB",
+     "better": "lower"
+    },
+    {
+     "key": "db_peak",
+     "label": "Database, peak",
+     "unit": "MB",
+     "better": "lower"
+    },
+    {
+     "key": "db_final",
+     "label": "Database after",
+     "unit": "MB",
+     "better": "lower"
+    },
+    {
+     "key": "settle_s",
+     "label": "Back to baseline size",
+     "unit": "s",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "backlog_drain",
+     "label": null,
+     "values": {
+      "pgmq": {
+       "drain_jobs": 14538.6963,
+       "drain_s": 13.761,
+       "db_baseline": 7.8649,
+       "db_peak": 179.4899,
+       "db_final": 97.3024
+      },
+      "pgque": {
+       "drain_jobs": 14298.6404,
+       "drain_s": 13.955,
+       "db_baseline": 8.7009,
+       "db_peak": 75.904,
+       "db_final": 75.904
+      },
+      "awa": {
+       "drain_jobs": 5154.1798,
+       "drain_s": 38.778,
+       "db_baseline": 20.7399,
+       "db_peak": 173.3415,
+       "db_final": 21.4665,
+       "settle_s": 73.25
+      },
+      "absurd": {
+       "db_baseline": 7.8337,
+       "db_peak": 210.9509,
+       "db_final": 210.9509
+      },
+      "oban": {
+       "drain_jobs": 4205.5693,
+       "drain_s": 47.25,
+       "db_baseline": 7.8102,
+       "db_peak": 323.1149,
+       "db_final": 323.1149
+      },
+      "pg-boss": {
+       "drain_jobs": 2509.7574,
+       "drain_s": 72.099,
+       "db_baseline": 8.4274,
+       "db_peak": 204.5368,
+       "db_final": 204.5368
+      },
+      "procrastinate": {
+       "drain_jobs": 579.0408,
+       "drain_s": 238.053,
+       "db_baseline": 7.8102,
+       "db_peak": 92.0602,
+       "db_final": 92.0602
+      },
+      "river": {
+       "drain_jobs": 1226.3826,
+       "drain_s": 163.154,
+       "db_baseline": 7.9352,
+       "db_peak": 216.1931,
+       "db_final": 216.1931
+      }
+     },
+     "excluded": {},
+     "source": {
+      "pgmq": "2026-11-12-full-sweep/backlog_drain_pgmq",
+      "pgque": "2026-11-12-full-sweep/backlog_drain_pgque",
+      "awa": "2026-11-13-followup/backlog_drain_shared",
+      "absurd": "2026-11-13-followup/backlog_drain_shared",
+      "oban": "2026-11-13-rerun/backlog_drain_shared",
+      "pg-boss": "2026-11-12-full-sweep/backlog_drain_shared",
+      "procrastinate": "2026-11-12-full-sweep/backlog_drain_shared",
+      "river": "2026-11-12-full-sweep/backlog_drain_shared"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate",
+     "river"
+    ],
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ]
+   }
+  },
+  {
+   "id": "abandon",
+   "metrics": [
+    {
+     "key": "held",
+     "label": "Claims held at the kill",
+     "unit": "jobs",
+     "better": "higher"
+    },
+    {
+     "key": "first_s",
+     "label": "First 1% done again",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "half_s",
+     "label": "50% done again",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "all_s",
+     "label": "All done again",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "cleared_s",
+     "label": "Database claims cleared",
+     "unit": "s",
+     "better": "lower"
+    },
+    {
+     "key": "rate",
+     "label": "Rescue rate, 10–90%",
+     "unit": "jobs/s",
+     "better": "higher"
+    },
+    {
+     "key": "missing",
+     "label": "Never completed",
+     "unit": "jobs",
+     "better": "lower"
+    },
+    {
+     "key": "excess",
+     "label": "Completed twice",
+     "unit": "jobs",
+     "better": "lower"
+    },
+    {
+     "key": "fresh_claim_p99",
+     "label": "Fresh jobs, claim p99 during rescue",
+     "unit": "ms",
+     "better": "lower"
+    },
+    {
+     "key": "pg_cores",
+     "label": "Postgres CPU during rescue",
+     "unit": "cores",
+     "better": "lower"
+    }
+   ],
+   "cells": [
+    {
+     "id": "abandon",
+     "label": null,
+     "values": {
+      "absurd": {
+       "held": 998434,
+       "first_s": 131.335,
+       "half_s": 716.901,
+       "all_s": 1709.292,
+       "cleared_s": 1536.298,
+       "rate": 592.7979,
+       "missing": 0,
+       "excess": 43,
+       "fresh_claim_p99": 99120.5,
+       "pg_cores": 3.3931
+      },
+      "awa": {
+       "held": 999885,
+       "first_s": 140.527,
+       "half_s": 740.527,
+       "all_s": 1230.527,
+       "cleared_s": 1330.441,
+       "rate": 919.4555,
+       "missing": 0,
+       "excess": 0,
+       "fresh_claim_p99": 116.543,
+       "pg_cores": 3.8892
+      },
+      "oban": {
+       "held": 998387,
+       "first_s": 127.097,
+       "missing": 798438,
+       "excess": 0,
+       "fresh_claim_p99": 2470,
+       "pg_cores": 1.8666
+      },
+      "pg-boss": {
+       "held": 1104000,
+       "first_s": 5.63,
+       "half_s": 385.752,
+       "all_s": 841.156,
+       "cleared_s": 860.628,
+       "rate": 1533.4692,
+       "missing": 0,
+       "excess": 80,
+       "fresh_claim_p99": 43,
+       "pg_cores": 2.8815
+      },
+      "pgmq": {
+       "held": 998528,
+       "first_s": 122.734,
+       "half_s": 222.776,
+       "all_s": 352.841,
+       "cleared_s": 217.699,
+       "rate": 4435.8814,
+       "missing": 0,
+       "excess": 102,
+       "fresh_claim_p99": 36,
+       "pg_cores": 1.297
+      },
+      "pgque": {
+       "held": 999809,
+       "first_s": 11.322,
+       "half_s": 11.322,
+       "all_s": 16.323,
+       "cleared_s": 25.97,
+       "missing": 0,
+       "excess": 12,
+       "fresh_claim_p99": 106.461,
+       "pg_cores": 0.1553
+      },
+      "procrastinate": {
+       "held": 910864,
+       "first_s": 316.11,
+       "half_s": 1141.539,
+       "all_s": 1917.276,
+       "cleared_s": 1925.731,
+       "rate": 557.993,
+       "missing": 0,
+       "excess": 0,
+       "fresh_claim_p99": 31.615,
+       "pg_cores": 1.8891
+      }
+     },
+     "excluded": {
+      "river": "held no claims at the kill"
+     },
+     "source": {
+      "absurd": "2026-11-13-followup/abandon_absurd",
+      "awa": "2026-11-13-followup/abandon_awa",
+      "oban": "2026-11-13-rerun/abandon_oban",
+      "pg-boss": "2026-11-12-full-sweep/abandon_pgboss",
+      "pgmq": "2026-11-12-full-sweep/abandon_pgmq",
+      "pgque": "2026-11-12-full-sweep/abandon_pgque",
+      "procrastinate": "2026-11-12-full-sweep/abandon_procrastinate"
+     }
+    }
+   ],
+   "sources_by_root": {
+    "2026-11-13-followup": [
+     "absurd",
+     "awa"
+    ],
+    "2026-11-13-rerun": [
+     "oban"
+    ],
+    "2026-11-12-full-sweep": [
+     "pg-boss",
+     "pgmq",
+     "pgque",
+     "procrastinate"
+    ]
+   },
+   "curves": {
+    "absurd": [
+     [
+      6.3,
+      0
+     ],
+     [
+      16.3,
+      0
+     ],
+     [
+      26.3,
+      0
+     ],
+     [
+      36.3,
+      0
+     ],
+     [
+      46.3,
+      0
+     ],
+     [
+      56.3,
+      0
+     ],
+     [
+      66.3,
+      0
+     ],
+     [
+      76.3,
+      0
+     ],
+     [
+      86.3,
+      0
+     ],
+     [
+      96.3,
+      0
+     ],
+     [
+      106.3,
+      0
+     ],
+     [
+      116.3,
+      0
+     ],
+     [
+      126.3,
+      0.74
+     ],
+     [
+      136.3,
+      1.9
+     ],
+     [
+      146.3,
+      3.12
+     ],
+     [
+      156.3,
+      4.37
+     ],
+     [
+      166.4,
+      5.57
+     ],
+     [
+      176.4,
+      6.86
+     ],
+     [
+      186.4,
+      8.13
+     ],
+     [
+      196.4,
+      9.35
+     ],
+     [
+      206.4,
+      10.51
+     ],
+     [
+      216.4,
+      11.83
+     ],
+     [
+      226.4,
+      13.06
+     ],
+     [
+      236.4,
+      14.42
+     ],
+     [
+      246.4,
+      15.81
+     ],
+     [
+      256.4,
+      17.16
+     ],
+     [
+      266.4,
+      18.46
+     ],
+     [
+      276.4,
+      19.78
+     ],
+     [
+      286.4,
+      20.97
+     ],
+     [
+      296.4,
+      22.37
+     ],
+     [
+      306.4,
+      23.78
+     ],
+     [
+      316.4,
+      25.16
+     ],
+     [
+      326.4,
+      26.26
+     ],
+     [
+      336.5,
+      27.32
+     ],
+     [
+      346.5,
+      28.33
+     ],
+     [
+      356.5,
+      29.29
+     ],
+     [
+      366.5,
+      30.24
+     ],
+     [
+      376.5,
+      31.2
+     ],
+     [
+      386.5,
+      32.13
+     ],
+     [
+      396.5,
+      33.12
+     ],
+     [
+      406.5,
+      34.08
+     ],
+     [
+      416.5,
+      35.03
+     ],
+     [
+      426.5,
+      36.01
+     ],
+     [
+      436.5,
+      36.62
+     ],
+     [
+      446.6,
+      37.15
+     ],
+     [
+      456.6,
+      37.66
+     ],
+     [
+      466.6,
+      38.2
+     ],
+     [
+      476.6,
+      38.71
+     ],
+     [
+      486.6,
+      39.21
+     ],
+     [
+      496.6,
+      39.71
+     ],
+     [
+      506.6,
+      40.24
+     ],
+     [
+      516.6,
+      40.74
+     ],
+     [
+      526.6,
+      41.28
+     ],
+     [
+      536.7,
+      41.82
+     ],
+     [
+      546.7,
+      42.28
+     ],
+     [
+      556.7,
+      42.74
+     ],
+     [
+      566.7,
+      43.22
+     ],
+     [
+      576.7,
+      43.65
+     ],
+     [
+      586.7,
+      44.1
+     ],
+     [
+      596.7,
+      44.56
+     ],
+     [
+      606.7,
+      45.01
+     ],
+     [
+      616.8,
+      45.43
+     ],
+     [
+      626.8,
+      45.85
+     ],
+     [
+      636.8,
+      46.3
+     ],
+     [
+      646.8,
+      46.83
+     ],
+     [
+      656.8,
+      47.33
+     ],
+     [
+      666.8,
+      47.86
+     ],
+     [
+      676.8,
+      48.4
+     ],
+     [
+      686.9,
+      48.84
+     ],
+     [
+      696.9,
+      49.28
+     ],
+     [
+      706.9,
+      49.72
+     ],
+     [
+      716.9,
+      50.2
+     ],
+     [
+      726.9,
+      50.66
+     ],
+     [
+      736.9,
+      51.11
+     ],
+     [
+      746.9,
+      51.57
+     ],
+     [
+      757,
+      52.02
+     ],
+     [
+      767,
+      52.47
+     ],
+     [
+      777,
+      52.96
+     ],
+     [
+      787,
+      53.41
+     ],
+     [
+      797,
+      53.89
+     ],
+     [
+      807,
+      54.34
+     ],
+     [
+      817.1,
+      54.78
+     ],
+     [
+      827.1,
+      55.18
+     ],
+     [
+      837.1,
+      55.58
+     ],
+     [
+      847.1,
+      55.98
+     ],
+     [
+      857.1,
+      56.44
+     ],
+     [
+      867.1,
+      56.94
+     ],
+     [
+      877.2,
+      57.43
+     ],
+     [
+      887.2,
+      57.85
+     ],
+     [
+      897.2,
+      58.32
+     ],
+     [
+      907.2,
+      58.81
+     ],
+     [
+      917.2,
+      59.26
+     ],
+     [
+      927.3,
+      59.74
+     ],
+     [
+      937.3,
+      60.22
+     ],
+     [
+      947.3,
+      60.7
+     ],
+     [
+      957.3,
+      61.18
+     ],
+     [
+      967.3,
+      61.7
+     ],
+     [
+      977.4,
+      62.21
+     ],
+     [
+      987.4,
+      62.68
+     ],
+     [
+      997.4,
+      63.18
+     ],
+     [
+      1007.4,
+      63.69
+     ],
+     [
+      1017.4,
+      64.18
+     ],
+     [
+      1027.5,
+      64.62
+     ],
+     [
+      1037.5,
+      65.13
+     ],
+     [
+      1047.5,
+      65.58
+     ],
+     [
+      1057.5,
+      66.05
+     ],
+     [
+      1067.6,
+      66.54
+     ],
+     [
+      1077.6,
+      67
+     ],
+     [
+      1087.6,
+      67.49
+     ],
+     [
+      1097.6,
+      67.99
+     ],
+     [
+      1107.6,
+      68.41
+     ],
+     [
+      1117.7,
+      68.89
+     ],
+     [
+      1127.7,
+      69.38
+     ],
+     [
+      1137.7,
+      69.84
+     ],
+     [
+      1147.7,
+      70.28
+     ],
+     [
+      1157.8,
+      70.73
+     ],
+     [
+      1167.8,
+      71.22
+     ],
+     [
+      1177.8,
+      71.68
+     ],
+     [
+      1187.8,
+      72.14
+     ],
+     [
+      1197.8,
+      72.63
+     ],
+     [
+      1207.9,
+      73.07
+     ],
+     [
+      1217.9,
+      73.53
+     ],
+     [
+      1227.9,
+      74.03
+     ],
+     [
+      1237.9,
+      74.5
+     ],
+     [
+      1248,
+      74.95
+     ],
+     [
+      1258,
+      75.42
+     ],
+     [
+      1268,
+      75.89
+     ],
+     [
+      1278,
+      76.32
+     ],
+     [
+      1288.1,
+      76.79
+     ],
+     [
+      1298.1,
+      77.27
+     ],
+     [
+      1308.1,
+      77.75
+     ],
+     [
+      1318.1,
+      78.16
+     ],
+     [
+      1328.2,
+      78.66
+     ],
+     [
+      1338.2,
+      79.1
+     ],
+     [
+      1348.2,
+      79.56
+     ],
+     [
+      1358.2,
+      80.07
+     ],
+     [
+      1368.3,
+      80.55
+     ],
+     [
+      1378.3,
+      80.99
+     ],
+     [
+      1388.3,
+      81.47
+     ],
+     [
+      1398.4,
+      81.96
+     ],
+     [
+      1408.4,
+      82.45
+     ],
+     [
+      1418.4,
+      82.97
+     ],
+     [
+      1428.4,
+      83.48
+     ],
+     [
+      1438.5,
+      84.05
+     ],
+     [
+      1448.5,
+      84.53
+     ],
+     [
+      1458.5,
+      85.07
+     ],
+     [
+      1468.5,
+      85.57
+     ],
+     [
+      1478.6,
+      86.1
+     ],
+     [
+      1488.6,
+      86.6
+     ],
+     [
+      1498.6,
+      87.14
+     ],
+     [
+      1508.7,
+      87.63
+     ],
+     [
+      1518.7,
+      88.16
+     ],
+     [
+      1528.7,
+      88.7
+     ],
+     [
+      1538.7,
+      89.23
+     ],
+     [
+      1548.8,
+      89.76
+     ],
+     [
+      1558.8,
+      90.38
+     ],
+     [
+      1568.8,
+      90.97
+     ],
+     [
+      1578.9,
+      91.57
+     ],
+     [
+      1588.9,
+      92.16
+     ],
+     [
+      1598.9,
+      92.79
+     ],
+     [
+      1609,
+      93.41
+     ],
+     [
+      1619,
+      94.07
+     ],
+     [
+      1629,
+      94.74
+     ],
+     [
+      1639.1,
+      95.39
+     ],
+     [
+      1649.1,
+      96.09
+     ],
+     [
+      1659.1,
+      96.77
+     ],
+     [
+      1669.2,
+      97.46
+     ],
+     [
+      1679.2,
+      98.17
+     ],
+     [
+      1689.2,
+      98.89
+     ],
+     [
+      1699.3,
+      99.62
+     ],
+     [
+      1709.3,
+      100
+     ],
+     [
+      1719.3,
+      100
+     ],
+     [
+      1729.4,
+      100
+     ],
+     [
+      1739.4,
+      100
+     ],
+     [
+      1749.4,
+      100
+     ],
+     [
+      1759.5,
+      100
+     ],
+     [
+      1769.5,
+      100
+     ],
+     [
+      1779.5,
+      100
+     ],
+     [
+      1789.6,
+      100
+     ],
+     [
+      1799.6,
+      100
+     ],
+     [
+      1809.6,
+      100
+     ],
+     [
+      1819.7,
+      100
+     ],
+     [
+      1829.7,
+      100
+     ],
+     [
+      1839.8,
+      100
+     ],
+     [
+      1849.8,
+      100
+     ],
+     [
+      1859.8,
+      100
+     ],
+     [
+      1869.9,
+      100
+     ],
+     [
+      1879.9,
+      100
+     ],
+     [
+      1889.9,
+      100
+     ],
+     [
+      1900,
+      100
+     ],
+     [
+      1910,
+      100
+     ],
+     [
+      1920.1,
+      100
+     ],
+     [
+      1930.1,
+      100
+     ],
+     [
+      1940.1,
+      100
+     ],
+     [
+      1950.2,
+      100
+     ],
+     [
+      1960.2,
+      100
+     ],
+     [
+      1970.2,
+      100
+     ],
+     [
+      1980.3,
+      100
+     ],
+     [
+      1990.3,
+      100
+     ],
+     [
+      2000.3,
+      100
+     ],
+     [
+      2010.4,
+      100
+     ],
+     [
+      2020.4,
+      100
+     ],
+     [
+      2030.4,
+      100
+     ],
+     [
+      2040.5,
+      100
+     ],
+     [
+      2050.5,
+      100
+     ],
+     [
+      2060.6,
+      100
+     ],
+     [
+      2070.6,
+      100
+     ],
+     [
+      2080.6,
+      100
+     ],
+     [
+      2090.7,
+      100
+     ],
+     [
+      2100.7,
+      100
+     ],
+     [
+      2110.7,
+      100
+     ],
+     [
+      2120.8,
+      100
+     ],
+     [
+      2130.8,
+      100
+     ],
+     [
+      2135.8,
+      100
+     ]
+    ],
+    "awa": [
+     [
+      105.5,
+      0
+     ],
+     [
+      115.5,
+      0
+     ],
+     [
+      125.5,
+      0
+     ],
+     [
+      135.5,
+      0.65
+     ],
+     [
+      145.5,
+      1.6
+     ],
+     [
+      155.5,
+      2.53
+     ],
+     [
+      165.5,
+      3.3
+     ],
+     [
+      175.5,
+      4.29
+     ],
+     [
+      185.5,
+      5.1
+     ],
+     [
+      195.5,
+      6.1
+     ],
+     [
+      205.5,
+      7.26
+     ],
+     [
+      215.5,
+      8.36
+     ],
+     [
+      225.5,
+      9.32
+     ],
+     [
+      235.5,
+      10.05
+     ],
+     [
+      245.5,
+      10.63
+     ],
+     [
+      255.5,
+      12.1
+     ],
+     [
+      265.5,
+      12.93
+     ],
+     [
+      275.5,
+      13.88
+     ],
+     [
+      285.5,
+      14.81
+     ],
+     [
+      295.5,
+      15.89
+     ],
+     [
+      305.5,
+      16.79
+     ],
+     [
+      315.5,
+      17.7
+     ],
+     [
+      325.5,
+      18.45
+     ],
+     [
+      335.5,
+      19
+     ],
+     [
+      345.5,
+      19.28
+     ],
+     [
+      355.5,
+      20.2
+     ],
+     [
+      365.5,
+      20.2
+     ],
+     [
+      375.5,
+      22.22
+     ],
+     [
+      385.5,
+      23.13
+     ],
+     [
+      395.5,
+      23.82
+     ],
+     [
+      405.5,
+      25.26
+     ],
+     [
+      415.5,
+      25.97
+     ],
+     [
+      425.5,
+      26.83
+     ],
+     [
+      435.5,
+      27.91
+     ],
+     [
+      445.5,
+      28.56
+     ],
+     [
+      455.5,
+      29.4
+     ],
+     [
+      465.5,
+      30.09
+     ],
+     [
+      475.5,
+      30.96
+     ],
+     [
+      485.5,
+      31.5
+     ],
+     [
+      495.5,
+      31.95
+     ],
+     [
+      505.5,
+      32.8
+     ],
+     [
+      515.5,
+      33.18
+     ],
+     [
+      525.5,
+      33.85
+     ],
+     [
+      535.5,
+      34.98
+     ],
+     [
+      545.5,
+      35.15
+     ],
+     [
+      555.5,
+      36
+     ],
+     [
+      565.5,
+      36.6
+     ],
+     [
+      575.5,
+      37.17
+     ],
+     [
+      585.5,
+      38
+     ],
+     [
+      595.5,
+      38.58
+     ],
+     [
+      605.5,
+      39.11
+     ],
+     [
+      615.5,
+      39.56
+     ],
+     [
+      625.5,
+      40.36
+     ],
+     [
+      635.5,
+      41.21
+     ],
+     [
+      645.5,
+      41.75
+     ],
+     [
+      655.5,
+      42.33
+     ],
+     [
+      665.5,
+      43.36
+     ],
+     [
+      675.5,
+      44.13
+     ],
+     [
+      685.5,
+      45.1
+     ],
+     [
+      695.5,
+      46.41
+     ],
+     [
+      705.5,
+      46.53
+     ],
+     [
+      715.5,
+      47.71
+     ],
+     [
+      725.5,
+      48.94
+     ],
+     [
+      735.5,
+      49.67
+     ],
+     [
+      745.5,
+      51.04
+     ],
+     [
+      755.5,
+      52.51
+     ],
+     [
+      765.5,
+      53.71
+     ],
+     [
+      775.5,
+      54.58
+     ],
+     [
+      785.5,
+      56.23
+     ],
+     [
+      795.5,
+      57.42
+     ],
+     [
+      805.5,
+      59.07
+     ],
+     [
+      815.5,
+      61.28
+     ],
+     [
+      825.5,
+      62.45
+     ],
+     [
+      835.5,
+      63.35
+     ],
+     [
+      845.5,
+      64.85
+     ],
+     [
+      855.5,
+      66.28
+     ],
+     [
+      865.5,
+      67.28
+     ],
+     [
+      875.5,
+      69.13
+     ],
+     [
+      885.5,
+      69.97
+     ],
+     [
+      895.5,
+      71.04
+     ],
+     [
+      905.5,
+      71.67
+     ],
+     [
+      915.5,
+      73.8
+     ],
+     [
+      925.5,
+      74.52
+     ],
+     [
+      935.5,
+      75.44
+     ],
+     [
+      945.5,
+      76.75
+     ],
+     [
+      955.5,
+      77.09
+     ],
+     [
+      965.5,
+      77.51
+     ],
+     [
+      975.5,
+      79.03
+     ],
+     [
+      985.5,
+      79.39
+     ],
+     [
+      995.5,
+      80.37
+     ],
+     [
+      1005.5,
+      81.25
+     ],
+     [
+      1015.5,
+      82.39
+     ],
+     [
+      1025.5,
+      83.15
+     ],
+     [
+      1035.5,
+      84.15
+     ],
+     [
+      1045.5,
+      85.23
+     ],
+     [
+      1055.5,
+      85.86
+     ],
+     [
+      1065.5,
+      86.63
+     ],
+     [
+      1075.5,
+      87.84
+     ],
+     [
+      1085.5,
+      88.76
+     ],
+     [
+      1095.5,
+      89.69
+     ],
+     [
+      1105.5,
+      91.25
+     ],
+     [
+      1115.5,
+      91.68
+     ],
+     [
+      1125.5,
+      92.57
+     ],
+     [
+      1135.5,
+      93.48
+     ],
+     [
+      1145.5,
+      94.42
+     ],
+     [
+      1155.5,
+      95.36
+     ],
+     [
+      1165.5,
+      96.01
+     ],
+     [
+      1175.5,
+      96.45
+     ],
+     [
+      1185.5,
+      96.83
+     ],
+     [
+      1195.5,
+      97.32
+     ],
+     [
+      1205.5,
+      97.61
+     ],
+     [
+      1215.5,
+      98.06
+     ],
+     [
+      1225.5,
+      99.38
+     ],
+     [
+      1235.5,
+      100
+     ],
+     [
+      1245.5,
+      100
+     ],
+     [
+      1255.5,
+      100
+     ],
+     [
+      1265.5,
+      100
+     ],
+     [
+      1275.5,
+      100
+     ],
+     [
+      1285.5,
+      100
+     ],
+     [
+      1295.5,
+      100
+     ],
+     [
+      1305.5,
+      100
+     ],
+     [
+      1315.5,
+      100
+     ],
+     [
+      1325.5,
+      100
+     ],
+     [
+      1335.5,
+      100
+     ],
+     [
+      1345.5,
+      100
+     ],
+     [
+      1355.5,
+      100
+     ],
+     [
+      1365.5,
+      100
+     ],
+     [
+      1375.5,
+      100
+     ],
+     [
+      1385.5,
+      100
+     ],
+     [
+      1395.5,
+      100
+     ],
+     [
+      1405.5,
+      100
+     ],
+     [
+      1415.5,
+      100
+     ],
+     [
+      1425.5,
+      100
+     ],
+     [
+      1435.5,
+      100
+     ],
+     [
+      1445.5,
+      100
+     ],
+     [
+      1455.5,
+      100
+     ],
+     [
+      1465.5,
+      100
+     ],
+     [
+      1475.5,
+      100
+     ],
+     [
+      1485.5,
+      100
+     ],
+     [
+      1495.5,
+      100
+     ],
+     [
+      1505.5,
+      100
+     ],
+     [
+      1515.5,
+      100
+     ],
+     [
+      1525.5,
+      100
+     ],
+     [
+      1535.5,
+      100
+     ],
+     [
+      1545.5,
+      100
+     ],
+     [
+      1555.5,
+      100
+     ],
+     [
+      1565.5,
+      100
+     ],
+     [
+      1575.5,
+      100
+     ],
+     [
+      1585.5,
+      100
+     ],
+     [
+      1595.5,
+      100
+     ],
+     [
+      1605.5,
+      100
+     ],
+     [
+      1615.5,
+      100
+     ],
+     [
+      1625.5,
+      100
+     ],
+     [
+      1635.5,
+      100
+     ],
+     [
+      1645.5,
+      100
+     ],
+     [
+      1655.5,
+      100
+     ],
+     [
+      1665.5,
+      100
+     ],
+     [
+      1675.5,
+      100
+     ],
+     [
+      1685.5,
+      100
+     ],
+     [
+      1695.5,
+      100
+     ],
+     [
+      1705.5,
+      100
+     ],
+     [
+      1715.5,
+      100
+     ],
+     [
+      1725.5,
+      100
+     ],
+     [
+      1735.5,
+      100
+     ],
+     [
+      1745.5,
+      100
+     ],
+     [
+      1755.5,
+      100
+     ],
+     [
+      1765.5,
+      100
+     ],
+     [
+      1775.5,
+      100
+     ],
+     [
+      1785.5,
+      100
+     ],
+     [
+      1795.5,
+      100
+     ],
+     [
+      1805.5,
+      100
+     ],
+     [
+      1815.5,
+      100
+     ],
+     [
+      1825.5,
+      100
+     ],
+     [
+      1835.5,
+      100
+     ],
+     [
+      1845.5,
+      100
+     ],
+     [
+      1855.5,
+      100
+     ],
+     [
+      1865.5,
+      100
+     ],
+     [
+      1875.5,
+      100
+     ],
+     [
+      1885.5,
+      100
+     ],
+     [
+      1895.5,
+      100
+     ],
+     [
+      1905.5,
+      100
+     ],
+     [
+      1915.5,
+      100
+     ],
+     [
+      1925.5,
+      100
+     ],
+     [
+      1935.5,
+      100
+     ],
+     [
+      1945.5,
+      100
+     ],
+     [
+      1955.5,
+      100
+     ],
+     [
+      1965.5,
+      100
+     ],
+     [
+      1975.5,
+      100
+     ],
+     [
+      1985.5,
+      100
+     ],
+     [
+      1995.5,
+      100
+     ],
+     [
+      2005.5,
+      100
+     ],
+     [
+      2015.5,
+      100
+     ],
+     [
+      2025.5,
+      100
+     ],
+     [
+      2035.5,
+      100
+     ],
+     [
+      2045.5,
+      100
+     ],
+     [
+      2055.5,
+      100
+     ],
+     [
+      2065.5,
+      100
+     ],
+     [
+      2075.5,
+      100
+     ],
+     [
+      2085.5,
+      100
+     ],
+     [
+      2095.5,
+      100
+     ],
+     [
+      2105.5,
+      100
+     ],
+     [
+      2115.5,
+      100
+     ],
+     [
+      2125.5,
+      100
+     ],
+     [
+      2135.5,
+      100
+     ],
+     [
+      2145.5,
+      100
+     ],
+     [
+      2155.5,
+      100
+     ],
+     [
+      2165.5,
+      100
+     ],
+     [
+      2175.5,
+      100
+     ],
+     [
+      2185.5,
+      100
+     ],
+     [
+      2195.5,
+      100
+     ],
+     [
+      2205.5,
+      100
+     ],
+     [
+      2215.5,
+      100
+     ],
+     [
+      2225.5,
+      100
+     ],
+     [
+      2230.5,
+      100
+     ]
+    ],
+    "oban": [
+     [
+      11.5,
+      0
+     ],
+     [
+      21.5,
+      0
+     ],
+     [
+      31.5,
+      0
+     ],
+     [
+      41.5,
+      0
+     ],
+     [
+      47.1,
+      0
+     ],
+     [
+      57.1,
+      0
+     ],
+     [
+      67.1,
+      0
+     ],
+     [
+      77.1,
+      0
+     ],
+     [
+      87.1,
+      0
+     ],
+     [
+      97.1,
+      0
+     ],
+     [
+      107.1,
+      0
+     ],
+     [
+      117.1,
+      0
+     ],
+     [
+      127.1,
+      1.13
+     ],
+     [
+      137.1,
+      9.3
+     ],
+     [
+      147.1,
+      17.87
+     ],
+     [
+      157.1,
+      20.03
+     ],
+     [
+      167.1,
+      20.03
+     ],
+     [
+      177.1,
+      20.03
+     ],
+     [
+      187.1,
+      20.03
+     ],
+     [
+      197.1,
+      20.03
+     ],
+     [
+      207.1,
+      20.03
+     ],
+     [
+      217.1,
+      20.03
+     ],
+     [
+      227.1,
+      20.03
+     ],
+     [
+      237.1,
+      20.03
+     ],
+     [
+      247.1,
+      20.03
+     ],
+     [
+      257.1,
+      20.03
+     ],
+     [
+      267.1,
+      20.03
+     ],
+     [
+      277.2,
+      20.03
+     ],
+     [
+      287.2,
+      20.03
+     ],
+     [
+      297.2,
+      20.03
+     ],
+     [
+      307.2,
+      20.03
+     ],
+     [
+      317.2,
+      20.03
+     ],
+     [
+      327.2,
+      20.03
+     ],
+     [
+      337.2,
+      20.03
+     ],
+     [
+      347.2,
+      20.03
+     ],
+     [
+      357.2,
+      20.03
+     ],
+     [
+      367.2,
+      20.03
+     ],
+     [
+      377.2,
+      20.03
+     ],
+     [
+      387.2,
+      20.03
+     ],
+     [
+      397.2,
+      20.03
+     ],
+     [
+      407.2,
+      20.03
+     ],
+     [
+      417.2,
+      20.03
+     ],
+     [
+      427.2,
+      20.03
+     ],
+     [
+      437.2,
+      20.03
+     ],
+     [
+      447.2,
+      20.03
+     ],
+     [
+      457.2,
+      20.03
+     ],
+     [
+      467.2,
+      20.03
+     ],
+     [
+      477.2,
+      20.03
+     ],
+     [
+      487.2,
+      20.03
+     ],
+     [
+      497.2,
+      20.03
+     ],
+     [
+      507.2,
+      20.03
+     ],
+     [
+      517.3,
+      20.03
+     ],
+     [
+      527.3,
+      20.03
+     ],
+     [
+      537.3,
+      20.03
+     ],
+     [
+      547.3,
+      20.03
+     ],
+     [
+      557.3,
+      20.03
+     ],
+     [
+      567.3,
+      20.03
+     ],
+     [
+      577.3,
+      20.03
+     ],
+     [
+      587.3,
+      20.03
+     ],
+     [
+      597.3,
+      20.03
+     ],
+     [
+      607.3,
+      20.03
+     ],
+     [
+      617.3,
+      20.03
+     ],
+     [
+      627.3,
+      20.03
+     ],
+     [
+      637.3,
+      20.03
+     ],
+     [
+      647.3,
+      20.03
+     ],
+     [
+      657.3,
+      20.03
+     ],
+     [
+      667.3,
+      20.03
+     ],
+     [
+      677.3,
+      20.03
+     ],
+     [
+      687.3,
+      20.03
+     ],
+     [
+      697.4,
+      20.03
+     ],
+     [
+      707.4,
+      20.03
+     ],
+     [
+      717.4,
+      20.03
+     ],
+     [
+      727.4,
+      20.03
+     ],
+     [
+      737.4,
+      20.03
+     ],
+     [
+      747.4,
+      20.03
+     ],
+     [
+      757.4,
+      20.03
+     ],
+     [
+      767.4,
+      20.03
+     ],
+     [
+      777.4,
+      20.03
+     ],
+     [
+      787.4,
+      20.03
+     ],
+     [
+      797.4,
+      20.03
+     ],
+     [
+      807.4,
+      20.03
+     ],
+     [
+      817.4,
+      20.03
+     ],
+     [
+      827.4,
+      20.03
+     ],
+     [
+      837.4,
+      20.03
+     ],
+     [
+      847.4,
+      20.03
+     ],
+     [
+      857.5,
+      20.03
+     ],
+     [
+      867.5,
+      20.03
+     ],
+     [
+      877.5,
+      20.03
+     ],
+     [
+      887.5,
+      20.03
+     ],
+     [
+      897.5,
+      20.03
+     ],
+     [
+      907.5,
+      20.03
+     ],
+     [
+      917.5,
+      20.03
+     ],
+     [
+      927.5,
+      20.03
+     ],
+     [
+      937.5,
+      20.03
+     ],
+     [
+      947.5,
+      20.03
+     ],
+     [
+      957.5,
+      20.03
+     ],
+     [
+      967.5,
+      20.03
+     ],
+     [
+      977.5,
+      20.03
+     ],
+     [
+      987.5,
+      20.03
+     ],
+     [
+      997.6,
+      20.03
+     ],
+     [
+      1007.6,
+      20.03
+     ],
+     [
+      1017.6,
+      20.03
+     ],
+     [
+      1027.6,
+      20.03
+     ],
+     [
+      1037.6,
+      20.03
+     ],
+     [
+      1047.6,
+      20.03
+     ],
+     [
+      1057.6,
+      20.03
+     ],
+     [
+      1067.6,
+      20.03
+     ],
+     [
+      1077.6,
+      20.03
+     ],
+     [
+      1087.6,
+      20.03
+     ],
+     [
+      1097.6,
+      20.03
+     ],
+     [
+      1107.6,
+      20.03
+     ],
+     [
+      1117.7,
+      20.03
+     ],
+     [
+      1127.7,
+      20.03
+     ],
+     [
+      1137.7,
+      20.03
+     ],
+     [
+      1147.7,
+      20.03
+     ],
+     [
+      1157.7,
+      20.03
+     ],
+     [
+      1167.7,
+      20.03
+     ],
+     [
+      1177.7,
+      20.03
+     ],
+     [
+      1187.7,
+      20.03
+     ],
+     [
+      1197.7,
+      20.03
+     ],
+     [
+      1207.7,
+      20.03
+     ],
+     [
+      1217.7,
+      20.03
+     ],
+     [
+      1227.7,
+      20.03
+     ],
+     [
+      1237.8,
+      20.03
+     ],
+     [
+      1247.8,
+      20.03
+     ],
+     [
+      1257.8,
+      20.03
+     ],
+     [
+      1267.8,
+      20.03
+     ],
+     [
+      1277.8,
+      20.03
+     ],
+     [
+      1287.8,
+      20.03
+     ],
+     [
+      1297.8,
+      20.03
+     ],
+     [
+      1307.8,
+      20.03
+     ],
+     [
+      1317.8,
+      20.03
+     ],
+     [
+      1327.8,
+      20.03
+     ],
+     [
+      1337.8,
+      20.03
+     ],
+     [
+      1347.9,
+      20.03
+     ],
+     [
+      1357.9,
+      20.03
+     ],
+     [
+      1367.9,
+      20.03
+     ],
+     [
+      1377.9,
+      20.03
+     ],
+     [
+      1387.9,
+      20.03
+     ],
+     [
+      1397.9,
+      20.03
+     ],
+     [
+      1407.9,
+      20.03
+     ],
+     [
+      1417.9,
+      20.03
+     ],
+     [
+      1427.9,
+      20.03
+     ],
+     [
+      1437.9,
+      20.03
+     ],
+     [
+      1448,
+      20.03
+     ],
+     [
+      1458,
+      20.03
+     ],
+     [
+      1468,
+      20.03
+     ],
+     [
+      1478,
+      20.03
+     ],
+     [
+      1488,
+      20.03
+     ],
+     [
+      1498,
+      20.03
+     ],
+     [
+      1508,
+      20.03
+     ],
+     [
+      1518,
+      20.03
+     ],
+     [
+      1528,
+      20.03
+     ],
+     [
+      1538.1,
+      20.03
+     ],
+     [
+      1548.1,
+      20.03
+     ],
+     [
+      1558.1,
+      20.03
+     ],
+     [
+      1568.1,
+      20.03
+     ],
+     [
+      1578.1,
+      20.03
+     ],
+     [
+      1588.1,
+      20.03
+     ],
+     [
+      1598.1,
+      20.03
+     ],
+     [
+      1608.1,
+      20.03
+     ],
+     [
+      1618.1,
+      20.03
+     ],
+     [
+      1628.2,
+      20.03
+     ],
+     [
+      1638.2,
+      20.03
+     ],
+     [
+      1648.2,
+      20.03
+     ],
+     [
+      1658.2,
+      20.03
+     ],
+     [
+      1668.2,
+      20.03
+     ],
+     [
+      1678.2,
+      20.03
+     ],
+     [
+      1688.2,
+      20.03
+     ],
+     [
+      1698.2,
+      20.03
+     ],
+     [
+      1708.2,
+      20.03
+     ],
+     [
+      1718.3,
+      20.03
+     ],
+     [
+      1728.3,
+      20.03
+     ],
+     [
+      1738.3,
+      20.03
+     ],
+     [
+      1748.3,
+      20.03
+     ],
+     [
+      1758.3,
+      20.03
+     ],
+     [
+      1768.3,
+      20.03
+     ],
+     [
+      1778.3,
+      20.03
+     ],
+     [
+      1788.3,
+      20.03
+     ],
+     [
+      1798.4,
+      20.03
+     ],
+     [
+      1808.4,
+      20.03
+     ],
+     [
+      1818.4,
+      20.03
+     ],
+     [
+      1828.4,
+      20.03
+     ],
+     [
+      1838.4,
+      20.03
+     ],
+     [
+      1848.4,
+      20.03
+     ],
+     [
+      1857.7,
+      20.03
+     ],
+     [
+      1867.7,
+      20.03
+     ],
+     [
+      1877.8,
+      20.03
+     ],
+     [
+      1887.8,
+      20.03
+     ],
+     [
+      1897.8,
+      20.03
+     ],
+     [
+      1907.8,
+      20.03
+     ],
+     [
+      1917.8,
+      20.03
+     ],
+     [
+      1927.8,
+      20.03
+     ],
+     [
+      1937.8,
+      20.03
+     ],
+     [
+      1947.8,
+      20.03
+     ],
+     [
+      1957.8,
+      20.03
+     ],
+     [
+      1967.9,
+      20.03
+     ],
+     [
+      1977.9,
+      20.03
+     ],
+     [
+      1987.9,
+      20.03
+     ],
+     [
+      1997.9,
+      20.03
+     ],
+     [
+      2007.9,
+      20.03
+     ],
+     [
+      2017.9,
+      20.03
+     ],
+     [
+      2027.9,
+      20.03
+     ],
+     [
+      2037.9,
+      20.03
+     ],
+     [
+      2048,
+      20.03
+     ],
+     [
+      2058,
+      20.03
+     ],
+     [
+      2068,
+      20.03
+     ],
+     [
+      2078,
+      20.03
+     ],
+     [
+      2088,
+      20.03
+     ],
+     [
+      2098,
+      20.03
+     ],
+     [
+      2108,
+      20.03
+     ],
+     [
+      2118,
+      20.03
+     ],
+     [
+      2128.1,
+      20.03
+     ],
+     [
+      2138.1,
+      20.03
+     ],
+     [
+      2148.1,
+      20.03
+     ],
+     [
+      2158.1,
+      20.03
+     ],
+     [
+      2168.1,
+      20.03
+     ]
+    ],
+    "pg-boss": [
+     [
+      5.6,
+      3.09
+     ],
+     [
+      15.6,
+      6.42
+     ],
+     [
+      25.6,
+      6.42
+     ],
+     [
+      35.6,
+      6.42
+     ],
+     [
+      45.6,
+      6.42
+     ],
+     [
+      55.6,
+      6.42
+     ],
+     [
+      65.6,
+      6.42
+     ],
+     [
+      75.6,
+      6.42
+     ],
+     [
+      85.6,
+      6.42
+     ],
+     [
+      95.6,
+      6.42
+     ],
+     [
+      105.6,
+      6.42
+     ],
+     [
+      115.6,
+      6.42
+     ],
+     [
+      125.6,
+      7.86
+     ],
+     [
+      135.6,
+      12.27
+     ],
+     [
+      145.7,
+      15.84
+     ],
+     [
+      155.7,
+      18.78
+     ],
+     [
+      165.7,
+      21.17
+     ],
+     [
+      175.7,
+      22.98
+     ],
+     [
+      185.7,
+      24.3
+     ],
+     [
+      195.7,
+      24.47
+     ],
+     [
+      205.7,
+      25.42
+     ],
+     [
+      215.7,
+      26.17
+     ],
+     [
+      225.7,
+      30.5
+     ],
+     [
+      235.7,
+      34.24
+     ],
+     [
+      245.7,
+      36.77
+     ],
+     [
+      255.7,
+      36.85
+     ],
+     [
+      265.7,
+      37.78
+     ],
+     [
+      275.7,
+      38.63
+     ],
+     [
+      285.7,
+      39.99
+     ],
+     [
+      295.7,
+      40.92
+     ],
+     [
+      305.7,
+      41.51
+     ],
+     [
+      315.7,
+      42.11
+     ],
+     [
+      325.7,
+      42.28
+     ],
+     [
+      335.7,
+      42.36
+     ],
+     [
+      345.7,
+      42.78
+     ],
+     [
+      355.7,
+      44.23
+     ],
+     [
+      365.7,
+      46.98
+     ],
+     [
+      375.7,
+      49.05
+     ],
+     [
+      385.8,
+      50.67
+     ],
+     [
+      395.8,
+      51.69
+     ],
+     [
+      405.8,
+      52.53
+     ],
+     [
+      415.8,
+      53.21
+     ],
+     [
+      425.8,
+      54.06
+     ],
+     [
+      435.8,
+      54.82
+     ],
+     [
+      445.8,
+      55.5
+     ],
+     [
+      455.8,
+      56.94
+     ],
+     [
+      465.8,
+      60.22
+     ],
+     [
+      475.8,
+      62.45
+     ],
+     [
+      485.8,
+      64.32
+     ],
+     [
+      495.8,
+      65.16
+     ],
+     [
+      505.8,
+      65.84
+     ],
+     [
+      515.8,
+      66.44
+     ],
+     [
+      525.8,
+      67.03
+     ],
+     [
+      535.8,
+      67.48
+     ],
+     [
+      545.8,
+      68.05
+     ],
+     [
+      555.9,
+      68.47
+     ],
+     [
+      565.9,
+      68.89
+     ],
+     [
+      575.9,
+      69.23
+     ],
+     [
+      585.9,
+      69.57
+     ],
+     [
+      595.9,
+      72.4
+     ],
+     [
+      605.9,
+      74.83
+     ],
+     [
+      615.9,
+      76.68
+     ],
+     [
+      625.9,
+      77.8
+     ],
+     [
+      635.9,
+      78.73
+     ],
+     [
+      645.9,
+      79.49
+     ],
+     [
+      655.9,
+      80.08
+     ],
+     [
+      666,
+      80.85
+     ],
+     [
+      676,
+      81.34
+     ],
+     [
+      686,
+      81.78
+     ],
+     [
+      696,
+      82.2
+     ],
+     [
+      706,
+      83.47
+     ],
+     [
+      716,
+      86.14
+     ],
+     [
+      726,
+      88.47
+     ],
+     [
+      736,
+      89.41
+     ],
+     [
+      746,
+      90.43
+     ],
+     [
+      756.1,
+      91.19
+     ],
+     [
+      766.1,
+      92.04
+     ],
+     [
+      776.1,
+      92.72
+     ],
+     [
+      786.1,
+      93.39
+     ],
+     [
+      796.1,
+      94.07
+     ],
+     [
+      806.1,
+      94.75
+     ],
+     [
+      816.1,
+      95.26
+     ],
+     [
+      826.1,
+      96.9
+     ],
+     [
+      836.1,
+      99.41
+     ],
+     [
+      846.2,
+      100
+     ],
+     [
+      856.2,
+      100
+     ],
+     [
+      866.2,
+      100
+     ],
+     [
+      876.2,
+      100
+     ],
+     [
+      886.2,
+      100
+     ],
+     [
+      896.2,
+      100
+     ],
+     [
+      906.2,
+      100
+     ],
+     [
+      916.2,
+      100
+     ],
+     [
+      926.2,
+      100
+     ],
+     [
+      936.3,
+      100
+     ],
+     [
+      946.3,
+      100
+     ],
+     [
+      956.3,
+      100
+     ],
+     [
+      966.3,
+      100
+     ],
+     [
+      976.3,
+      100
+     ],
+     [
+      986.3,
+      100
+     ],
+     [
+      996.3,
+      100
+     ],
+     [
+      1006.3,
+      100
+     ],
+     [
+      1016.3,
+      100
+     ],
+     [
+      1026.4,
+      100
+     ],
+     [
+      1036.4,
+      100
+     ],
+     [
+      1046.4,
+      100
+     ],
+     [
+      1056.4,
+      100
+     ],
+     [
+      1066.4,
+      100
+     ],
+     [
+      1076.4,
+      100
+     ],
+     [
+      1086.4,
+      100
+     ],
+     [
+      1096.4,
+      100
+     ],
+     [
+      1106.5,
+      100
+     ],
+     [
+      1116.5,
+      100
+     ],
+     [
+      1126.5,
+      100
+     ],
+     [
+      1136.5,
+      100
+     ],
+     [
+      1146.5,
+      100
+     ],
+     [
+      1156.5,
+      100
+     ],
+     [
+      1166.6,
+      100
+     ],
+     [
+      1176.6,
+      100
+     ],
+     [
+      1186.6,
+      100
+     ],
+     [
+      1196.6,
+      100
+     ],
+     [
+      1206.6,
+      100
+     ],
+     [
+      1216.6,
+      100
+     ],
+     [
+      1226.7,
+      100
+     ],
+     [
+      1236.7,
+      100
+     ],
+     [
+      1246.7,
+      100
+     ],
+     [
+      1256.7,
+      100
+     ],
+     [
+      1266.7,
+      100
+     ],
+     [
+      1276.7,
+      100
+     ],
+     [
+      1286.8,
+      100
+     ],
+     [
+      1296.8,
+      100
+     ],
+     [
+      1306.8,
+      100
+     ],
+     [
+      1316.8,
+      100
+     ],
+     [
+      1326.8,
+      100
+     ],
+     [
+      1336.9,
+      100
+     ],
+     [
+      1346.9,
+      100
+     ],
+     [
+      1356.9,
+      100
+     ],
+     [
+      1366.9,
+      100
+     ],
+     [
+      1376.9,
+      100
+     ],
+     [
+      1387,
+      100
+     ],
+     [
+      1397,
+      100
+     ],
+     [
+      1407,
+      100
+     ],
+     [
+      1417,
+      100
+     ],
+     [
+      1427,
+      100
+     ],
+     [
+      1437,
+      100
+     ],
+     [
+      1447.1,
+      100
+     ],
+     [
+      1457.1,
+      100
+     ],
+     [
+      1467.1,
+      100
+     ],
+     [
+      1477.1,
+      100
+     ],
+     [
+      1487.1,
+      100
+     ],
+     [
+      1497.2,
+      100
+     ],
+     [
+      1507.2,
+      100
+     ],
+     [
+      1517.2,
+      100
+     ],
+     [
+      1527.2,
+      100
+     ],
+     [
+      1537.3,
+      100
+     ],
+     [
+      1547.3,
+      100
+     ],
+     [
+      1557.3,
+      100
+     ],
+     [
+      1567.3,
+      100
+     ],
+     [
+      1577.3,
+      100
+     ],
+     [
+      1587.4,
+      100
+     ],
+     [
+      1597.4,
+      100
+     ],
+     [
+      1607.4,
+      100
+     ],
+     [
+      1617.4,
+      100
+     ],
+     [
+      1627.5,
+      100
+     ],
+     [
+      1637.5,
+      100
+     ],
+     [
+      1647.5,
+      100
+     ],
+     [
+      1657.5,
+      100
+     ],
+     [
+      1667.6,
+      100
+     ],
+     [
+      1677.6,
+      100
+     ],
+     [
+      1687.6,
+      100
+     ],
+     [
+      1697.6,
+      100
+     ],
+     [
+      1707.7,
+      100
+     ],
+     [
+      1717.7,
+      100
+     ],
+     [
+      1727.7,
+      100
+     ],
+     [
+      1737.8,
+      100
+     ],
+     [
+      1747.8,
+      100
+     ],
+     [
+      1757.8,
+      100
+     ],
+     [
+      1767.8,
+      100
+     ],
+     [
+      1777.9,
+      100
+     ],
+     [
+      1787.9,
+      100
+     ],
+     [
+      1797.9,
+      100
+     ],
+     [
+      1807.9,
+      100
+     ],
+     [
+      1818,
+      100
+     ],
+     [
+      1828,
+      100
+     ],
+     [
+      1838,
+      100
+     ],
+     [
+      1848,
+      100
+     ],
+     [
+      1858.1,
+      100
+     ],
+     [
+      1868.1,
+      100
+     ],
+     [
+      1878.1,
+      100
+     ],
+     [
+      1888.1,
+      100
+     ],
+     [
+      1898.1,
+      100
+     ],
+     [
+      1908.2,
+      100
+     ],
+     [
+      1918.2,
+      100
+     ],
+     [
+      1928.2,
+      100
+     ],
+     [
+      1938.2,
+      100
+     ],
+     [
+      1948.3,
+      100
+     ],
+     [
+      1958.3,
+      100
+     ],
+     [
+      1968.3,
+      100
+     ],
+     [
+      1978.3,
+      100
+     ],
+     [
+      1988.3,
+      100
+     ],
+     [
+      1998.4,
+      100
+     ],
+     [
+      2008.4,
+      100
+     ],
+     [
+      2018.4,
+      100
+     ],
+     [
+      2028.4,
+      100
+     ],
+     [
+      2038.4,
+      100
+     ],
+     [
+      2048.5,
+      100
+     ],
+     [
+      2058.5,
+      100
+     ],
+     [
+      2068.5,
+      100
+     ],
+     [
+      2078.5,
+      100
+     ],
+     [
+      2088.5,
+      100
+     ],
+     [
+      2098.6,
+      100
+     ],
+     [
+      2108.6,
+      100
+     ],
+     [
+      2118.6,
+      100
+     ],
+     [
+      2128.6,
+      100
+     ],
+     [
+      2133.6,
+      100
+     ]
+    ],
+    "pgmq": [
+     [
+      2.7,
+      0
+     ],
+     [
+      12.7,
+      0
+     ],
+     [
+      22.7,
+      0
+     ],
+     [
+      32.7,
+      0
+     ],
+     [
+      42.7,
+      0
+     ],
+     [
+      52.7,
+      0
+     ],
+     [
+      62.7,
+      0
+     ],
+     [
+      72.7,
+      0
+     ],
+     [
+      82.7,
+      0
+     ],
+     [
+      92.7,
+      0
+     ],
+     [
+      102.7,
+      0
+     ],
+     [
+      112.7,
+      0
+     ],
+     [
+      122.7,
+      2.01
+     ],
+     [
+      132.7,
+      7.45
+     ],
+     [
+      142.7,
+      12.47
+     ],
+     [
+      152.7,
+      17.88
+     ],
+     [
+      162.8,
+      22.59
+     ],
+     [
+      172.8,
+      27.11
+     ],
+     [
+      182.8,
+      31.34
+     ],
+     [
+      192.8,
+      35.66
+     ],
+     [
+      202.8,
+      39.92
+     ],
+     [
+      212.8,
+      44.8
+     ],
+     [
+      222.8,
+      50.67
+     ],
+     [
+      232.8,
+      56.08
+     ],
+     [
+      242.8,
+      61.09
+     ],
+     [
+      252.8,
+      63.75
+     ],
+     [
+      262.8,
+      68.38
+     ],
+     [
+      272.8,
+      72.96
+     ],
+     [
+      282.8,
+      77.21
+     ],
+     [
+      292.8,
+      79.79
+     ],
+     [
+      302.8,
+      83.75
+     ],
+     [
+      312.8,
+      87.55
+     ],
+     [
+      322.8,
+      91
+     ],
+     [
+      332.8,
+      94.4
+     ],
+     [
+      342.8,
+      97.67
+     ],
+     [
+      352.8,
+      100
+     ],
+     [
+      362.8,
+      100
+     ],
+     [
+      372.9,
+      100
+     ],
+     [
+      382.9,
+      100
+     ],
+     [
+      392.9,
+      100
+     ],
+     [
+      402.9,
+      100
+     ],
+     [
+      412.9,
+      100
+     ],
+     [
+      422.9,
+      100
+     ],
+     [
+      432.9,
+      100
+     ],
+     [
+      442.9,
+      100
+     ],
+     [
+      452.9,
+      100
+     ],
+     [
+      462.9,
+      100
+     ],
+     [
+      472.9,
+      100
+     ],
+     [
+      483,
+      100
+     ],
+     [
+      493,
+      100
+     ],
+     [
+      503,
+      100
+     ],
+     [
+      513,
+      100
+     ],
+     [
+      523,
+      100
+     ],
+     [
+      533,
+      100
+     ],
+     [
+      543,
+      100
+     ],
+     [
+      553,
+      100
+     ],
+     [
+      563,
+      100
+     ],
+     [
+      573.1,
+      100
+     ],
+     [
+      583.1,
+      100
+     ],
+     [
+      593.1,
+      100
+     ],
+     [
+      603.1,
+      100
+     ],
+     [
+      613.1,
+      100
+     ],
+     [
+      623.1,
+      100
+     ],
+     [
+      633.1,
+      100
+     ],
+     [
+      643.2,
+      100
+     ],
+     [
+      653.2,
+      100
+     ],
+     [
+      663.2,
+      100
+     ],
+     [
+      673.2,
+      100
+     ],
+     [
+      683.2,
+      100
+     ],
+     [
+      693.2,
+      100
+     ],
+     [
+      703.2,
+      100
+     ],
+     [
+      713.3,
+      100
+     ],
+     [
+      723.3,
+      100
+     ],
+     [
+      733.3,
+      100
+     ],
+     [
+      743.3,
+      100
+     ],
+     [
+      753.3,
+      100
+     ],
+     [
+      763.3,
+      100
+     ],
+     [
+      773.4,
+      100
+     ],
+     [
+      783.4,
+      100
+     ],
+     [
+      793.4,
+      100
+     ],
+     [
+      803.4,
+      100
+     ],
+     [
+      813.4,
+      100
+     ],
+     [
+      823.5,
+      100
+     ],
+     [
+      833.5,
+      100
+     ],
+     [
+      843.5,
+      100
+     ],
+     [
+      853.5,
+      100
+     ],
+     [
+      863.5,
+      100
+     ],
+     [
+      873.6,
+      100
+     ],
+     [
+      883.6,
+      100
+     ],
+     [
+      893.6,
+      100
+     ],
+     [
+      903.6,
+      100
+     ],
+     [
+      913.6,
+      100
+     ],
+     [
+      923.7,
+      100
+     ],
+     [
+      933.7,
+      100
+     ],
+     [
+      943.7,
+      100
+     ],
+     [
+      953.7,
+      100
+     ],
+     [
+      963.7,
+      100
+     ],
+     [
+      973.8,
+      100
+     ],
+     [
+      983.8,
+      100
+     ],
+     [
+      993.8,
+      100
+     ],
+     [
+      1003.8,
+      100
+     ],
+     [
+      1013.9,
+      100
+     ],
+     [
+      1023.9,
+      100
+     ],
+     [
+      1033.9,
+      100
+     ],
+     [
+      1043.9,
+      100
+     ],
+     [
+      1054,
+      100
+     ],
+     [
+      1064,
+      100
+     ],
+     [
+      1074,
+      100
+     ],
+     [
+      1084,
+      100
+     ],
+     [
+      1094.1,
+      100
+     ],
+     [
+      1104.1,
+      100
+     ],
+     [
+      1114.1,
+      100
+     ],
+     [
+      1124.1,
+      100
+     ],
+     [
+      1134.2,
+      100
+     ],
+     [
+      1144.2,
+      100
+     ],
+     [
+      1154.2,
+      100
+     ],
+     [
+      1164.3,
+      100
+     ],
+     [
+      1174.3,
+      100
+     ],
+     [
+      1184.3,
+      100
+     ],
+     [
+      1194.3,
+      100
+     ],
+     [
+      1204.4,
+      100
+     ],
+     [
+      1214.4,
+      100
+     ],
+     [
+      1224.4,
+      100
+     ],
+     [
+      1234.4,
+      100
+     ],
+     [
+      1244.5,
+      100
+     ],
+     [
+      1254.5,
+      100
+     ],
+     [
+      1264.5,
+      100
+     ],
+     [
+      1274.6,
+      100
+     ],
+     [
+      1284.6,
+      100
+     ],
+     [
+      1294.6,
+      100
+     ],
+     [
+      1304.6,
+      100
+     ],
+     [
+      1314.7,
+      100
+     ],
+     [
+      1324.7,
+      100
+     ],
+     [
+      1334.7,
+      100
+     ],
+     [
+      1344.8,
+      100
+     ],
+     [
+      1354.8,
+      100
+     ],
+     [
+      1364.8,
+      100
+     ],
+     [
+      1374.8,
+      100
+     ],
+     [
+      1384.9,
+      100
+     ],
+     [
+      1394.9,
+      100
+     ],
+     [
+      1404.9,
+      100
+     ],
+     [
+      1415,
+      100
+     ],
+     [
+      1425,
+      100
+     ],
+     [
+      1435,
+      100
+     ],
+     [
+      1445.1,
+      100
+     ],
+     [
+      1455.1,
+      100
+     ],
+     [
+      1465.1,
+      100
+     ],
+     [
+      1475.2,
+      100
+     ],
+     [
+      1485.2,
+      100
+     ],
+     [
+      1495.2,
+      100
+     ],
+     [
+      1505.3,
+      100
+     ],
+     [
+      1515.3,
+      100
+     ],
+     [
+      1525.3,
+      100
+     ],
+     [
+      1535.3,
+      100
+     ],
+     [
+      1545.4,
+      100
+     ],
+     [
+      1555.4,
+      100
+     ],
+     [
+      1565.5,
+      100
+     ],
+     [
+      1575.5,
+      100
+     ],
+     [
+      1585.5,
+      100
+     ],
+     [
+      1595.6,
+      100
+     ],
+     [
+      1605.6,
+      100
+     ],
+     [
+      1615.6,
+      100
+     ],
+     [
+      1625.7,
+      100
+     ],
+     [
+      1635.7,
+      100
+     ],
+     [
+      1645.7,
+      100
+     ],
+     [
+      1655.8,
+      100
+     ],
+     [
+      1665.8,
+      100
+     ],
+     [
+      1675.8,
+      100
+     ],
+     [
+      1685.9,
+      100
+     ],
+     [
+      1695.9,
+      100
+     ],
+     [
+      1705.9,
+      100
+     ],
+     [
+      1716,
+      100
+     ],
+     [
+      1726,
+      100
+     ],
+     [
+      1736.1,
+      100
+     ],
+     [
+      1746.1,
+      100
+     ],
+     [
+      1756.1,
+      100
+     ],
+     [
+      1766.2,
+      100
+     ],
+     [
+      1776.2,
+      100
+     ],
+     [
+      1786.2,
+      100
+     ],
+     [
+      1796.3,
+      100
+     ],
+     [
+      1806.3,
+      100
+     ],
+     [
+      1816.3,
+      100
+     ],
+     [
+      1826.4,
+      100
+     ],
+     [
+      1836.4,
+      100
+     ],
+     [
+      1846.5,
+      100
+     ],
+     [
+      1856.5,
+      100
+     ],
+     [
+      1866.5,
+      100
+     ],
+     [
+      1876.6,
+      100
+     ],
+     [
+      1886.6,
+      100
+     ],
+     [
+      1896.7,
+      100
+     ],
+     [
+      1906.7,
+      100
+     ],
+     [
+      1916.7,
+      100
+     ],
+     [
+      1926.8,
+      100
+     ],
+     [
+      1936.8,
+      100
+     ],
+     [
+      1946.9,
+      100
+     ],
+     [
+      1956.9,
+      100
+     ],
+     [
+      1966.9,
+      100
+     ],
+     [
+      1977,
+      100
+     ],
+     [
+      1987,
+      100
+     ],
+     [
+      1997.1,
+      100
+     ],
+     [
+      2007.1,
+      100
+     ],
+     [
+      2017.1,
+      100
+     ],
+     [
+      2027.2,
+      100
+     ],
+     [
+      2037.2,
+      100
+     ],
+     [
+      2047.3,
+      100
+     ],
+     [
+      2057.3,
+      100
+     ],
+     [
+      2067.4,
+      100
+     ],
+     [
+      2077.4,
+      100
+     ],
+     [
+      2087.4,
+      100
+     ],
+     [
+      2097.5,
+      100
+     ],
+     [
+      2107.5,
+      100
+     ],
+     [
+      2117.6,
+      100
+     ],
+     [
+      2127.6,
+      100
+     ],
+     [
+      2137.6,
+      100
+     ],
+     [
+      2147.7,
+      100
+     ],
+     [
+      2157.7,
+      100
+     ],
+     [
+      2167.8,
+      100
+     ],
+     [
+      2177.8,
+      100
+     ]
+    ],
+    "pgque": [
+     [
+      11.3,
+      99.54
+     ],
+     [
+      21.3,
+      100
+     ],
+     [
+      31.3,
+      100
+     ],
+     [
+      41.3,
+      100
+     ],
+     [
+      51.3,
+      100
+     ],
+     [
+      61.3,
+      100
+     ],
+     [
+      71.3,
+      100
+     ],
+     [
+      81.3,
+      100
+     ],
+     [
+      91.3,
+      100
+     ],
+     [
+      101.4,
+      100
+     ],
+     [
+      111.4,
+      100
+     ],
+     [
+      121.4,
+      100
+     ],
+     [
+      131.4,
+      100
+     ],
+     [
+      141.4,
+      100
+     ],
+     [
+      151.4,
+      100
+     ],
+     [
+      161.4,
+      100
+     ],
+     [
+      171.4,
+      100
+     ],
+     [
+      181.4,
+      100
+     ],
+     [
+      191.4,
+      100
+     ],
+     [
+      201.4,
+      100
+     ],
+     [
+      211.4,
+      100
+     ],
+     [
+      221.4,
+      100
+     ],
+     [
+      231.4,
+      100
+     ],
+     [
+      241.4,
+      100
+     ],
+     [
+      251.4,
+      100
+     ],
+     [
+      261.4,
+      100
+     ],
+     [
+      271.5,
+      100
+     ],
+     [
+      281.5,
+      100
+     ],
+     [
+      291.5,
+      100
+     ],
+     [
+      301.5,
+      100
+     ],
+     [
+      311.5,
+      100
+     ],
+     [
+      321.5,
+      100
+     ],
+     [
+      331.5,
+      100
+     ],
+     [
+      341.5,
+      100
+     ],
+     [
+      351.5,
+      100
+     ],
+     [
+      361.5,
+      100
+     ],
+     [
+      371.5,
+      100
+     ],
+     [
+      381.6,
+      100
+     ],
+     [
+      391.6,
+      100
+     ],
+     [
+      401.6,
+      100
+     ],
+     [
+      411.6,
+      100
+     ],
+     [
+      421.6,
+      100
+     ],
+     [
+      431.6,
+      100
+     ],
+     [
+      441.6,
+      100
+     ],
+     [
+      451.6,
+      100
+     ],
+     [
+      461.6,
+      100
+     ],
+     [
+      471.7,
+      100
+     ],
+     [
+      481.7,
+      100
+     ],
+     [
+      491.7,
+      100
+     ],
+     [
+      501.7,
+      100
+     ],
+     [
+      511.7,
+      100
+     ],
+     [
+      521.7,
+      100
+     ],
+     [
+      531.7,
+      100
+     ],
+     [
+      541.7,
+      100
+     ],
+     [
+      551.8,
+      100
+     ],
+     [
+      561.8,
+      100
+     ],
+     [
+      571.8,
+      100
+     ],
+     [
+      581.8,
+      100
+     ],
+     [
+      591.8,
+      100
+     ],
+     [
+      601.8,
+      100
+     ],
+     [
+      611.8,
+      100
+     ],
+     [
+      621.9,
+      100
+     ],
+     [
+      631.9,
+      100
+     ],
+     [
+      641.9,
+      100
+     ],
+     [
+      651.9,
+      100
+     ],
+     [
+      661.9,
+      100
+     ],
+     [
+      671.9,
+      100
+     ],
+     [
+      681.9,
+      100
+     ],
+     [
+      692,
+      100
+     ],
+     [
+      702,
+      100
+     ],
+     [
+      712,
+      100
+     ],
+     [
+      722,
+      100
+     ],
+     [
+      732,
+      100
+     ],
+     [
+      742.1,
+      100
+     ],
+     [
+      752.1,
+      100
+     ],
+     [
+      762.1,
+      100
+     ],
+     [
+      772.1,
+      100
+     ],
+     [
+      782.1,
+      100
+     ],
+     [
+      792.1,
+      100
+     ],
+     [
+      802.2,
+      100
+     ],
+     [
+      812.2,
+      100
+     ],
+     [
+      822.2,
+      100
+     ],
+     [
+      832.2,
+      100
+     ],
+     [
+      842.2,
+      100
+     ],
+     [
+      852.3,
+      100
+     ],
+     [
+      862.3,
+      100
+     ],
+     [
+      872.3,
+      100
+     ],
+     [
+      882.3,
+      100
+     ],
+     [
+      892.3,
+      100
+     ],
+     [
+      902.4,
+      100
+     ],
+     [
+      912.4,
+      100
+     ],
+     [
+      922.4,
+      100
+     ],
+     [
+      932.4,
+      100
+     ],
+     [
+      942.5,
+      100
+     ],
+     [
+      952.5,
+      100
+     ],
+     [
+      962.5,
+      100
+     ],
+     [
+      972.5,
+      100
+     ],
+     [
+      982.5,
+      100
+     ],
+     [
+      992.6,
+      100
+     ],
+     [
+      1002.6,
+      100
+     ],
+     [
+      1012.6,
+      100
+     ],
+     [
+      1022.6,
+      100
+     ],
+     [
+      1032.7,
+      100
+     ],
+     [
+      1042.7,
+      100
+     ],
+     [
+      1052.7,
+      100
+     ],
+     [
+      1062.7,
+      100
+     ],
+     [
+      1072.8,
+      100
+     ],
+     [
+      1082.8,
+      100
+     ],
+     [
+      1092.8,
+      100
+     ],
+     [
+      1102.8,
+      100
+     ],
+     [
+      1112.9,
+      100
+     ],
+     [
+      1122.9,
+      100
+     ],
+     [
+      1132.9,
+      100
+     ],
+     [
+      1142.9,
+      100
+     ],
+     [
+      1153,
+      100
+     ],
+     [
+      1163,
+      100
+     ],
+     [
+      1173,
+      100
+     ],
+     [
+      1183,
+      100
+     ],
+     [
+      1193.1,
+      100
+     ],
+     [
+      1203.1,
+      100
+     ],
+     [
+      1213.1,
+      100
+     ],
+     [
+      1223.1,
+      100
+     ],
+     [
+      1233.2,
+      100
+     ],
+     [
+      1243.2,
+      100
+     ],
+     [
+      1253.2,
+      100
+     ],
+     [
+      1263.2,
+      100
+     ],
+     [
+      1273.3,
+      100
+     ],
+     [
+      1283.3,
+      100
+     ],
+     [
+      1293.3,
+      100
+     ],
+     [
+      1303.3,
+      100
+     ],
+     [
+      1313.4,
+      100
+     ],
+     [
+      1323.4,
+      100
+     ],
+     [
+      1333.4,
+      100
+     ],
+     [
+      1343.5,
+      100
+     ],
+     [
+      1353.5,
+      100
+     ],
+     [
+      1363.5,
+      100
+     ],
+     [
+      1373.6,
+      100
+     ],
+     [
+      1383.6,
+      100
+     ],
+     [
+      1393.6,
+      100
+     ],
+     [
+      1403.6,
+      100
+     ],
+     [
+      1413.7,
+      100
+     ],
+     [
+      1423.7,
+      100
+     ],
+     [
+      1433.7,
+      100
+     ],
+     [
+      1443.8,
+      100
+     ],
+     [
+      1453.8,
+      100
+     ],
+     [
+      1463.8,
+      100
+     ],
+     [
+      1473.9,
+      100
+     ],
+     [
+      1483.9,
+      100
+     ],
+     [
+      1493.9,
+      100
+     ],
+     [
+      1504,
+      100
+     ],
+     [
+      1514,
+      100
+     ],
+     [
+      1524,
+      100
+     ],
+     [
+      1534.1,
+      100
+     ],
+     [
+      1544.1,
+      100
+     ],
+     [
+      1554.1,
+      100
+     ],
+     [
+      1564.2,
+      100
+     ],
+     [
+      1574.2,
+      100
+     ],
+     [
+      1584.2,
+      100
+     ],
+     [
+      1594.3,
+      100
+     ],
+     [
+      1604.3,
+      100
+     ],
+     [
+      1614.4,
+      100
+     ],
+     [
+      1624.4,
+      100
+     ],
+     [
+      1634.4,
+      100
+     ],
+     [
+      1644.5,
+      100
+     ],
+     [
+      1654.5,
+      100
+     ],
+     [
+      1664.5,
+      100
+     ],
+     [
+      1674.6,
+      100
+     ],
+     [
+      1684.6,
+      100
+     ],
+     [
+      1694.6,
+      100
+     ],
+     [
+      1704.7,
+      100
+     ],
+     [
+      1714.7,
+      100
+     ],
+     [
+      1724.7,
+      100
+     ],
+     [
+      1734.8,
+      100
+     ],
+     [
+      1744.8,
+      100
+     ],
+     [
+      1754.9,
+      100
+     ],
+     [
+      1764.9,
+      100
+     ],
+     [
+      1774.9,
+      100
+     ],
+     [
+      1785,
+      100
+     ],
+     [
+      1795,
+      100
+     ],
+     [
+      1805,
+      100
+     ],
+     [
+      1815.1,
+      100
+     ],
+     [
+      1825.1,
+      100
+     ],
+     [
+      1835.1,
+      100
+     ],
+     [
+      1845.2,
+      100
+     ],
+     [
+      1855.2,
+      100
+     ],
+     [
+      1865.2,
+      100
+     ],
+     [
+      1875.3,
+      100
+     ],
+     [
+      1885.3,
+      100
+     ],
+     [
+      1895.3,
+      100
+     ],
+     [
+      1905.4,
+      100
+     ],
+     [
+      1915.4,
+      100
+     ],
+     [
+      1925.5,
+      100
+     ],
+     [
+      1935.5,
+      100
+     ],
+     [
+      1945.5,
+      100
+     ],
+     [
+      1955.6,
+      100
+     ],
+     [
+      1965.6,
+      100
+     ],
+     [
+      1975.6,
+      100
+     ],
+     [
+      1985.7,
+      100
+     ],
+     [
+      1995.7,
+      100
+     ],
+     [
+      2005.7,
+      100
+     ],
+     [
+      2015.8,
+      100
+     ],
+     [
+      2025.8,
+      100
+     ],
+     [
+      2035.8,
+      100
+     ],
+     [
+      2045.9,
+      100
+     ],
+     [
+      2055.9,
+      100
+     ],
+     [
+      2065.9,
+      100
+     ],
+     [
+      2076,
+      100
+     ],
+     [
+      2086,
+      100
+     ],
+     [
+      2096.1,
+      100
+     ],
+     [
+      2106.1,
+      100
+     ],
+     [
+      2116.1,
+      100
+     ],
+     [
+      2126.2,
+      100
+     ],
+     [
+      2131.2,
+      100
+     ]
+    ],
+    "procrastinate": [
+     [
+      11,
+      0
+     ],
+     [
+      21,
+      0
+     ],
+     [
+      31,
+      0
+     ],
+     [
+      41,
+      0
+     ],
+     [
+      51,
+      0
+     ],
+     [
+      61,
+      0
+     ],
+     [
+      71,
+      0
+     ],
+     [
+      81,
+      0
+     ],
+     [
+      91.1,
+      0
+     ],
+     [
+      101.1,
+      0
+     ],
+     [
+      111.1,
+      0
+     ],
+     [
+      121.1,
+      0
+     ],
+     [
+      131.1,
+      0
+     ],
+     [
+      141.1,
+      0
+     ],
+     [
+      151.1,
+      0
+     ],
+     [
+      161.1,
+      0
+     ],
+     [
+      171.1,
+      0
+     ],
+     [
+      181.1,
+      0
+     ],
+     [
+      191.1,
+      0
+     ],
+     [
+      201.1,
+      0
+     ],
+     [
+      211.1,
+      0
+     ],
+     [
+      221.1,
+      0
+     ],
+     [
+      231.1,
+      0
+     ],
+     [
+      241.1,
+      0
+     ],
+     [
+      251.1,
+      0
+     ],
+     [
+      261.1,
+      0
+     ],
+     [
+      271.1,
+      0
+     ],
+     [
+      281.1,
+      0
+     ],
+     [
+      291.1,
+      0
+     ],
+     [
+      301.1,
+      0.16
+     ],
+     [
+      311.1,
+      0.83
+     ],
+     [
+      321.1,
+      1.48
+     ],
+     [
+      331.1,
+      2.13
+     ],
+     [
+      341.1,
+      2.81
+     ],
+     [
+      351.1,
+      3.24
+     ],
+     [
+      361.1,
+      3.93
+     ],
+     [
+      371.1,
+      4.64
+     ],
+     [
+      381.1,
+      5.33
+     ],
+     [
+      391.1,
+      5.99
+     ],
+     [
+      401.1,
+      6.64
+     ],
+     [
+      411.1,
+      7.29
+     ],
+     [
+      421.1,
+      7.82
+     ],
+     [
+      431.1,
+      8.31
+     ],
+     [
+      441.2,
+      8.96
+     ],
+     [
+      451.2,
+      9.62
+     ],
+     [
+      461.2,
+      10.26
+     ],
+     [
+      471.2,
+      10.89
+     ],
+     [
+      481.2,
+      11.51
+     ],
+     [
+      491.2,
+      12.11
+     ],
+     [
+      501.2,
+      12.54
+     ],
+     [
+      511.2,
+      13.16
+     ],
+     [
+      521.2,
+      13.86
+     ],
+     [
+      531.2,
+      14.57
+     ],
+     [
+      541.2,
+      15.27
+     ],
+     [
+      551.2,
+      15.98
+     ],
+     [
+      561.2,
+      16.69
+     ],
+     [
+      571.2,
+      17.22
+     ],
+     [
+      581.2,
+      17.78
+     ],
+     [
+      591.2,
+      18.47
+     ],
+     [
+      601.2,
+      19.16
+     ],
+     [
+      611.2,
+      19.85
+     ],
+     [
+      621.2,
+      20.55
+     ],
+     [
+      631.2,
+      21.23
+     ],
+     [
+      641.2,
+      21.76
+     ],
+     [
+      651.2,
+      22.31
+     ],
+     [
+      661.2,
+      22.97
+     ],
+     [
+      671.2,
+      23.57
+     ],
+     [
+      681.3,
+      23.92
+     ],
+     [
+      691.3,
+      24.13
+     ],
+     [
+      701.3,
+      24.33
+     ],
+     [
+      711.3,
+      24.52
+     ],
+     [
+      721.3,
+      24.71
+     ],
+     [
+      731.3,
+      24.91
+     ],
+     [
+      741.3,
+      24.97
+     ],
+     [
+      751.3,
+      25.64
+     ],
+     [
+      761.3,
+      26.21
+     ],
+     [
+      771.3,
+      26.65
+     ],
+     [
+      781.3,
+      27.33
+     ],
+     [
+      791.3,
+      28.02
+     ],
+     [
+      801.3,
+      28.69
+     ],
+     [
+      811.3,
+      29.33
+     ],
+     [
+      821.3,
+      30.01
+     ],
+     [
+      831.3,
+      30.6
+     ],
+     [
+      841.3,
+      31.09
+     ],
+     [
+      851.3,
+      31.75
+     ],
+     [
+      861.3,
+      32.43
+     ],
+     [
+      871.4,
+      33.08
+     ],
+     [
+      881.4,
+      33.74
+     ],
+     [
+      891.4,
+      34.4
+     ],
+     [
+      901.4,
+      35.07
+     ],
+     [
+      911.4,
+      35.54
+     ],
+     [
+      921.4,
+      36.1
+     ],
+     [
+      931.4,
+      36.75
+     ],
+     [
+      941.4,
+      37.42
+     ],
+     [
+      951.4,
+      38.1
+     ],
+     [
+      961.4,
+      38.79
+     ],
+     [
+      971.4,
+      39.45
+     ],
+     [
+      981.4,
+      40.04
+     ],
+     [
+      991.4,
+      40.53
+     ],
+     [
+      1001.4,
+      41.21
+     ],
+     [
+      1011.4,
+      41.91
+     ],
+     [
+      1021.4,
+      42.61
+     ],
+     [
+      1031.5,
+      43.3
+     ],
+     [
+      1041.5,
+      43.97
+     ],
+     [
+      1051.5,
+      44.64
+     ],
+     [
+      1061.5,
+      45.1
+     ],
+     [
+      1071.5,
+      45.71
+     ],
+     [
+      1081.5,
+      46.4
+     ],
+     [
+      1091.5,
+      47.1
+     ],
+     [
+      1101.5,
+      47.78
+     ],
+     [
+      1111.5,
+      48.47
+     ],
+     [
+      1121.5,
+      49.15
+     ],
+     [
+      1131.5,
+      49.78
+     ],
+     [
+      1141.5,
+      50.24
+     ],
+     [
+      1151.5,
+      50.9
+     ],
+     [
+      1161.6,
+      51.54
+     ],
+     [
+      1171.6,
+      52.18
+     ],
+     [
+      1181.6,
+      52.88
+     ],
+     [
+      1191.6,
+      53.57
+     ],
+     [
+      1201.6,
+      54.24
+     ],
+     [
+      1211.6,
+      54.86
+     ],
+     [
+      1221.6,
+      55.31
+     ],
+     [
+      1231.6,
+      55.94
+     ],
+     [
+      1241.6,
+      56.6
+     ],
+     [
+      1251.6,
+      57.26
+     ],
+     [
+      1261.6,
+      57.89
+     ],
+     [
+      1271.6,
+      58.52
+     ],
+     [
+      1281.7,
+      59.17
+     ],
+     [
+      1291.7,
+      59.66
+     ],
+     [
+      1301.7,
+      60.17
+     ],
+     [
+      1311.7,
+      60.85
+     ],
+     [
+      1321.7,
+      61.5
+     ],
+     [
+      1331.7,
+      62.14
+     ],
+     [
+      1341.7,
+      62.79
+     ],
+     [
+      1351.7,
+      63.45
+     ],
+     [
+      1361.7,
+      64.12
+     ],
+     [
+      1371.7,
+      64.55
+     ],
+     [
+      1381.7,
+      65.19
+     ],
+     [
+      1391.8,
+      65.9
+     ],
+     [
+      1401.8,
+      66.59
+     ],
+     [
+      1411.8,
+      67.28
+     ],
+     [
+      1421.8,
+      67.98
+     ],
+     [
+      1431.8,
+      68.69
+     ],
+     [
+      1441.8,
+      69.23
+     ],
+     [
+      1451.8,
+      69.79
+     ],
+     [
+      1461.8,
+      70.5
+     ],
+     [
+      1471.8,
+      71.2
+     ],
+     [
+      1481.8,
+      71.91
+     ],
+     [
+      1491.8,
+      72.6
+     ],
+     [
+      1501.9,
+      73.28
+     ],
+     [
+      1511.9,
+      73.94
+     ],
+     [
+      1521.9,
+      74.37
+     ],
+     [
+      1531.9,
+      75.04
+     ],
+     [
+      1541.9,
+      75.74
+     ],
+     [
+      1551.9,
+      76.41
+     ],
+     [
+      1561.9,
+      77.08
+     ],
+     [
+      1571.9,
+      77.73
+     ],
+     [
+      1581.9,
+      78.37
+     ],
+     [
+      1591.9,
+      79.03
+     ],
+     [
+      1602,
+      79.48
+     ],
+     [
+      1612,
+      80.11
+     ],
+     [
+      1622,
+      80.79
+     ],
+     [
+      1632,
+      81.48
+     ],
+     [
+      1642,
+      82.16
+     ],
+     [
+      1652,
+      82.82
+     ],
+     [
+      1662,
+      83.5
+     ],
+     [
+      1672,
+      84
+     ],
+     [
+      1682,
+      84.57
+     ],
+     [
+      1692,
+      85.26
+     ],
+     [
+      1702.1,
+      85.94
+     ],
+     [
+      1712.1,
+      86.63
+     ],
+     [
+      1722.1,
+      87.32
+     ],
+     [
+      1732.1,
+      88.02
+     ],
+     [
+      1742.1,
+      88.6
+     ],
+     [
+      1752.1,
+      89.11
+     ],
+     [
+      1762.1,
+      89.81
+     ],
+     [
+      1772.1,
+      90.5
+     ],
+     [
+      1782.1,
+      91.22
+     ],
+     [
+      1792.1,
+      91.91
+     ],
+     [
+      1802.2,
+      92.62
+     ],
+     [
+      1812.2,
+      93.3
+     ],
+     [
+      1822.2,
+      93.75
+     ],
+     [
+      1832.2,
+      94.41
+     ],
+     [
+      1842.2,
+      95.13
+     ],
+     [
+      1852.2,
+      95.87
+     ],
+     [
+      1862.2,
+      96.59
+     ],
+     [
+      1872.2,
+      97.31
+     ],
+     [
+      1882.2,
+      98.03
+     ],
+     [
+      1892.2,
+      98.61
+     ],
+     [
+      1902.3,
+      99.13
+     ],
+     [
+      1912.3,
+      99.85
+     ],
+     [
+      1922.3,
+      100
+     ],
+     [
+      1932.3,
+      100
+     ],
+     [
+      1942.3,
+      100
+     ],
+     [
+      1952.3,
+      100
+     ],
+     [
+      1962.3,
+      100
+     ],
+     [
+      1972.3,
+      100
+     ],
+     [
+      1982.3,
+      100
+     ],
+     [
+      1992.4,
+      100
+     ],
+     [
+      2002.4,
+      100
+     ],
+     [
+      2012.4,
+      100
+     ],
+     [
+      2022.4,
+      100
+     ],
+     [
+      2032.4,
+      100
+     ],
+     [
+      2042.4,
+      100
+     ],
+     [
+      2052.4,
+      100
+     ],
+     [
+      2062.4,
+      100
+     ],
+     [
+      2072.4,
+      100
+     ],
+     [
+      2082.4,
+      100
+     ],
+     [
+      2092.5,
+      100
+     ],
+     [
+      2102.5,
+      100
+     ],
+     [
+      2112.5,
+      100
+     ],
+     [
+      2122.5,
+      100
+     ],
+     [
+      2132.5,
+      100
+     ]
+    ]
+   }
+  }
+ ]
+}

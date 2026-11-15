@@ -748,7 +748,9 @@
               Try this: send the receipt, then stop the worker before saving
               completion.
             </p>
-            <a id="action-source" href="#">Why does this happen? ↗</a>
+            <a id="action-source" href="#" target="_blank" rel="noopener noreferrer"
+              >Why does this happen? ↗</a
+            >
           </div>
           <section class="results" id="results" hidden>
             <h2>Your completed runs</h2>
@@ -798,7 +800,9 @@
             <summary>How this maps to Awa</summary>
             <p>
               Grounded in
-              <a id="revision-link" href="#">hardbyte/awa @ b9341ae5</a>, a
+              <a id="revision-link" href="#" target="_blank" rel="noopener noreferrer"
+                >hardbyte/awa @ b9341ae5</a
+              >, a
               development snapshot of the 0.7 queue-storage implementation. It
               is not a guarantee about every released version or the benchmark
               adapter pin.
@@ -820,6 +824,7 @@
             <p>
               Inspired by
               <a href="https://brooker.co.za/blog/2026/10/23/animations.html"
+                target="_blank" rel="noopener noreferrer"
                 >Marc Brooker’s systems animations</a
               >. This original model uses no article assets or simulator code.
               It is not a captured Awa trace, a benchmark, or a proof of
@@ -1118,6 +1123,8 @@
             for (const source of event.sources) {
               const link = document.createElement("a");
               link.href = M.sourceUrl(source);
+              link.target = "_blank";
+              link.rel = "noopener noreferrer";
               link.textContent = "Source ↗ ";
               item.append(link);
             }
@@ -1161,6 +1168,8 @@
           const item = document.createElement("li"),
             link = document.createElement("a");
           link.href = M.sourceUrl(id);
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
           link.textContent = description + " ↗";
           item.append(link);
           $("sources").append(item);
