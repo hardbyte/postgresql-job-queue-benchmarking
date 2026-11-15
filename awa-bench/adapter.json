@@ -22,5 +22,14 @@
     "retryable": "SELECT count(*) FROM awa.deferred_jobs WHERE state = 'retryable'",
     "dead": "SELECT (SELECT count(*) FROM awa.done_entries WHERE state = 'failed') + (SELECT count(*) FROM awa.dlq_entries)",
     "running": "SELECT (SELECT count(*) FROM awa.leases WHERE state = 'running') + (SELECT count(*) FROM awa.lease_claims c WHERE c.closed_at IS NULL AND NOT EXISTS (SELECT 1 FROM awa.lease_claim_closures x WHERE x.claim_slot = c.claim_slot AND x.job_id = c.job_id AND x.run_lease = c.run_lease) AND NOT EXISTS (SELECT 1 FROM awa.lease_claim_closure_batches b WHERE b.claim_slot = c.claim_slot AND b.receipt_ranges @> c.receipt_id) AND NOT EXISTS (SELECT 1 FROM awa.done_entries d WHERE d.job_id = c.job_id AND d.run_lease = c.run_lease) AND NOT EXISTS (SELECT 1 FROM awa.deferred_jobs d WHERE d.job_id = c.job_id AND d.run_lease = c.run_lease) AND NOT EXISTS (SELECT 1 FROM awa.dlq_entries d WHERE d.job_id = c.job_id AND d.run_lease = c.run_lease) AND NOT EXISTS (SELECT 1 FROM awa.leases l WHERE l.job_id = c.job_id AND l.run_lease = c.run_lease))"
-  }
+  },
+  "operator_capabilities": {
+    "get_by_id": "native",
+    "find_handle": "native",
+    "find_tenant_page": "native",
+    "kind_state_page": "native",
+    "count_state": "native",
+    "pause": "native"
+  },
+  "operator_notes": "admin::get_job; 0.6 list_jobs(ListJobsFilter tag/kind/state/queue) with queue_overview().available, 0.7 (awa07 build) find_jobs(JobFilter, JobPage) and count_jobs (capped at 10,000) after tag_index::build_tag_indexes; admin::pause_queue/resume_queue on every bench queue; haystack via insert_many_copy_from_pool (returns ids)."
 }

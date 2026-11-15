@@ -18,6 +18,7 @@
 
 mod diagnostics;
 mod long_horizon;
+mod operator;
 mod scenario_controls;
 
 use async_trait::async_trait;
@@ -211,6 +212,18 @@ impl Worker for ChaosWorker {
 
 // ── Helpers ───────────────────────────────────────────────────────
 
+/// SQL assembled at runtime from the configured schema name. sqlx 0.9 (which
+/// awa 0.7 needs) refuses an unmarked dynamic string.
+#[cfg(feature = "awa07")]
+pub(crate) fn runtime_sql(sql: &str) -> sqlx::AssertSqlSafe<&str> {
+    sqlx::AssertSqlSafe(sql)
+}
+
+#[cfg(not(feature = "awa07"))]
+pub(crate) fn runtime_sql(sql: &str) -> &str {
+    sql
+}
+
 fn database_url() -> String {
     std::env::var("DATABASE_URL").expect("DATABASE_URL must be set")
 }
@@ -242,7 +255,7 @@ async fn count_by_state(
     queue_name: &str,
 ) -> HashMap<String, i64> {
     let schema = store.schema();
-    let rows: Vec<(String, i64)> = sqlx::query_as(&format!(
+    let rows: Vec<(String, i64)> = sqlx::query_as(runtime_sql(&format!(
         r#"
         SELECT state, sum(count)::bigint AS count
         FROM (
@@ -298,7 +311,7 @@ async fn count_by_state(
         ) counts
         GROUP BY state
         "#,
-    ))
+    )))
     .bind(queue_name)
     .fetch_all(pool)
     .await
