@@ -699,7 +699,8 @@
         "Getting one job by id is fast everywhere it's possible: under 2 ms at p99 for Absurd, Oban, pg-boss, Procrastinate, River and PGMQ, and 103 ms for Awa 0.6, whose get_job checks each of its storage locations. PgQue can't look up an event.",
         "Finding one job by a unique field: River 2.4 ms at p50 (GIN on metadata); Absurd 73 ms, PGMQ 144 ms, Oban 188 ms and pg-boss 192 ms, which scan. Awa 0.6 timed out at 30 s every time (tags are checked after loading, with no index); Procrastinate and PgQue can't filter on job data.",
         "A first page by kind and state is quick for PGMQ, pg-boss, River and Oban (1–3 ms at p50); Absurd takes 107 ms, Procrastinate 405 ms (it returns all 50,000 matches, with no LIMIT) and Awa 0.6 1.4 s.",
-        "Procrastinate's ordinary work stalled behind the haystack: with a million jobs queued in another queue, its worker's fetch had to scan past them, and the bench queue fell to 10–18 jobs/s with a pickup p99 of 91–200 s. Probing didn't hurt any other system's live load."
+        "Procrastinate's ordinary work stalled behind the haystack: with a million jobs queued in another queue, its worker's fetch had to scan past them, and the bench queue fell to 10–18 jobs/s with a pickup p99 of 91–200 s. Probing didn't hurt any other system's live load.",
+        "Awa 0.7 (unreleased) answers every probe, including the tag filters that time out on 0.6, but each takes 0.5–1.2 s. Two queries in the unreleased build are responsible: a job lookup that hash-joins every ready row, and a queue count that walks every available job. Both are being fixed before release."
       ],
       "headline": "River finds one job in 2 ms; Awa 0.6 times out; Procrastinate stalls behind the haystack."
     },

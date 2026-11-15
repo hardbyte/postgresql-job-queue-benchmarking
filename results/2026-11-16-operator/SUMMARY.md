@@ -10,7 +10,10 @@ Two scenarios cover operator work a production queue has to get right. They ran 
 - **Pause:** a pause survives a restart only where the system stores it. awa, River and PgQue started no job while paused, including on the restarted process. Oban open source holds the pause in memory, so its restarted node started 21,435 jobs. The four systems without a pause API (Absurd, pg-boss, Procrastinate, pgmq) can only stop each process.
 - **Unique field:** River finds one job by a unique field in 2.4 ms (GIN on metadata). Absurd, pgmq, Oban and pg-boss take 70–190 ms, and their plans scan. awa 0.6's `list_jobs` checks tags after loading the jobs, so every tag probe hit the 30 s cap. Procrastinate and PgQue can't filter on job data at all.
 - **Procrastinate's ordinary queue stalled behind the haystack.** Its bench queue fell to 10–18 jobs/s, with a pickup p99 of 91–200 s, because the worker's fetch scans past todo jobs in other queues.
-- **awa 0.7 (unreleased)** answers every probe, including the tag filters that time out on 0.6, but every probe takes 0.5–1.2 s, lookup by id included. During those probes Postgres ran parallel hash joins that spilled to temp files. This needs investigating before 0.7 ships.
+- **awa 0.7 (unreleased)** answers every probe, including the tag filters that time out on 0.6, but every probe takes 0.5–1.2 s, lookup by id included. Reproduced on an isolated cluster, with ANALYZE not helping. There are two causes:
+  - `get_job`/`find_jobs` read terminal jobs through a receipt-batch probe that now matches `job_id = ANY($1)` instead of `= $1`, so it hash-joins every `ready_entries` row and spills to temp files.
+  - `queue_overview` lacks 0.6's per-lane exact-count cap and walks every available row.
+  Both are being fixed before release.
 
 ### Finding one job among a million
 
