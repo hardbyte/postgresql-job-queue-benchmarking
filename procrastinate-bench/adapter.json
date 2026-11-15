@@ -16,5 +16,14 @@
     "retryable": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'todo' AND attempts > 0",
     "dead": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'failed'",
     "running": "SELECT count(*) FROM procrastinate_jobs WHERE status = 'doing'"
-  }
+  },
+  "operator_capabilities": {
+    "get_by_id": "native",
+    "find_handle": "unsupported",
+    "find_tenant_page": "unsupported",
+    "kind_state_page": "native",
+    "count_state": "native",
+    "pause": "emulated"
+  },
+  "operator_notes": "JobManager.list_jobs_async(id=) and list_jobs_async(queue=, task='bench_alt', status='todo') (no LIMIT: returns every match), list_queues_async(queue=, status='todo') for the count; job args are not filterable, so handle and tenant lookups are unsupported; haystack via batch_defer_async into an unlistened queue; no pause API, so each replica stops its worker on pause and restarts it on resume"
 }

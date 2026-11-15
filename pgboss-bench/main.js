@@ -346,6 +346,257 @@ class ScenarioControls {
   }
 }
 
+// ── Operator scenarios (docs/operator-scenarios.md) ──
+// Default-off: OPERATOR_CONTROL_FILE carries {id, op, args}. Every replica
+// counts handler starts relative to the latest op and stops/starts its own
+// workers on pause/resume (pg-boss has no pause API, so the pause is
+// emulated per process with offWork/work). Instance 0 performs haystack and
+// probe ops and reports to OPERATOR_RESULT_FILE.
+
+const OPERATOR_PROBES = ["get_by_id", "find_handle", "find_tenant_page", "kind_state_page", "count_state"];
+const OPERATOR_KEPT_PAIRS = 10000;
+
+function writeJsonAtomic(path, value) {
+  const fs = require("node:fs");
+  const tmp = `${path}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value));
+  fs.renameSync(tmp, path);
+}
+
+function quantile(sorted, p) {
+  if (!sorted.length) {
+    return 0;
+  }
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
+}
+
+class OperatorControls {
+  constructor() {
+    this.path = process.env.OPERATOR_CONTROL_FILE || null;
+    this.resultPath = process.env.OPERATOR_RESULT_FILE || null;
+    this.enabled = Boolean(this.path);
+    // Adopt the current op as seen: a process started mid-pause doesn't act on it.
+    this.lastId = this.enabled ? readJson(this.path).id || null : null;
+    this.jobStarts = 0;
+    this.lastJobStartMs = 0;
+    this.firstStartAfterOpMs = 0;
+    this.opSeenMs = 0;
+    this.kept = [];
+    this.haystack = null;
+  }
+
+  poll() {
+    const command = readJson(this.path);
+    if (!command.id || command.id === this.lastId) {
+      return null;
+    }
+    this.lastId = command.id;
+    this.opSeenMs = Date.now();
+    this.firstStartAfterOpMs = 0;
+    return command;
+  }
+
+  onStarts(count) {
+    if (!this.enabled || count <= 0) {
+      return;
+    }
+    const now = Date.now();
+    this.jobStarts += count;
+    this.lastJobStartMs = now;
+    if (this.opSeenMs && !this.firstStartAfterOpMs) {
+      this.firstStartAfterOpMs = now;
+    }
+  }
+
+  keep(id, seq, seen) {
+    if (this.kept.length < OPERATOR_KEPT_PAIRS) {
+      this.kept.push([id, seq]);
+      return;
+    }
+    const slot = Math.floor(Math.random() * seen);
+    if (slot < OPERATOR_KEPT_PAIRS) {
+      this.kept[slot] = [id, seq];
+    }
+  }
+
+  report(id, outcome) {
+    if (!this.resultPath) {
+      return;
+    }
+    const results = readJson(this.resultPath);
+    results[id] = { ...outcome, done_ms: outcome.done_ms ?? Date.now(), done: true };
+    writeJsonAtomic(this.resultPath, results);
+  }
+
+  metrics() {
+    if (!this.enabled) {
+      return [];
+    }
+    return [
+      ["job_starts_total", this.jobStarts, 0],
+      ["last_job_start_ms", this.lastJobStartMs, 0],
+      ["first_start_after_op_ms", this.firstStartAfterOpMs, 0],
+    ];
+  }
+}
+
+async function operatorHaystack(boss, controls, args, isShuttingDown) {
+  const jobs = Number(args.jobs || 0);
+  const queue = String(args.queue || "haystack");
+  const tenants = Number(args.tenants || 1000);
+  const altEvery = Number(args.alt_every || 20);
+  const crypto = require("node:crypto");
+  const started = nowMonoMs();
+  // Its own table, as the bench queue has; no worker ever calls work() on it.
+  if (!(await boss.getQueue(queue))) {
+    await boss.createQueue(queue, { partition: true });
+  }
+  const batchSize = 1000;
+  let seen = 0;
+  for (let first = 0; first < jobs && !isShuttingDown(); first += batchSize) {
+    const batch = [];
+    for (let seq = first; seq < Math.min(jobs, first + batchSize); seq += 1) {
+      const id = crypto.randomUUID();
+      // pg-boss jobs have no kind; the alt kind is a data field findJobs can match.
+      const data = { h: `h${seq}`, t: `t${seq % tenants}`, ...(seq % altEvery === 0 ? { kind: "bench_alt" } : {}) };
+      batch.push({ id, data });
+      seen += 1;
+      controls.keep(id, seq, seen);
+    }
+    await boss.insert(queue, batch);
+  }
+  const previous = controls.haystack && controls.haystack.queue === queue ? controls.haystack.jobs : 0;
+  controls.haystack = { queue, jobs: previous + seen, tenants, altEvery };
+  return { enqueued: seen, seconds: (nowMonoMs() - started) / 1000 };
+}
+
+function withTimeout(promise, timeoutMs) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error("probe timeout"), { probeTimeout: true })), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function operatorProbe(controls, args, isShuttingDown) {
+  const hay = controls.haystack;
+  if (!hay || !controls.kept.length) {
+    throw new Error("probe before haystack: no kept job ids in this process");
+  }
+  const durationS = Number(args.duration_s || 60);
+  const rate = Math.max(0.01, Number(args.rate || 2));
+  const queue = String(args.queue || hay.queue);
+  const page = Number(args.page || 100);
+  const timeoutMs = Number(args.timeout_ms || 30000);
+  const altTotal = Math.ceil(hay.jobs / hay.altEvery);
+  const tenantMatches = (k) => (k < hay.jobs ? Math.floor((hay.jobs - 1 - k) / hay.tenants) + 1 : 0);
+
+  // A dedicated client with its own small pool, so probes never take worker
+  // connections. No supervision or scheduling: it only reads.
+  const probeBoss = new PgBoss({
+    connectionString: databaseUrl(),
+    max: 2,
+    supervise: false,
+    schedule: false,
+    migrate: false,
+    options: `-c statement_timeout=${timeoutMs}`,
+  });
+  probeBoss.on("error", (err) => console.error("[pgboss] probe client error", err.message || err));
+  await probeBoss.start();
+
+  // Each returns {rows, correct}.
+  const probes = {
+    get_by_id: async ([id, seq]) => {
+      const rows = await probeBoss.findJobs(queue, { id, limit: 1 });
+      return { rows: rows.length, correct: rows.length === 1 && rows[0].data && rows[0].data.h === `h${seq}` };
+    },
+    find_handle: async ([id, seq]) => {
+      const rows = await probeBoss.findJobs(queue, { data: { h: `h${seq}` }, limit: 2 });
+      return { rows: rows.length, correct: rows.length === 1 && rows[0].id === id };
+    },
+    find_tenant_page: async ([, seq]) => {
+      const tenant = `t${seq % hay.tenants}`;
+      const rows = await probeBoss.findJobs(queue, { data: { t: tenant }, limit: page });
+      const expected = Math.min(page, tenantMatches(seq % hay.tenants));
+      return { rows: rows.length, correct: rows.length === expected && rows.every((row) => row.data.t === tenant) };
+    },
+    kind_state_page: async () => {
+      const rows = await probeBoss.findJobs(queue, { data: { kind: "bench_alt" }, queued: true, limit: page });
+      return {
+        rows: rows.length,
+        correct: rows.length === Math.min(page, altTotal) && rows.every((row) => row.data.kind === "bench_alt"),
+      };
+    },
+    // getQueue's counts are the monitor pass's cached snapshot (monitorIntervalSeconds,
+    // 60 s by default); the value returned is what an operator sees.
+    count_state: async () => {
+      const info = await probeBoss.getQueue(queue);
+      const count = info ? Number(info.queuedCount) : 0;
+      return { rows: count, correct: Math.abs(count - hay.jobs) <= 0.01 * hay.jobs };
+    },
+  };
+
+  const stats = {};
+  for (const name of OPERATOR_PROBES) {
+    stats[name] = { latencies: [], rows: [], n: 0, correct: 0, errors: 0, timeouts: 0 };
+  }
+  const intervalMs = 1000 / rate;
+  const endAt = nowMonoMs() + durationS * 1000;
+  let nextAt = nowMonoMs();
+  let turn = 0;
+  try {
+    while (nowMonoMs() < endAt && !isShuttingDown()) {
+      const wait = nextAt - nowMonoMs();
+      if (wait > 0) {
+        await sleep(wait);
+      }
+      nextAt += intervalMs;
+      const name = OPERATOR_PROBES[turn % OPERATOR_PROBES.length];
+      turn += 1;
+      const target = controls.kept[Math.floor(Math.random() * controls.kept.length)];
+      const stat = stats[name];
+      stat.n += 1;
+      const started = nowMonoMs();
+      try {
+        const outcome = await withTimeout(probes[name](target), timeoutMs);
+        stat.latencies.push(nowMonoMs() - started);
+        stat.rows.push(outcome.rows);
+        if (outcome.correct) {
+          stat.correct += 1;
+        }
+      } catch (err) {
+        if (err.probeTimeout || err.code === "57014") {
+          stat.timeouts += 1;
+        } else {
+          stat.errors += 1;
+          console.error(`[pgboss] probe ${name} failed`, err.message || err);
+        }
+      }
+    }
+  } finally {
+    await probeBoss.stop({ graceful: false }).catch(() => {});
+  }
+
+  const out = {};
+  for (const name of OPERATOR_PROBES) {
+    const stat = stats[name];
+    const latencies = stat.latencies.sort((a, b) => a - b);
+    const rows = stat.rows.sort((a, b) => a - b);
+    out[name] = {
+      mode: "native",
+      n: stat.n,
+      p50_ms: quantile(latencies, 0.5),
+      p99_ms: quantile(latencies, 0.99),
+      max_ms: latencies.length ? latencies[latencies.length - 1] : 0,
+      rows_median: quantile(rows, 0.5),
+      correct: stat.n ? stat.correct / stat.n : 0,
+      errors: stat.errors,
+      timeouts: stat.timeouts,
+    };
+  }
+  return { probes: out };
+}
+
 class TimedWindow {
   constructor(maxlen = 32768) {
     this.maxlen = maxlen;
@@ -476,6 +727,7 @@ async function scenarioLongHorizon() {
 
   const padding = payloadPadding(payloadBytes - 96);
   const controls = new ScenarioControls();
+  const operator = new OperatorControls();
   // JOB_MAX_ATTEMPTS counts total attempts; pg-boss retryLimit counts retries.
   const jobOptions = {
     ...(controls.maxAttempts !== null ? { retryLimit: controls.maxAttempts - 1 } : {}),
@@ -576,9 +828,15 @@ async function scenarioLongHorizon() {
       completed += jobs.length - excludedJobs;
     }
   );
-  const handler = controls.abandonPath
+  const settle = controls.abandonPath
     ? (jobs) => (controls.shouldHold(jobs) ? controls.hold(jobs) : handleJobs(jobs))
     : handleJobs;
+  const handler = operator.enabled
+    ? (jobs) => {
+        operator.onStarts(jobs.length);
+        return settle(jobs);
+      }
+    : settle;
 
   // pg-boss workers are per queue; worker concurrency is split across them.
   const perQueueConcurrency = Math.max(1, Math.floor(workerCount / queues.length));
@@ -589,8 +847,7 @@ async function scenarioLongHorizon() {
     ...(envStr("PGBOSS_BURST_WHEN_BATCH_FULL", "0") === "1" ? { burstWhenBatchFull: true } : {}),
   };
   const workIds = new Map();
-  const startWorkers = (async () => {
-    await waitForConsumerGate(() => shuttingDown);
+  const workAll = async () => {
     for (const name of queues) {
       if (shuttingDown) {
         return;
@@ -604,6 +861,16 @@ async function scenarioLongHorizon() {
         )
       );
     }
+  };
+  const offWorkAll = async () => {
+    for (const [name, id] of workIds) {
+      await boss.offWork(name, { id, wait: true }).catch(() => {});
+    }
+    workIds.clear();
+  };
+  const startWorkers = (async () => {
+    await waitForConsumerGate(() => shuttingDown);
+    await workAll();
   })();
   if (!process.env.CONSUMER_GATE_FILE) {
     await startWorkers;
@@ -757,6 +1024,52 @@ async function scenarioLongHorizon() {
     }
   })();
 
+  const operatorTask = (async () => {
+    if (!operator.enabled) {
+      return;
+    }
+    let paused = false;
+    while (!shuttingDown) {
+      const command = operator.poll();
+      if (!command) {
+        await sleep(100);
+        continue;
+      }
+      const lead = instanceId() === 0;
+      const args = command.args || {};
+      const started = nowMonoMs();
+      try {
+        if (command.op === "pause" || command.op === "resume") {
+          await startWorkers.catch(() => {});
+          if (command.op === "pause" && !paused) {
+            paused = true;
+            await offWorkAll();
+          } else if (command.op === "resume" && paused) {
+            paused = false;
+            await workAll();
+          }
+          if (lead) {
+            operator.report(command.id, { mode: "emulated", api_ms: nowMonoMs() - started });
+          }
+        } else if (lead && command.op === "haystack") {
+          operator.report(command.id, await operatorHaystack(boss, operator, args, () => shuttingDown));
+        } else if (lead && command.op === "probe") {
+          operator.report(command.id, await operatorProbe(operator, args, () => shuttingDown));
+        } else if (lead) {
+          operator.report(command.id, { error: `unknown op ${command.op}` });
+        }
+      } catch (err) {
+        console.error(`[pgboss] operator ${command.op} failed`, err);
+        if (lead) {
+          operator.report(command.id, { error: String(err.message || err) });
+        }
+      }
+      if (lead) {
+        console.error(`[pgboss] operator ${command.op} ${command.id} done in ${nowMonoMs() - started} ms`);
+      }
+    }
+  })();
+
   const depthTask = (async () => {
     if (!observerEnabled()) {
       // Non-zero replicas don't emit observer metrics; idle this
@@ -817,6 +1130,7 @@ async function scenarioLongHorizon() {
         ["queue_depth", queueDepth, 0],
         ["producer_target_rate", currentProducerTargetRate, 0],
         ...controls.metrics(Math.max(sampleEveryS, 1), sampleEveryS),
+        ...operator.metrics(),
       ];
 
       for (const [metric, value, windowS] of metrics) {
@@ -850,14 +1164,12 @@ async function scenarioLongHorizon() {
   if (controls.abandonHeld > 0) {
     // Held handlers never return, so a graceful stop would wait on them; leave the
     // claims behind as a dead process would.
-    await Promise.allSettled([producerTask, depthTask, samplerTask, herdTask]);
+    await Promise.allSettled([producerTask, depthTask, samplerTask, herdTask, operatorTask]);
     process.exit(0);
   }
   await startWorkers.catch(() => {});
-  for (const [name, id] of workIds) {
-    await boss.offWork(name, { id, wait: true }).catch(() => {});
-  }
-  await Promise.allSettled([producerTask, depthTask, samplerTask, herdTask]);
+  await offWorkAll();
+  await Promise.allSettled([producerTask, depthTask, samplerTask, herdTask, operatorTask]);
   await boss.stop({ graceful: true }).catch(() => {});
 }
 
