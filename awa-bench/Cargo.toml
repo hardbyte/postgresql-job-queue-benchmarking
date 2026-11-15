@@ -8,6 +8,11 @@ publish = false
 name = "awa-bench"
 path = "src/main.rs"
 
+[features]
+# awa 0.7 (main): find_jobs/count_jobs probes and the tag-index build.
+# scripts/awa_operator_pin.sh switches the awa pin and enables it.
+awa07 = []
+
 [dependencies]
 awa-model = { git = "https://github.com/hardbyte/awa", rev = "1a53fd9ea2c6b5d852052771a8fe6b7fcdd2a278" }
 awa-worker = { git = "https://github.com/hardbyte/awa", rev = "1a53fd9ea2c6b5d852052771a8fe6b7fcdd2a278" }
