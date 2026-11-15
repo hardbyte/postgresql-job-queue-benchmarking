@@ -17,6 +17,13 @@ from psycopg.types.json import Jsonb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter_common"))
 from bench_controls import ScenarioControls, failure_outcome, herd_preload_loop  # noqa: E402
+from operator_controls import (  # noqa: E402
+    ALT_KIND,
+    Haystack,
+    OperatorControls,
+    Probe,
+    run_probes,
+)
 
 QUEUE_NAME = "long_horizon_bench"
 # Dead-letter queue for poison messages, created only when failure
@@ -195,6 +202,61 @@ async def queue_depth(conn: psycopg.AsyncConnection) -> int:
     return int(row["cnt"])
 
 
+def pgmq_probes(
+    conn_ref: list[psycopg.AsyncConnection], haystack: Haystack, page: int
+) -> list[Probe]:
+    """pgmq documents SQL against its q_<queue> tables as the way to inspect
+    messages, so the lookups are SQL (msg_id primary key; message @> for the
+    handles); the count is pgmq.metrics(), its public API."""
+    table = f"pgmq.q_{haystack.queue}"
+
+    async def fetch(query: str, params: tuple) -> list[dict]:
+        async with conn_ref[0].cursor() as cur:
+            await cur.execute(query, params)
+            return await cur.fetchall()
+
+    async def get_by_id(msg_id, seq) -> tuple[int, bool]:
+        rows = await fetch(f"SELECT msg_id, message FROM {table} WHERE msg_id = %s", (msg_id,))
+        handle, _ = haystack.handles(seq)
+        return len(rows), len(rows) == 1 and rows[0]["message"].get("h") == handle
+
+    async def find_handle(msg_id, seq) -> tuple[int, bool]:
+        handle, _ = haystack.handles(seq)
+        rows = await fetch(
+            f"SELECT msg_id FROM {table} WHERE message @> %s LIMIT 2", (Jsonb({"h": handle}),)
+        )
+        return len(rows), len(rows) == 1 and int(rows[0]["msg_id"]) == int(msg_id)
+
+    async def find_tenant_page(_msg_id, seq) -> tuple[int, bool]:
+        tenant = seq % haystack.tenants
+        rows = await fetch(
+            f"SELECT msg_id FROM {table} WHERE message @> %s ORDER BY msg_id LIMIT %s",
+            (Jsonb({"t": f"t{tenant}"}), page),
+        )
+        return len(rows), len(rows) == min(page, haystack.tenant_matches(tenant))
+
+    async def kind_state_page(_msg_id, _seq) -> tuple[int, bool]:
+        rows = await fetch(
+            f"SELECT msg_id FROM {table} WHERE message @> %s AND vt <= now() "
+            "ORDER BY msg_id LIMIT %s",
+            (Jsonb({"kind": ALT_KIND}), page),
+        )
+        return len(rows), len(rows) == min(page, haystack.alt_matches())
+
+    async def count_state(_msg_id, _seq) -> tuple[int, bool]:
+        rows = await fetch("SELECT queue_length FROM pgmq.metrics(%s)", (haystack.queue,))
+        count = int(rows[0]["queue_length"])
+        return 1, abs(count - haystack.jobs) <= 0.01 * haystack.jobs
+
+    return [
+        Probe("get_by_id", "sql", get_by_id),
+        Probe("find_handle", "sql", find_handle),
+        Probe("find_tenant_page", "sql", find_tenant_page),
+        Probe("kind_state_page", "sql", kind_state_page),
+        Probe("count_state", "native", count_state),
+    ]
+
+
 async def scenario_long_horizon() -> None:
     sample_every_s = env_int("SAMPLE_EVERY_S", 5)
     producer_rate = env_int("PRODUCER_RATE", 800)
@@ -229,6 +291,11 @@ async def scenario_long_horizon() -> None:
     db_name = database_url().rsplit("/", 1)[-1]
     queues = queue_names()
     controls = ScenarioControls()
+    operator = OperatorControls("pgmq")
+    # pgmq has no pause: on an emulated pause every replica's consumers stop
+    # reading (a batch already read is still acked) until the resume.
+    resumed = asyncio.Event()
+    resumed.set()
     setup_conn = await aconnect()
     try:
         for queue in queues:
@@ -438,6 +505,9 @@ async def scenario_long_horizon() -> None:
         empty_in_sweep = 0
         try:
             while not shutdown.is_set():
+                if not resumed.is_set():
+                    await resumed.wait()
+                    continue
                 queue = assigned[sweep_idx % len(assigned)]
                 sweep_idx += 1
                 try:
@@ -464,6 +534,7 @@ async def scenario_long_horizon() -> None:
                             wake.clear()
                     continue
                 empty_in_sweep = 0
+                operator.record_starts(len(rows))
 
                 if controls.holding and any(
                     isinstance(row["message"], dict) and controls.is_abandon(row["message"])
@@ -668,6 +739,7 @@ async def scenario_long_horizon() -> None:
                 ("queue_depth", current_queue_depth, 0),
                 ("producer_target_rate", current_producer_target_rate, 0),
                 *controls.metrics(sample_every_s, sample_every_s),
+                *operator.metrics(),
             ):
                 if metric in _OBSERVER_METRICS and not _observer_enabled():
                     continue
@@ -685,7 +757,73 @@ async def scenario_long_horizon() -> None:
                 )
             await asyncio.sleep(sample_every_s)
 
+    async def operator_seen(command: dict) -> None:
+        if command.get("op") == "pause":
+            resumed.clear()
+        elif command.get("op") == "resume":
+            resumed.set()
+
+    async def emulated(_args: dict) -> dict:
+        return {"mode": "emulated", "api_ms": 0.0}
+
+    async def op_haystack(args: dict) -> dict:
+        haystack = Haystack.from_args(args)
+        operator.haystack = None
+        started = time.monotonic()
+        conn = await aconnect()
+        try:
+            await setup_queue(conn, haystack.queue)
+            batch = 1000
+            async with conn.cursor() as cur:
+                for first in range(0, haystack.jobs, batch):
+                    seqs = range(first, min(first + batch, haystack.jobs))
+                    messages = []
+                    for seq in seqs:
+                        handle, tenant = haystack.handles(seq)
+                        kind = ALT_KIND if haystack.kind_is_alt(seq) else "bench_job"
+                        messages.append(Jsonb({"h": handle, "t": tenant, "kind": kind}))
+                    await cur.execute("SELECT * FROM pgmq.send_batch(%s, %s)", (haystack.queue, messages))
+                    for seq, row in zip(seqs, await cur.fetchall()):
+                        haystack.keep(int(row["send_batch"]), seq)
+        finally:
+            await conn.close()
+        operator.haystack = haystack
+        return {"enqueued": haystack.jobs, "seconds": time.monotonic() - started}
+
+    async def op_probe(args: dict) -> dict:
+        haystack = operator.haystack
+        if haystack is None:
+            raise RuntimeError("probe before haystack")
+        timeout_ms = int(args.get("timeout_ms", 30_000))
+        probe_conn: list[psycopg.AsyncConnection] = []
+
+        async def open_conn() -> None:
+            if probe_conn:
+                await probe_conn.pop().close()
+            conn = await aconnect()
+            await conn.execute(f"SET statement_timeout = {timeout_ms}")
+            probe_conn.append(conn)
+
+        await open_conn()
+        try:
+            return await run_probes(
+                pgmq_probes(probe_conn, haystack, int(args.get("page", 100))),
+                haystack,
+                args,
+                on_timeout=open_conn,
+            )
+        finally:
+            for conn in probe_conn:
+                await conn.close()
+
     tasks = [
+        asyncio.create_task(
+            operator.run(
+                shutdown,
+                {"haystack": op_haystack, "probe": op_probe, "pause": emulated, "resume": emulated},
+                on_seen=operator_seen,
+            )
+        ),
         asyncio.create_task(producer()),
         asyncio.create_task(depth_task()),
         asyncio.create_task(sampler()),
