@@ -1,5 +1,5 @@
 {
-  "intro": "Every system ran the same scenarios, one after another, against a fresh PostgreSQL 18.6 cluster capped at 4 CPUs, on one host, between 11 and 13 November 2026. Saturation, the Postgres restart and many queues were run for every system with the same connection rule (a pool of workers + 8 per process); the other scenarios come from the full sweep, with Oban rerun after an adapter fix and Awa and Absurd rerun on newer adapters. Each section names the run behind each system's numbers. Absolute numbers depend on this host; the comparisons within a section are the point.",
+  "intro": "Every system ran the same scenarios, one after another, against a fresh PostgreSQL 18.6 cluster capped at 4 CPUs, on one host, in November 2026. In saturation, the Postgres restart and many queues, every system had a pool of workers + 8 connections per process. In the other scenarios Awa and Absurd had that pool and the other systems their adapter's default (4 connections for Procrastinate, 10 for pg-boss). Absolute numbers depend on this host; the comparisons within a section are the point.",
   "contracts": [
     {
       "systems": [
@@ -722,10 +722,5 @@
       "label": "1M abandoned jobs, all done again",
       "missing": "not done in 30 min"
     }
-  ],
-  "runs": {
-    "2026-11-12-full-sweep": "the 11–13 Nov sweep, each adapter's default connection pool",
-    "2026-11-13-rerun": "the 13 Nov rerun after the adapter's latency-window fix, the adapter's default connection pool",
-    "2026-11-13-followup": "the 13 Nov follow-up, a pool of workers + 8 per process"
-  }
+  ]
 }
