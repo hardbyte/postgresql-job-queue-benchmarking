@@ -86,6 +86,7 @@ defmodule ObanBench.LongHorizon do
     queues = queue_names()
     per_queue_limit = max(1, div(worker_count, length(queues)))
     :ets.insert(:long_horizon_state, {:queues, List.to_tuple(queues)})
+    ObanBench.Operator.init(queues)
     start_queues = fn -> Enum.each(queues, &start_queue(&1, per_queue_limit)) end
 
     case System.get_env("CONSUMER_GATE_FILE") do
@@ -530,7 +531,7 @@ defmodule ObanBench.LongHorizon do
         {"completion_rate", cmp_rate, sample_every_s},
         {"queue_depth", depth * 1.0, 0},
         {"producer_target_rate", producer_target_rate, 0}
-      ] ++ ScenarioControls.metrics(dt_s, sample_every_s),
+      ] ++ ScenarioControls.metrics(dt_s, sample_every_s) ++ ObanBench.Operator.metrics(),
       fn {name, value, window_s} ->
         if MapSet.member?(@observer_metrics, name) and not observer_enabled?() do
           :ok
@@ -641,6 +642,8 @@ defmodule ObanBench.LongHorizonWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args, attempt: attempt, max_attempts: max_attempts} = job) do
+    ObanBench.Operator.on_job_start()
+
     if ScenarioControls.tagged?(args) do
       perform_tagged(args, attempt, max_attempts)
     else
