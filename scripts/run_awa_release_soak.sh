@@ -8,7 +8,8 @@
 #   RESULTS_ROOT=results/2026-11-rc0618 bash scripts/run_awa_release_soak.sh [cell...]
 #
 # Cells: retry_small_pool retry_high brownout idle200_resume callback_1000
-# pinned_lane_release mixed_fleet (default: all, in that order). Cells already recorded in
+# pinned_lane_release mixed_fleet (default: all, in that order), and retry_gate
+# (only when named). Cells already recorded in
 # run_index.tsv are skipped, so the script can be re-run to resume.
 #
 # Every cell sets AWA_SOAK_DIAGNOSTICS=1 (finalize, rescue, pool and
@@ -85,6 +86,15 @@ cell_retry_small_pool() {
       ( export AWA_BENCH_FEATURES=finalize_gate AWA_MAX_CONCURRENT_FINALIZES=$(( conns / 2 ))
         retry_small_pool_cell "$conns" "retry_small_pool_${conns}_fin$(( conns / 2 ))" )
     fi
+  done
+}
+
+# The pool-24 retry storm at each finalize gate in RETRY_GATES.
+cell_retry_gate() {
+  local gate conns="${RETRY_GATE_CONNS:-24}"
+  for gate in ${RETRY_GATES:-4 3}; do
+    ( export AWA_BENCH_FEATURES=finalize_gate AWA_MAX_CONCURRENT_FINALIZES="$gate"
+      retry_small_pool_cell "$conns" "retry_small_pool_${conns}_fin${gate}" )
   done
 }
 

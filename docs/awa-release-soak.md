@@ -35,7 +35,10 @@ change the retry cells. `FINALIZE_GATE_AB=1` adds
 (at least 4). That needs an awa pin with
 `ClientBuilder::max_concurrent_finalizes` (awa #793, on release/0.6.6 from
 db3a6181); the script builds awa-bench with `AWA_BENCH_FEATURES=finalize_gate`
-for those cells. `AWA_MAX_CONCURRENT_FINALIZES=<n>` sets it in any cell built
+for those cells. The `retry_gate` cell, run only when named, repeats the
+storm on `RETRY_GATE_CONNS` (24) connections once per gate in `RETRY_GATES`
+(`4 3`), as `retry_small_pool_<conns>_fin<gate>`.
+`AWA_MAX_CONCURRENT_FINALIZES=<n>` sets it in any cell built
 with the feature; without the feature awa-bench refuses the setting rather
 than ignore it. Compare the pairs on `finalize_pending`,
 `finalize_latency_est_ms`, `pool_saturated_frac`, the rescue and duplicate
