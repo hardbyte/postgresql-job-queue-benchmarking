@@ -137,6 +137,11 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
 }
 
 
+PHASE_OWN_RATE = frozenset(
+    {PhaseType.OPERATOR, PhaseType.PG_BACKEND_KILL, PhaseType.NEIGHBOUR_OLTP}
+)
+
+
 @dataclass(frozen=True)
 class Phase:
     label: str
@@ -166,14 +171,16 @@ class Phase:
     def rate_override(self, replicas: int = 1) -> float | None:
         """Per-replica producer rate this phase pins, or None for the base.
 
-        `rate=N` is a per-replica jobs/s value usable on any phase type
-        except `operator`, where it is the probe rate.
+        `rate=N` is a per-replica jobs/s value on any phase type except
+        those that take `rate` for themselves: `operator` (probe rate),
+        `pg-backend-kill` (kills per second) and `neighbour-oltp` (pgbench
+        transactions per second).
         `preload(jobs=N)` spreads N jobs evenly over the phase across all
         replicas; `drain` always stops the producer.
         """
         if self.type is PhaseType.DRAIN:
             return 0.0
-        if self.type is PhaseType.OPERATOR:
+        if self.type in PHASE_OWN_RATE:
             return None
         if self.type is PhaseType.PRELOAD:
             jobs = self.int_param("jobs", 0)
