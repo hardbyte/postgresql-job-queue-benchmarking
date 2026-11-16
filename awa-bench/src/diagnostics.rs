@@ -611,11 +611,12 @@ pub fn haystack_completions() -> &'static DuplicateTracker {
     TRACKER.get_or_init(|| DuplicateTracker::new(0, i64::from(u32::MAX)))
 }
 
-/// In-process duplicate execution evidence for this replica's own producer
-/// jobs (sequence numbers from `base`): a job starting while an earlier
-/// attempt of it is still running here (a live claim was rescued and
-/// re-dispatched), and a job completing a second time. Jobs that move
-/// between replicas are not seen.
+/// In-process duplicate execution evidence, keyed by job id (or, for
+/// haystack jobs, sequence number) in `base..base + span`: a job starting
+/// while an earlier attempt of it is still running here (a live claim was
+/// rescued and re-dispatched), and a job completing a second time. A job
+/// whose attempts land on different replicas or process lifetimes is not
+/// seen.
 pub struct DuplicateTracker {
     base: i64,
     span: i64,
@@ -626,7 +627,7 @@ pub struct DuplicateTracker {
 }
 
 impl DuplicateTracker {
-    /// Tracks completions of sequence numbers in `base..base + span`.
+    /// Tracks completions of keys in `base..base + span`.
     pub fn new(base: i64, span: i64) -> Self {
         Self {
             base,
@@ -638,18 +639,18 @@ impl DuplicateTracker {
         }
     }
 
-    pub fn start(&self, seq: i64) {
-        if !self.running.lock().unwrap().insert(seq) {
+    pub fn start(&self, key: i64) {
+        if !self.running.lock().unwrap().insert(key) {
             self.concurrent_starts.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    pub fn finish(&self, seq: i64, completed: bool) {
-        self.running.lock().unwrap().remove(&seq);
-        if !completed || seq < self.base || seq - self.base >= self.span {
+    pub fn finish(&self, key: i64, completed: bool) {
+        self.running.lock().unwrap().remove(&key);
+        if !completed || key < self.base || key - self.base >= self.span {
             return;
         }
-        let index = (seq - self.base) as usize;
+        let index = (key - self.base) as usize;
         let (word, bit) = (index / 64, 1_u64 << (index % 64));
         let mut bits = self.completed.lock().unwrap();
         if word >= bits.len() {

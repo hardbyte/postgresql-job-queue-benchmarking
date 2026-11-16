@@ -164,22 +164,19 @@ impl Worker for LongHorizonWorker {
     }
 
     async fn perform(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
-        let tracked_seq = self.duplicates.as_ref().and_then(|_| {
+        let tracked_id = self.duplicates.as_ref().and_then(|_| {
             let args = ctx.job.args.as_object()?;
             let untracked = !args.contains_key("produced_at_ms")
                 || args.get("run_at_ms").is_some_and(|v| !v.is_null())
                 || args.get("abandon").is_some_and(|v| !v.is_null());
-            if untracked {
-                return None;
-            }
-            args.get("seq")?.as_i64()
+            (!untracked).then_some(ctx.job.id)
         });
-        if let (Some(tracker), Some(seq)) = (&self.duplicates, tracked_seq) {
-            tracker.start(seq);
+        if let (Some(tracker), Some(job_id)) = (&self.duplicates, tracked_id) {
+            tracker.start(job_id);
         }
         let result = self.run(ctx).await;
-        if let (Some(tracker), Some(seq)) = (&self.duplicates, tracked_seq) {
-            tracker.finish(seq, matches!(result, Ok(JobResult::Completed)));
+        if let (Some(tracker), Some(job_id)) = (&self.duplicates, tracked_id) {
+            tracker.finish(job_id, matches!(result, Ok(JobResult::Completed)));
         }
         HANDLER_RETURNS.fetch_add(1, Ordering::Relaxed);
         result
@@ -803,12 +800,7 @@ pub async fn run() {
     let producer_target_rate = Arc::new(AtomicU64::new(producer_rate));
     let controls = Arc::new(ScenarioControls::from_env());
     let soak = soak_diagnostics_enabled();
-    let duplicates = soak.then(|| {
-        Arc::new(DuplicateTracker::new(
-            i64::from(instance_id()) * PRODUCER_SEQUENCE_STRIDE,
-            PRODUCER_SEQUENCE_STRIDE,
-        ))
-    });
+    let duplicates = soak.then(|| Arc::new(DuplicateTracker::new(0, i64::MAX)));
     let point_reads = PointReads::from_env();
     let operator = Operator::from_env(&database_url, &queue_names);
 
