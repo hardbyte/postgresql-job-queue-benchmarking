@@ -161,7 +161,8 @@ pub fn maintenance_totals(soak: bool) -> Vec<(String, f64)> {
             }
         }
     }
-    if soak {
+    // Without a fresh export there is nothing to compare leadership against.
+    if soak && !exports.is_empty() {
         let maintenance_sum: f64 = totals
             .iter()
             .filter(|(key, _)| key.starts_with("maint_"))
