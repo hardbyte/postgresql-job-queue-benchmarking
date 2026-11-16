@@ -16,7 +16,7 @@
 # (rescued/duplicate-completion counts polled every BENCH_EVIDENCE_EVERY_S,
 # default 10 s). SOAK_SHORT=1 shortens every phase for a smoke run.
 #
-# Knobs: RETRY_RATE (500 jobs/s), RETRY_FAILURES (2 failed attempts per job),
+# Knobs: RETRY_RATE (300 jobs/s), RETRY_FAILURES (1 failed attempt per job),
 # RETRY_ALIGN_MS (2000: failing handlers return together on these wall-clock
 # boundaries), RETRY_MAX_ATTEMPTS (6). AWA_MAX_CONCURRENT_FINALIZES reaches
 # every cell when set; it needs AWA_BENCH_FEATURES=finalize_gate and an awa
@@ -58,17 +58,19 @@ run_cell() {
   log "END   ${cell_id} rc=${rc} dir=${run_dir} failed_to_complete_logs=${failed}"
 }
 
-# ~1,000 handlers in flight whose injected Retryable errors land on the same
-# wall-clock boundary, against a pool of 24 and then 10 connections.
+# About 900 of 1,000 handlers busy during the storm, two thirds of them on
+# attempts that fail; their Retryable errors land on the same 2 s wall-clock
+# boundary, about 600 at a time, against a pool of 24 and then 10
+# connections. RETRY_RATE above ~330 jobs/s saturates the workers.
 cell_retry_small_pool() {
   local conns
   for conns in 24 10; do
     ( export MAX_CONNECTIONS="$conns" JOB_MAX_ATTEMPTS="${RETRY_MAX_ATTEMPTS:-6}" \
         AWA_FAIL_ALIGN_MS="${RETRY_ALIGN_MS:-2000}"
       run_cell retry "retry_small_pool_${conns}" \
-        --producer-rate "${RETRY_RATE:-500}" --worker-count 1000 --job-work-ms 1000 \
+        --producer-rate "${RETRY_RATE:-300}" --worker-count 1000 --job-work-ms 1000 \
         --phase "warmup=warmup:$(dur 30s 15s)" --phase "baseline=clean:$(dur 2m 30s)" \
-        --phase "storm=retry-storm(transient_pct=100,poison_pct=0,transient_failures=${RETRY_FAILURES:-2}):$(dur 5m 60s)" \
+        --phase "storm=retry-storm(transient_pct=100,poison_pct=0,transient_failures=${RETRY_FAILURES:-1}):$(dur 5m 60s)" \
         --phase "recovery=recovery:$(dur 4m 45s)" )
   done
 }

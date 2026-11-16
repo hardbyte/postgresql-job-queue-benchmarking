@@ -20,7 +20,7 @@ soak off another harness's Postgres.
 
 | Cell | What it does |
 |---|---|
-| `retry_small_pool_24`, `retry_small_pool_10` | 1,000 handlers, 1 s jobs at 500 jobs/s; during `storm` every job fails twice with a retryable error. `AWA_FAIL_ALIGN_MS=2000` makes failing handlers finish their work and then return on the same 2 s wall-clock boundary, so about a thousand retry finalizes arrive together on a pool of 24, then 10, connections. |
+| `retry_small_pool_24`, `retry_small_pool_10` | 1,000 handlers, 1 s jobs at 300 jobs/s; during `storm` every job fails once with a retryable error. `AWA_FAIL_ALIGN_MS=2000` makes failing handlers finish their work and then return on the same 2 s wall-clock boundary, so about 600 retry finalizes arrive together on a pool of 24, then 10, connections, with about 900 handlers busy. Above ~330 jobs/s (or with more failures per job) the workers saturate and the retry backlog outlasts the recovery phase. |
 | `retry_high` | Depth-target saturation at 64 workers with half the jobs failing once and 1% poison. |
 | `brownout` | Two replicas at 1,000 jobs/s each through `pg-backend-kill(rate=1)` and a `postgres-restart`. |
 | `idle200_resume` | 200 queues on one weighted pool of 16 workers and 24 connections: load, ten minutes idle, load again. Ring generations and prune/rotate outcomes show rotation resuming after the idle. |
