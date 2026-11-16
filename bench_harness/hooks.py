@@ -1233,13 +1233,21 @@ ABANDON_RELEASE = {"tag": False, "hold": False}
 
 
 def _count_running(state: dict[str, object]) -> float | None:
+    """The one-off claimed count at the kill. It may scan a million claims,
+    so it gets BENCH_ABANDON_COUNT_TIMEOUT_S (default 600 s) rather than the
+    metrics daemon's short state-query timeout, and a lock timeout so it
+    never queues behind a prune."""
     sql = state.get("abandon_running_sql")
     url = state.get("system_database_url")
     if not sql or not url:
         return None
+    timeout_ms = int(float(os.environ.get("BENCH_ABANDON_COUNT_TIMEOUT_S", "600")) * 1000)
     try:
         with psycopg.connect(
-            str(url), autocommit=True, application_name="bench-harness-abandon"
+            str(url),
+            autocommit=True,
+            application_name="bench-harness-abandon",
+            options=f"-c statement_timeout={timeout_ms} -c lock_timeout=5000",
         ) as conn:
             row = conn.execute(str(sql)).fetchone()
     except psycopg.Error as exc:
