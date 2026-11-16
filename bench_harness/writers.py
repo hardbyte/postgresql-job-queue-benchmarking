@@ -628,6 +628,14 @@ def compute_summary(
                 phase_label=phase_label,
                 metric="pg_db_xacts_total",
             )
+            callback_polls = _cluster_counter_rate(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_stmt_callback_poll_calls_total",
+            )
+            if callback_polls is not None:
+                phase_block["pg_stmt_callback_poll_calls_per_s"] = callback_polls
             phase_block.update(
                 _resource_phase_metrics(
                     rows, system=system, phase_label=phase_label
@@ -686,6 +694,12 @@ def compute_summary(
                 run_block["completion_excess"] += rescued
         if run_block:
             system_block["run"] = run_block
+        evidence = _evidence_summary(rows, system=system)
+        if evidence:
+            system_block["evidence"] = evidence
+        soak = _soak_summary(rows, system=system)
+        if soak:
+            system_block["soak"] = soak
     _add_neighbour_baseline_ratios(out_systems, phases)
 
     return {
@@ -1436,6 +1450,65 @@ def _run_totals(rows: list[dict], *, system: str, phases: list[Phase]) -> dict:
                 None,
             )
     return out
+
+
+def _evidence_summary(rows: list[dict], *, system: str) -> dict[str, dict]:
+    """Integrity checks polled with BENCH_EVIDENCE_QUERIES: the last and the
+    peak value of each over the run. Peak matters because ring prune drops
+    the rows a count is built from."""
+    series: dict[str, list[tuple[float, float]]] = {}
+    for row in rows:
+        if row["system"] != system or row.get("subject_kind") != "evidence":
+            continue
+        try:
+            series.setdefault(row["subject"], []).append(
+                (float(row["elapsed_s"]), float(row["value"]))
+            )
+        except (TypeError, ValueError):
+            continue
+    return {
+        name: {"last": sorted(points)[-1][1], "peak": max(v for _, v in points)}
+        for name, points in sorted(series.items())
+    }
+
+
+# awa-bench AWA_SOAK_DIAGNOSTICS / callback-mode metrics reported in the
+# summary's `soak` block as each replica's last value of the run.
+SOAK_LAST_PREFIXES = (
+    "callback_",
+    "finalize_",
+    "handler_returns_total",
+    "pool_timeout_log_total",
+    "awa_jobs_",
+    "awa_rescues_",
+    "awa_finalize_deadlock_retries_total",
+    "completion_flush_max_ms",
+    "claim_query_max_ms",
+)
+
+
+def _soak_summary(rows: list[dict], *, system: str) -> dict[str, dict[str, float]]:
+    latest: dict[str, dict[str, tuple[float, float]]] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row.get("subject_kind") != "adapter"
+            or not row["metric"].startswith(SOAK_LAST_PREFIXES)
+        ):
+            continue
+        try:
+            elapsed_s = float(row["elapsed_s"])
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+        per_instance = latest.setdefault(row["metric"], {})
+        instance_id = str(row.get("instance_id") or "0")
+        if instance_id not in per_instance or elapsed_s >= per_instance[instance_id][0]:
+            per_instance[instance_id] = (elapsed_s, value)
+    return {
+        metric: {instance: value for instance, (_, value) in sorted(values.items())}
+        for metric, values in sorted(latest.items())
+    }
 
 
 def _last_adapter_values(

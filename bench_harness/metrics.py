@@ -36,6 +36,10 @@ class PollTargets:
     # Minimum seconds between state-query polls; 0 polls every tick. Large
     # backlogs make these counts expensive, so mass_abandon spaces them out.
     state_query_every_s: float = 0.0
+    # {name: single-value SQL} from adapter.json -> evidence_queries, polled
+    # every `evidence_query_every_s` when BENCH_EVIDENCE_QUERIES is set.
+    evidence_queries: dict[str, str] = field(default_factory=dict)
+    evidence_query_every_s: float = 30.0
 
 
 def resource_metric_name(subject: str, reading: str) -> str:
@@ -111,7 +115,13 @@ SELECT pg_database_size(current_database())::double precision / (1024 * 1024)
 _PG_STAT_STATEMENTS_SQL = """
 SELECT
   COALESCE(sum(calls), 0)::double precision,
-  COALESCE(sum(calls) FILTER (WHERE query ~* '\\m(pg_)?notify\\M'), 0)::double precision
+  COALESCE(sum(calls) FILTER (WHERE query ~* '\\m(pg_)?notify\\M'), 0)::double precision,
+  -- awa's queue-storage check_callback_state poll (one per wait_for_callback poll).
+  COALESCE(sum(calls) FILTER (
+    WHERE query LIKE '%attempt.callback_result%'
+      AND query LIKE '%ORDER BY lease.run_lease DESC%'
+      AND query NOT LIKE '%pg_stat_statements%'
+  ), 0)::double precision
 FROM pg_stat_statements
 WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 """
@@ -366,6 +376,7 @@ class MetricsDaemon(threading.Thread):
         self._relfilenode_prev: dict[str, str] = {}
         self._relfilenode_churn_total = 0
         self._state_polled_at = float("-inf")
+        self._evidence_polled_at = float("-inf")
 
     # ── one-shot boundary snapshots ─────────────────────────────────────
     def phase_boundary_snapshot(self) -> None:
@@ -895,6 +906,13 @@ class MetricsDaemon(threading.Thread):
                     metric="pg_stmt_notify_calls_total",
                     value=float(row[1]),
                 )
+                if row[2]:
+                    self._emit(
+                        subject_kind="cluster",
+                        subject="",
+                        metric="pg_stmt_callback_poll_calls_total",
+                        value=float(row[2]),
+                    )
 
             if self.cpu_probe is not None:
                 try:
@@ -927,6 +945,22 @@ class MetricsDaemon(threading.Thread):
                     metric="job_state_count",
                     value=float(row[0]),
                 )
+
+            if self.targets.evidence_queries and (
+                time.monotonic() - self._evidence_polled_at
+                >= self.targets.evidence_query_every_s
+            ):
+                self._evidence_polled_at = time.monotonic()
+                for name, evidence_sql in self.targets.evidence_queries.items():
+                    row = self._tick_query(conn, cur, evidence_sql)
+                    if row is None or row[0] is None:
+                        continue
+                    self._emit(
+                        subject_kind="evidence",
+                        subject=name,
+                        metric="evidence_value",
+                        value=float(row[0]),
+                    )
 
             rows = self._tick_query(conn, cur, _ACTIVE_XACT_SQL, fetchall=True) or []
             self._emit(

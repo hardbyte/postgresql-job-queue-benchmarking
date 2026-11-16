@@ -127,6 +127,13 @@ def _run_cmd(
     )
 
 
+def _evidence_queries_enabled() -> bool:
+    """BENCH_EVIDENCE_QUERIES=1 polls the adapter's `evidence_queries`
+    (integrity checks such as duplicate completions) every
+    BENCH_EVIDENCE_EVERY_S seconds (default 30)."""
+    return os.environ.get("BENCH_EVIDENCE_QUERIES", "") in {"1", "true", "yes", "on"}
+
+
 def _pg_stat_statements_enabled() -> bool:
     return os.environ.get("BENCH_PG_STAT_STATEMENTS", "") in {"1", "true", "yes", "on"}
 
@@ -1112,6 +1119,12 @@ def run_one_system(
             event_indexes=runtime_event_indexes,
             state_queries=manifest.state_queries if poll_state_queries else {},
             state_query_every_s=30.0 if abandon_control_file is not None else 0.0,
+            evidence_queries=(
+                manifest.evidence_queries if _evidence_queries_enabled() else {}
+            ),
+            evidence_query_every_s=float(
+                os.environ.get("BENCH_EVIDENCE_EVERY_S", "30")
+            ),
         ),
         output_queue=out_queue,
         bench_start=bench_start,
