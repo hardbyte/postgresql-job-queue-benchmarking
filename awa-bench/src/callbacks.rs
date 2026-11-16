@@ -261,7 +261,7 @@ pub struct CallbackWorker {
 #[async_trait]
 impl Worker for CallbackWorker {
     fn kind(&self) -> &'static str {
-        "bench_callback_job"
+        "callback_job"
     }
 
     async fn perform(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
