@@ -12,6 +12,9 @@ path = "src/main.rs"
 # awa 0.7 (main): find_jobs/count_jobs probes and the tag-index build.
 # scripts/awa_operator_pin.sh switches the awa pin and enables it.
 awa07 = []
+# awa with ClientBuilder::max_concurrent_finalizes (awa PR #793): honours
+# AWA_MAX_CONCURRENT_FINALIZES. Enable with AWA_BENCH_FEATURES=finalize_gate.
+finalize_gate = []
 
 [dependencies]
 awa-model = { git = "https://github.com/hardbyte/awa", rev = "1a53fd9ea2c6b5d852052771a8fe6b7fcdd2a278" }
@@ -24,6 +27,7 @@ serde_json = "1"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 hdrhistogram = "7"
 opentelemetry = { version = "0.32", features = ["metrics"] }

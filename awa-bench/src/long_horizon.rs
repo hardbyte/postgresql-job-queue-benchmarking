@@ -25,7 +25,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::time::{interval_at, MissedTickBehavior};
 
-use crate::diagnostics::{maintenance_totals, PointReads};
+use crate::callbacks::{CallbackWaits, CALLBACK_QUEUE};
+use crate::diagnostics::{
+    maintenance_totals, soak_diagnostics_enabled, DuplicateTracker, PointReads, PoolSampler,
+    HANDLER_RETURNS,
+};
 use crate::operator::{JobStarts, Operator};
 use crate::scenario_controls::{failure_outcome, herd_batches, ScenarioControls};
 
@@ -146,6 +150,11 @@ struct LongHorizonWorker {
     controls: Arc<ScenarioControls>,
     point_reads: Option<Arc<PointReads>>,
     operator_starts: Option<Arc<JobStarts>>,
+    /// `AWA_FAIL_ALIGN_MS`: an injected failure runs the job's work first,
+    /// then returns at the next multiple of this many wall-clock ms, so the
+    /// failing handlers in flight return together.
+    fail_align_ms: Option<i64>,
+    duplicates: Option<Arc<DuplicateTracker>>,
 }
 
 #[async_trait]
@@ -155,6 +164,29 @@ impl Worker for LongHorizonWorker {
     }
 
     async fn perform(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
+        let tracked_seq = self.duplicates.as_ref().and_then(|_| {
+            let args = ctx.job.args.as_object()?;
+            let untracked = args.get("run_at_ms").is_some_and(|v| !v.is_null())
+                || args.get("abandon").is_some_and(|v| !v.is_null());
+            if untracked {
+                return None;
+            }
+            args.get("seq")?.as_i64()
+        });
+        if let (Some(tracker), Some(seq)) = (&self.duplicates, tracked_seq) {
+            tracker.start(seq);
+        }
+        let result = self.run(ctx).await;
+        if let (Some(tracker), Some(seq)) = (&self.duplicates, tracked_seq) {
+            tracker.finish(seq, matches!(result, Ok(JobResult::Completed)));
+        }
+        HANDLER_RETURNS.fetch_add(1, Ordering::Relaxed);
+        result
+    }
+}
+
+impl LongHorizonWorker {
+    async fn run(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
         if let Some(starts) = &self.operator_starts {
             starts.record();
         }
@@ -180,6 +212,14 @@ impl Worker for LongHorizonWorker {
                     ctx.job.attempt,
                     ctx.job.max_attempts,
                 ) {
+                    if let Some(align_ms) = self.fail_align_ms {
+                        if self.work_ms > 0 {
+                            tokio::time::sleep(Duration::from_millis(self.work_ms)).await;
+                        }
+                        let now_ms = now_epoch_ms();
+                        let wait_ms = align_ms - now_ms.rem_euclid(align_ms);
+                        tokio::time::sleep(Duration::from_millis(wait_ms as u64)).await;
+                    }
                     self.controls.record_failure(kind, outcome);
                     return Err(JobError::retryable_msg(format!(
                         "injected {kind} failure (attempt {})",
@@ -748,6 +788,12 @@ pub async fn run() {
     let scheduled_depth = Arc::new(AtomicU64::new(0));
     let producer_target_rate = Arc::new(AtomicU64::new(producer_rate));
     let controls = Arc::new(ScenarioControls::from_env());
+    let soak = soak_diagnostics_enabled();
+    let duplicates = soak.then(|| {
+        Arc::new(DuplicateTracker::new(
+            i64::from(instance_id()) * PRODUCER_SEQUENCE_STRIDE,
+        ))
+    });
     let point_reads = PointReads::from_env();
     let operator = Operator::from_env(&database_url, &queue_names);
 
@@ -766,7 +812,13 @@ pub async fn run() {
         controls: Arc::clone(&controls),
         point_reads: point_reads.as_ref().map(|(reads, _)| Arc::clone(reads)),
         operator_starts: operator.as_ref().map(|op| op.starts()),
+        fail_align_ms: std::env::var("AWA_FAIL_ALIGN_MS")
+            .ok()
+            .and_then(|raw| raw.parse::<i64>().ok())
+            .filter(|ms| *ms > 0),
+        duplicates: duplicates.clone(),
     };
+    let callbacks = CallbackWaits::from_env();
 
     // LEASE_DEADLINE_MS — per-claim deadline-rescue window in ms.
     // Default = QueueConfig::default().deadline_duration (rescue ON).
@@ -793,7 +845,35 @@ pub async fn run() {
     let mut client_builder =
         Client::builder(pool.clone()).priority_aging_interval(priority_aging_interval());
     if weighted_workers {
-        client_builder = client_builder.global_max_workers(worker_count);
+        let callback_workers = callbacks.as_ref().map_or(0, |cb| cb.jobs);
+        client_builder =
+            client_builder.global_max_workers(worker_count.saturating_add(callback_workers));
+    }
+    if let Some(callbacks) = &callbacks {
+        client_builder = client_builder
+            .queue(
+                CALLBACK_QUEUE,
+                callbacks.queue_config(QueueConfig {
+                    poll_interval: Duration::from_millis(50),
+                    deadline_duration,
+                    ..QueueConfig::default()
+                }),
+            )
+            .register_worker(callbacks.worker());
+    }
+    if let Ok(raw) = std::env::var("AWA_MAX_CONCURRENT_FINALIZES") {
+        let limit: usize = raw
+            .parse()
+            .expect("AWA_MAX_CONCURRENT_FINALIZES must be an integer");
+        #[cfg(feature = "finalize_gate")]
+        {
+            client_builder = client_builder.max_concurrent_finalizes(limit);
+        }
+        #[cfg(not(feature = "finalize_gate"))]
+        panic!(
+            "AWA_MAX_CONCURRENT_FINALIZES={limit} needs awa-bench built with \
+             AWA_BENCH_FEATURES=finalize_gate against an awa with the finalize gate"
+        );
     }
     for q in &queue_names {
         client_builder = client_builder.queue(
@@ -853,6 +933,24 @@ pub async fn run() {
         operator.spawn(instance_id() == 0);
     }
     let shutdown = Arc::new(AtomicBool::new(false));
+    if let Some(callbacks) = &callbacks {
+        if instance_id() == 0 {
+            callbacks.spawn_enqueue(
+                pool.clone(),
+                queue_storage.as_ref().map(|(_, storage)| {
+                    QueueStorage::new(storage.clone()).expect("Invalid QueueStorageConfig")
+                }),
+                Arc::clone(&shutdown),
+            );
+        }
+        let resolve_pool = PgPoolOptions::new()
+            .max_connections(8)
+            .connect(&database_url)
+            .await
+            .expect("Failed to connect callback resolve pool");
+        callbacks.spawn_resolver(resolve_pool, Arc::clone(&shutdown));
+    }
+    let pool_sampler = soak.then(|| PoolSampler::spawn(pool.clone(), max_connections));
     if std::env::var("CONSUMER_GATE_FILE").is_ok() {
         let gated_client = Arc::clone(&client);
         let gate_shutdown = Arc::clone(&shutdown);
@@ -1334,6 +1432,8 @@ pub async fn run() {
     let sample_controls = Arc::clone(&controls);
     let sample_point_reads = point_reads.as_ref().map(|(reads, _)| Arc::clone(reads));
     let sample_operator_starts = operator.as_ref().map(|op| op.starts());
+    let sample_callbacks = callbacks.clone();
+    let sample_duplicates = duplicates.clone();
     let sample_handle = tokio::spawn(async move {
         // Align first tick to the next wall-clock `sample_every_s` boundary.
         let now_epoch = SystemTime::now()
@@ -1519,7 +1619,21 @@ pub async fn run() {
                 }
             }
 
-            let mut diagnostics: Vec<(String, f64)> = maintenance_totals();
+            let mut diagnostics: Vec<(String, f64)> = maintenance_totals(soak);
+            if let Some(sampler) = &pool_sampler {
+                diagnostics.extend(sampler.take());
+            }
+            if let Some(tracker) = &sample_duplicates {
+                diagnostics.extend(tracker.metrics());
+            }
+            if let Some(callbacks) = &sample_callbacks {
+                diagnostics.extend(
+                    callbacks
+                        .metrics()
+                        .into_iter()
+                        .map(|(metric, value)| (metric.to_owned(), value)),
+                );
+            }
             if let Some(reads) = &sample_point_reads {
                 diagnostics.push((
                     "point_read_found_total".into(),
