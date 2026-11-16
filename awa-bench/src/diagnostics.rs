@@ -2,9 +2,11 @@
 //!
 //! `MaintenanceCapture` keeps awa's own OpenTelemetry metrics in memory so the
 //! sampler can report cumulative ring maintenance outcomes (`prune` and
-//! `rotate` attempts by ring and outcome). Only this process's runtime is
-//! covered: with several replicas, the counters live on whichever replica
-//! leads maintenance.
+//! `rotate` attempts by ring and outcome), each ring's generation, and the
+//! lanes pinning the queue ring (`awa.maintenance.prune.pinned_ready_age`,
+//! reported as the oldest age and the number of pinning lanes). Only this
+//! process's runtime is covered: with several replicas, the values live on
+//! whichever replica leads maintenance.
 //!
 //! `PointReads` drives `admin::get_job` at `AWA_POINT_READS_PER_S` against
 //! jobs this process has started: half recent ids, half older ids, so reads
@@ -66,6 +68,28 @@ pub fn maintenance_totals() -> Vec<(String, f64)> {
         for scope in latest.scope_metrics() {
             for metric in scope.metrics() {
                 let name = metric.name();
+                match (name, metric.data()) {
+                    ("awa.ring.generation", AggregatedMetrics::I64(MetricData::Gauge(gauge))) => {
+                        for point in gauge.data_points() {
+                            let ring = attribute(point.attributes(), "awa.ring")
+                                .unwrap_or_else(|| "unknown".into());
+                            totals.insert(format!("ring_generation_{ring}"), point.value() as f64);
+                        }
+                        continue;
+                    }
+                    (
+                        "awa.maintenance.prune.pinned_ready_age",
+                        AggregatedMetrics::F64(MetricData::Gauge(gauge)),
+                    ) => {
+                        let ages: Vec<f64> = gauge.data_points().map(|p| p.value()).collect();
+                        let pinned = ages.iter().filter(|age| **age > 0.0).count();
+                        let oldest = ages.iter().copied().fold(0.0_f64, f64::max);
+                        totals.insert("prune_pinned_ready_age_max_s".into(), oldest);
+                        totals.insert("prune_pinned_lanes".into(), pinned as f64);
+                        continue;
+                    }
+                    _ => {}
+                }
                 if !MAINTENANCE_METRICS.contains(&name) {
                     continue;
                 }
