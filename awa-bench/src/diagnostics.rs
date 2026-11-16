@@ -581,6 +581,7 @@ impl PointReads {
 /// between replicas are not seen.
 pub struct DuplicateTracker {
     base: i64,
+    span: i64,
     running: Mutex<HashSet<i64>>,
     completed: Mutex<Vec<u64>>,
     pub concurrent_starts: AtomicU64,
@@ -588,9 +589,11 @@ pub struct DuplicateTracker {
 }
 
 impl DuplicateTracker {
-    pub fn new(base: i64) -> Self {
+    /// Tracks completions of sequence numbers in `base..base + span`.
+    pub fn new(base: i64, span: i64) -> Self {
         Self {
             base,
+            span,
             running: Mutex::new(HashSet::new()),
             completed: Mutex::new(Vec::new()),
             concurrent_starts: AtomicU64::new(0),
@@ -606,7 +609,7 @@ impl DuplicateTracker {
 
     pub fn finish(&self, seq: i64, completed: bool) {
         self.running.lock().unwrap().remove(&seq);
-        if !completed || seq < self.base {
+        if !completed || seq < self.base || seq - self.base >= self.span {
             return;
         }
         let index = (seq - self.base) as usize;
@@ -641,7 +644,7 @@ mod tests {
 
     #[test]
     fn duplicate_tracker_counts_overlap_and_repeat_completion() {
-        let tracker = DuplicateTracker::new(1_000);
+        let tracker = DuplicateTracker::new(1_000, 1_000);
         tracker.start(1_005);
         tracker.start(1_005);
         tracker.finish(1_005, true);
@@ -650,6 +653,10 @@ mod tests {
         tracker.finish(1_200, false);
         tracker.start(1_200);
         tracker.finish(1_200, true);
+        tracker.start(5_000);
+        tracker.finish(5_000, true);
+        tracker.start(5_000);
+        tracker.finish(5_000, true);
         assert_eq!(tracker.concurrent_starts.load(Ordering::Relaxed), 1);
         assert_eq!(tracker.repeat_completions.load(Ordering::Relaxed), 1);
     }

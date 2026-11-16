@@ -792,6 +792,7 @@ pub async fn run() {
     let duplicates = soak.then(|| {
         Arc::new(DuplicateTracker::new(
             i64::from(instance_id()) * PRODUCER_SEQUENCE_STRIDE,
+            PRODUCER_SEQUENCE_STRIDE,
         ))
     });
     let point_reads = PointReads::from_env();
