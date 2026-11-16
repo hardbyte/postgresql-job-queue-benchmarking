@@ -9,7 +9,6 @@ import csv
 import json
 import os
 import platform
-import shutil
 import statistics
 import subprocess
 import sys
@@ -1469,10 +1468,14 @@ def _lane_release_summary(
     `generation_change_60s_before_op` how far the queue ring generation moved
     in the minute before it (0 = the ring had stopped). `op_s` is how long the
     op itself took (issue to done; a bulk cancel or batch operation can run
-    for minutes). `pin_released_s` is
-    when the pinned age first read 0, `generation_advanced_s` when the
-    generation first moved, and `prune_resumed_s` when queue prune next
-    reported `pruned`; None when that never happened within the run.
+    for minutes). `pin_released_s` is when the pinned age last went to 0
+    and stayed there to the end of the run (None if the run ended pinned),
+    and `generation_advanced_s` and `prune_resumed_s` are when the queue ring
+    generation next moved and queue prune next reported `pruned` from then
+    on (from the op when the pin never cleared); a pinned ring still steps
+    now and then, so firsts timed from the op alone read as a release.
+    `generation_change_by_end` is how far the generation moved from the op to
+    the end of the run.
     """
     release = next(
         (
@@ -1498,15 +1501,30 @@ def _lane_release_summary(
         before = [v for at, v in points if at < t]
         return before[-1] if before else None
 
-    def first_after(points: list[tuple[float, float]], test) -> float | None:
-        return next((at - t0 for at, v in points if at >= t0 and test(v)), None)
+    def first_after(
+        points: list[tuple[float, float]], test, start: float
+    ) -> float | None:
+        return next((at - t0 for at, v in points if at >= start and test(v)), None)
+
+    def cleared_for_good(points: list[tuple[float, float]]) -> float | None:
+        after = [(at, v) for at, v in points if at >= t0]
+        if not after or after[-1][1] > 0:
+            return None
+        cleared = after[-1][0]
+        for at, v in reversed(after):
+            if v > 0:
+                break
+            cleared = at
+        return cleared
 
     pinned = series("prune_pinned_ready_age_max_s")
     generation = series("ring_generation_queue")
     pruned = series("maint_prune_queue_pruned_total")
     generation_at_op = last_before(generation, t0)
     generation_minute_before = last_before(generation, t0 - 60)
-    pruned_at_op = last_before(pruned, t0) or 0.0
+    released = cleared_for_good(pinned)
+    since = released if released is not None else t0
+    generation_from = last_before(generation, since) if released is not None else generation_at_op
     op_fields: dict[str, float] = {}
     for row in rows:
         if (
@@ -1532,13 +1550,20 @@ def _lane_release_summary(
             if generation_at_op is not None and generation_minute_before is not None
             else None
         ),
-        "pin_released_s": first_after(pinned, lambda v: v <= 0),
+        "pin_released_s": released - t0 if released is not None else None,
         "generation_advanced_s": (
-            first_after(generation, lambda v: v > generation_at_op)
-            if generation_at_op is not None
+            first_after(generation, lambda v: v > generation_from, since)
+            if generation_from is not None
             else None
         ),
-        "prune_resumed_s": first_after(pruned, lambda v: v > pruned_at_op),
+        "prune_resumed_s": first_after(
+            pruned, lambda v: v > (last_before(pruned, since) or 0.0), since
+        ),
+        "generation_change_by_end": (
+            generation[-1][1] - generation_at_op
+            if generation and generation_at_op is not None
+            else None
+        ),
     }
 
 

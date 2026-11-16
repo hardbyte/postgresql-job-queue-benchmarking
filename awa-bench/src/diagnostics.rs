@@ -2,7 +2,9 @@
 //!
 //! `MaintenanceCapture` keeps awa's own OpenTelemetry metrics in memory so the
 //! sampler can report cumulative ring maintenance outcomes (`prune` and
-//! `rotate` attempts by ring and outcome), each ring's generation, and the
+//! `rotate` attempts by ring and outcome, and `advance`: claim-cursor
+//! advances of lanes pinning the queue ring, awa #797), each ring's
+//! generation, and the
 //! lanes pinning the queue ring (`awa.maintenance.prune.pinned_ready_age`,
 //! reported as the oldest age and the number of pinning lanes). Only this
 //! process's runtime is covered: with several replicas, the values live on
@@ -24,9 +26,10 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const MAINTENANCE_METRICS: [&str; 2] = [
+const MAINTENANCE_METRICS: [&str; 3] = [
     "awa.maintenance.prune.attempts",
     "awa.maintenance.rotate.attempts",
+    "awa.maintenance.prune.claim_cursor_advances",
 ];
 
 pub struct MaintenanceCapture {
@@ -81,7 +84,7 @@ pub fn soak_diagnostics_enabled() -> bool {
 }
 
 /// Latest cumulative maintenance counters as
-/// `maint_<prune|rotate>_<ring>_<outcome>_total`, or empty before the
+/// `maint_<prune|rotate|advance>_<ring>_<outcome>_total`, or empty before the
 /// first export. With `soak`, also the [`soak_metrics`].
 pub fn maintenance_totals(soak: bool) -> Vec<(String, f64)> {
     let Some(capture) = CAPTURE.get() else {
@@ -129,7 +132,9 @@ pub fn maintenance_totals(soak: bool) -> Vec<(String, f64)> {
                 if !MAINTENANCE_METRICS.contains(&name) {
                     continue;
                 }
-                let kind = if name.contains("prune") {
+                let kind = if name.ends_with("claim_cursor_advances") {
+                    "advance"
+                } else if name.contains("prune") {
                     "prune"
                 } else {
                     "rotate"

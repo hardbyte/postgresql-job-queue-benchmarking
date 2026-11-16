@@ -156,13 +156,13 @@ cell_callback_1000() {
 # awa #797; on an awa without it the ring should stay pinned.
 cell_pinned_lane_release() {
   local op
-  for op in cancel move reprioritise; do
+  for op in ${LANE_OPS:-cancel move reprioritise}; do
     run_cell lane "pinned_lane_release_${op}" --producer-rate 200 --worker-count 16 \
       --phase "warmup=warmup:$(dur 30s 15s)" \
       --phase "haystack=operator(op=haystack,jobs=${LANE_JOBS:-$(dur 200000 20000)},alt_every=0,wait=30m):$(dur 60s 20s)" \
       --phase "pinned=clean:$(dur 3m 60s)" \
       --phase "release=operator(op=lane_${op},wait=90m):$(dur 60s 20s)" \
-      --phase "after=clean:$(dur 5m 90s)"
+      --phase "after=clean:${LANE_AFTER:-$(dur 5m 90s)}"
   done
 }
 
