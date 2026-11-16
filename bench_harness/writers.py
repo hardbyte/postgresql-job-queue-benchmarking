@@ -683,6 +683,9 @@ def compute_summary(
         operator = _operator_summary(rows, system=system, phases=phases)
         if operator is not None:
             system_block["operator"] = operator
+        lane_release = _lane_release_summary(rows, system=system, phases=phases)
+        if lane_release is not None:
+            system_block["lane_release"] = lane_release
         abandon = _abandon_summary(rows, system=system, phases=phases)
         if abandon is not None:
             system_block["abandon"] = abandon
@@ -1452,6 +1455,74 @@ def _run_totals(rows: list[dict], *, system: str, phases: list[Phase]) -> dict:
     return out
 
 
+LANE_RELEASE_OPS = ("lane_cancel", "lane_move", "lane_reprioritise")
+
+
+def _lane_release_summary(
+    rows: list[dict], *, system: str, phases: list[Phase]
+) -> dict | None:
+    """awa queue-ring release after an op on the lane pinning it (awa #779).
+
+    Timed from the start of the first `operator(op=lane_*)` phase, from
+    awa-bench's maintenance samples (the leader's, max over replicas):
+    `pinned_age_at_op_s` is the pinned lane's age just before the op and
+    `generation_change_60s_before_op` how far the queue ring generation moved
+    in the minute before it (0 = the ring had stopped). `pin_released_s` is
+    when the pinned age first read 0, `generation_advanced_s` when the
+    generation first moved, and `prune_resumed_s` when queue prune next
+    reported `pruned`; None when that never happened within the run.
+    """
+    release = next(
+        (
+            p
+            for p in phases
+            if p.type is PhaseType.OPERATOR and p.param("op") in LANE_RELEASE_OPS
+        ),
+        None,
+    )
+    if release is None:
+        return None
+    t0 = _phase_start_elapsed(rows, system=system, phase_label=release.label)
+    if t0 is None:
+        return None
+    labels = [p.label for p in phases]
+
+    def series(metric: str) -> list[tuple[float, float]]:
+        return _timeline(
+            rows, system=system, phase_labels=labels, metric=metric, subject_kind="adapter"
+        )
+
+    def last_before(points: list[tuple[float, float]], t: float) -> float | None:
+        before = [v for at, v in points if at < t]
+        return before[-1] if before else None
+
+    def first_after(points: list[tuple[float, float]], test) -> float | None:
+        return next((at - t0 for at, v in points if at >= t0 and test(v)), None)
+
+    pinned = series("prune_pinned_ready_age_max_s")
+    generation = series("ring_generation_queue")
+    pruned = series("maint_prune_queue_pruned_total")
+    generation_at_op = last_before(generation, t0)
+    generation_minute_before = last_before(generation, t0 - 60)
+    pruned_at_op = last_before(pruned, t0) or 0.0
+    return {
+        "op": release.param("op"),
+        "pinned_age_at_op_s": last_before(pinned, t0),
+        "generation_change_60s_before_op": (
+            generation_at_op - generation_minute_before
+            if generation_at_op is not None and generation_minute_before is not None
+            else None
+        ),
+        "pin_released_s": first_after(pinned, lambda v: v <= 0),
+        "generation_advanced_s": (
+            first_after(generation, lambda v: v > generation_at_op)
+            if generation_at_op is not None
+            else None
+        ),
+        "prune_resumed_s": first_after(pruned, lambda v: v > pruned_at_op),
+    }
+
+
 def _evidence_summary(rows: list[dict], *, system: str) -> dict[str, dict]:
     """Integrity checks polled with BENCH_EVIDENCE_QUERIES: the last and the
     peak value of each over the run. Peak matters because ring prune drops
@@ -1477,6 +1548,7 @@ def _evidence_summary(rows: list[dict], *, system: str) -> dict[str, dict]:
 SOAK_LAST_PREFIXES = (
     "callback_",
     "duplicate_",
+    "haystack_",
     "finalize_",
     "handler_returns_total",
     "pool_timeout_log_total",

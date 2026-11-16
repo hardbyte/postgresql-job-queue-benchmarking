@@ -27,8 +27,8 @@ use tokio::time::{interval_at, MissedTickBehavior};
 
 use crate::callbacks::{CallbackWaits, CALLBACK_QUEUE};
 use crate::diagnostics::{
-    maintenance_totals, soak_diagnostics_enabled, DuplicateTracker, PointReads, PoolSampler,
-    HANDLER_RETURNS,
+    haystack_completions, maintenance_totals, soak_diagnostics_enabled, DuplicateTracker,
+    PointReads, PoolSampler, HANDLER_RETURNS, HAYSTACK_COMPLETED,
 };
 use crate::operator::{JobStarts, Operator};
 use crate::scenario_controls::{failure_outcome, herd_batches, ScenarioControls};
@@ -166,7 +166,8 @@ impl Worker for LongHorizonWorker {
     async fn perform(&self, ctx: &JobContext) -> Result<JobResult, JobError> {
         let tracked_seq = self.duplicates.as_ref().and_then(|_| {
             let args = ctx.job.args.as_object()?;
-            let untracked = args.get("run_at_ms").is_some_and(|v| !v.is_null())
+            let untracked = !args.contains_key("produced_at_ms")
+                || args.get("run_at_ms").is_some_and(|v| !v.is_null())
                 || args.get("abandon").is_some_and(|v| !v.is_null());
             if untracked {
                 return None;
@@ -192,6 +193,19 @@ impl LongHorizonWorker {
         }
         if let Some(point_reads) = &self.point_reads {
             point_reads.observe(ctx.job.id);
+        }
+        if !ctx
+            .job
+            .args
+            .as_object()
+            .is_some_and(|args| args.contains_key("produced_at_ms"))
+        {
+            // A haystack job an operator lane op moved onto a bench queue.
+            if let Some(seq) = ctx.job.args.get("seq").and_then(|v| v.as_i64()) {
+                haystack_completions().finish(seq, true);
+                HAYSTACK_COMPLETED.fetch_add(1, Ordering::Relaxed);
+            }
+            return Ok(JobResult::Completed);
         }
         let args: LongHorizonJob = serde_json::from_value(ctx.job.args.clone())
             .map_err(|err| JobError::Terminal(format!("failed to deserialize args: {err}")))?;
@@ -1626,6 +1640,16 @@ pub async fn run() {
             }
             if let Some(tracker) = &sample_duplicates {
                 diagnostics.extend(tracker.metrics());
+            }
+            let haystack_completed = HAYSTACK_COMPLETED.load(Ordering::Relaxed);
+            if haystack_completed > 0 {
+                diagnostics.push(("haystack_completed_total".into(), haystack_completed as f64));
+                diagnostics.push((
+                    "haystack_duplicate_completions_total".into(),
+                    haystack_completions()
+                        .repeat_completions
+                        .load(Ordering::Relaxed) as f64,
+                ));
             }
             if let Some(callbacks) = &sample_callbacks {
                 diagnostics.extend(

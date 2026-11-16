@@ -1302,7 +1302,9 @@ def enter_abandon_kill(runtime: PhaseRuntime) -> None:
 # docs/operator-scenarios.md for the adapter contract.
 
 OPERATOR_MODES = {"unsupported": 0, "native": 1, "sql": 2, "emulated": 3}
-OPERATOR_OPS = {"haystack", "probe", "pause", "resume"}
+OPERATOR_OPS = {
+    "haystack", "probe", "pause", "resume", "lane_cancel", "lane_move", "lane_reprioritise",
+}
 
 
 def operator_command(runtime: PhaseRuntime, *, now_s: float | None = None) -> dict[str, Any]:

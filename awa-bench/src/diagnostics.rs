@@ -35,6 +35,7 @@ pub struct MaintenanceCapture {
     /// percentiles cover one sample window rather than the whole run.
     previous_histograms: Mutex<HashMap<&'static str, (u64, Vec<u64>)>>,
     previous_maintenance_sum: Mutex<f64>,
+    previous_applied: Mutex<Option<(f64, Instant)>>,
 }
 
 static CAPTURE: OnceLock<MaintenanceCapture> = OnceLock::new();
@@ -57,6 +58,7 @@ pub fn maintenance_reader(interval: Duration) -> PeriodicReader<InMemoryMetricEx
         exporter,
         previous_histograms: Mutex::new(HashMap::new()),
         previous_maintenance_sum: Mutex::new(0.0),
+        previous_applied: Mutex::new(None),
     });
     reader
 }
@@ -207,10 +209,19 @@ pub fn maintenance_totals(soak: bool) -> Vec<(String, f64)> {
         .iter()
         .filter_map(|key| totals.get(*key))
         .sum();
-        totals.insert(
-            "finalize_pending".into(),
-            (handler_returns - applied - failed).max(0.0),
-        );
+        let pending = (handler_returns - applied - failed).max(0.0);
+        totals.insert("finalize_pending".into(), pending);
+        // Little's law over the sample window: finalizes waiting / finalizes
+        // applied per second is the mean time a finalize waits.
+        let now = Instant::now();
+        let mut previous = capture.previous_applied.lock().unwrap();
+        if let Some((previous_applied, at)) = *previous {
+            let rate = (applied - previous_applied) / now.duration_since(at).as_secs_f64();
+            if rate > 0.0 {
+                totals.insert("finalize_latency_est_ms".into(), pending / rate * 1000.0);
+            }
+        }
+        *previous = Some((applied, now));
     }
     // Keep only the newest export so memory stays flat over long runs.
     capture.exporter.reset();
@@ -218,7 +229,7 @@ pub fn maintenance_totals(soak: bool) -> Vec<(String, f64)> {
 }
 
 /// Cumulative counters summed over their attributes, as `(otel name, key)`.
-const SOAK_COUNTERS: [(&str, &str); 7] = [
+const SOAK_COUNTERS: [(&str, &str); 8] = [
     ("awa.job.completed", "awa_jobs_completed_total"),
     ("awa.job.retried", "awa_jobs_retried_total"),
     ("awa.job.failed", "awa_jobs_failed_total"),
@@ -232,6 +243,10 @@ const SOAK_COUNTERS: [(&str, &str); 7] = [
     ),
     ("awa.completion.flushes", "awa_completion_flushes_total"),
     ("awa.heartbeat.batches", "awa_heartbeat_batches_total"),
+    (
+        "awa.maintenance.prune.claim_cursor_advances",
+        "awa_claim_cursor_advances_total",
+    ),
 ];
 
 /// Latency histograms reported as `<key>_p99_ms` over the last sample
@@ -585,6 +600,15 @@ impl PointReads {
             });
         }
     }
+}
+
+/// Haystack jobs completed after an operator lane op moved them onto a bench
+/// queue, and those completed twice.
+pub static HAYSTACK_COMPLETED: AtomicU64 = AtomicU64::new(0);
+
+pub fn haystack_completions() -> &'static DuplicateTracker {
+    static TRACKER: OnceLock<DuplicateTracker> = OnceLock::new();
+    TRACKER.get_or_init(|| DuplicateTracker::new(0, i64::from(u32::MAX)))
 }
 
 /// In-process duplicate execution evidence for this replica's own producer
