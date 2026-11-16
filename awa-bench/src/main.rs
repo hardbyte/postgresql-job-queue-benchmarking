@@ -140,6 +140,7 @@ fn install_metrics() -> SdkMeterProvider {
         );
     }
     let provider = builder.build();
+    diagnostics::register_provider(&provider);
     global::set_meter_provider(provider.clone());
     provider
 }

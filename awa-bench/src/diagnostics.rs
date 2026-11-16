@@ -17,7 +17,7 @@
 //! job` and `pool timed out` log events, and a pool-occupancy sampler.
 
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, HistogramDataPoint, MetricData};
-use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
+use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use sqlx::PgPool;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -38,6 +38,13 @@ pub struct MaintenanceCapture {
 }
 
 static CAPTURE: OnceLock<MaintenanceCapture> = OnceLock::new();
+static PROVIDER: OnceLock<SdkMeterProvider> = OnceLock::new();
+
+/// The process's meter provider, flushed before each soak sample so awa's
+/// counters line up with the adapter's own (`finalize_pending`).
+pub fn register_provider(provider: &SdkMeterProvider) {
+    let _ = PROVIDER.set(provider.clone());
+}
 
 /// A reader to add to the process's meter provider; its exports are read
 /// back by [`maintenance_totals`].
@@ -78,6 +85,11 @@ pub fn maintenance_totals(soak: bool) -> Vec<(String, f64)> {
     let Some(capture) = CAPTURE.get() else {
         return Vec::new();
     };
+    if soak {
+        if let Some(provider) = PROVIDER.get() {
+            let _ = tokio::task::block_in_place(|| provider.force_flush());
+        }
+    }
     let Ok(exports) = capture.exporter.get_finished_metrics() else {
         return Vec::new();
     };
