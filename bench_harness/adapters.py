@@ -87,6 +87,9 @@ class AdapterManifest:
     # retryable, dead, ...). Polled by the metrics daemon only for runs whose
     # phases need DB-side job-state counts (retry-storm, schedule-preload).
     state_queries: dict[str, str] = field(default_factory=dict)
+    # Optional `{name: SQL}` map of single-value integrity checks (e.g. jobs
+    # completed twice). Polled only when BENCH_EVIDENCE_QUERIES is set.
+    evidence_queries: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Sensible defaults: standalone systems are their own family and
@@ -111,6 +114,7 @@ class AdapterManifest:
             display_name=data.get("display_name", "") or "",
             shutdown_grace_s=float(data.get("shutdown_grace_s", 10.0)),
             state_queries=dict(data.get("state_queries", {})),
+            evidence_queries=dict(data.get("evidence_queries", {})),
         )
 
 
@@ -152,8 +156,9 @@ def build_awa(skip: bool) -> None:
     if skip:
         return
     print("[harness] building awa-bench (native)...", file=sys.stderr)
+    features = os.environ.get("AWA_BENCH_FEATURES", "")
     subprocess.run(
-        ["cargo", "build", "--release"],
+        ["cargo", "build", "--release", *(["--features", features] if features else [])],
         cwd=str(SCRIPT_DIR / "awa-bench"),
         env={**os.environ, "SQLX_OFFLINE": "true"},
         check=True,
@@ -358,6 +363,12 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
         "PGQUE_TICKER_MODE",
         "PGQUE_TICK_MS",
         "PGQUE_IDLE_POLL_MS",
+        # awa-bench callback-wait mode (awa-bench/src/callbacks.rs).
+        "CALLBACK_JOBS",
+        "CALLBACK_START_AFTER_S",
+        "CALLBACK_RESOLVE_AFTER_S",
+        "CALLBACK_RESOLVE_FRACTION",
+        "CALLBACK_TIMEOUT_S",
     ):
         if key in os.environ:
             env[key] = os.environ[key]
@@ -381,12 +392,30 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
     return env
 
 
+AWA_BENCH_BINARY_PREFIX = "AWA_BENCH_BINARY_"
+
+
+def awa_bench_binary(instance_id: str) -> str | None:
+    """``AWA_BENCH_BINARY_<instance>``: an absolute path to another awa-bench
+    build for that replica, e.g. one built against an older awa, so a run can
+    mix awa versions in one fleet. Unset: this checkout's release build."""
+    path = os.environ.get(f"{AWA_BENCH_BINARY_PREFIX}{instance_id}")
+    if not path:
+        return None
+    if not os.path.isabs(path) or not os.access(path, os.X_OK):
+        raise RuntimeError(
+            f"{AWA_BENCH_BINARY_PREFIX}{instance_id}={path!r} must be an absolute "
+            "path to an executable awa-bench build"
+        )
+    return path
+
+
 def launch_awa(manifest: AdapterManifest, overrides: dict[str, str]) -> LaunchSpec:
-    target_dir = _cargo_target_dir(SCRIPT_DIR / "awa-bench" / "Cargo.toml")
-    return LaunchSpec(
-        argv=[str(target_dir / "release" / "awa-bench")],
-        env=_base_env(manifest, overrides),
-    )
+    binary = awa_bench_binary(overrides.get("BENCH_INSTANCE_ID", "0"))
+    if binary is None:
+        target_dir = _cargo_target_dir(SCRIPT_DIR / "awa-bench" / "Cargo.toml")
+        binary = str(target_dir / "release" / "awa-bench")
+    return LaunchSpec(argv=[binary], env=_base_env(manifest, overrides))
 
 
 def launch_awa_canonical(manifest: AdapterManifest, overrides: dict[str, str]) -> LaunchSpec:
