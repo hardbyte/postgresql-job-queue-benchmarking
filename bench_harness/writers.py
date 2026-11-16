@@ -1476,6 +1476,7 @@ def _evidence_summary(rows: list[dict], *, system: str) -> dict[str, dict]:
 # summary's `soak` block as each replica's last value of the run.
 SOAK_LAST_PREFIXES = (
     "callback_",
+    "duplicate_",
     "finalize_",
     "handler_returns_total",
     "pool_timeout_log_total",
