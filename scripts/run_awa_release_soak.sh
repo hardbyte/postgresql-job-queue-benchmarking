@@ -138,7 +138,10 @@ cell_callback_1000() {
 
 # awa #779: a 200,000-job haystack in a queue nobody serves pins the queue
 # ring; then one op releases it: cancel the jobs, move them onto the bench
-# queue (the bench worker completes them), or reprioritise them. Read
+# queue (the bench worker completes them), or reprioritise them. The cancel
+# goes newest first, so it does not walk the claim cursor in lane order;
+# admin::bulk_cancel ran ~130 jobs/s on a pinned lane in the smoke, so the
+# release phase waits up to 90 min for the op. Read
 # systems.awa.lane_release and operator in summary.json. The release needs
 # awa #797; on an awa without it the ring should stay pinned.
 cell_pinned_lane_release() {
@@ -148,7 +151,7 @@ cell_pinned_lane_release() {
       --phase "warmup=warmup:$(dur 30s 15s)" \
       --phase "haystack=operator(op=haystack,jobs=${LANE_JOBS:-$(dur 200000 20000)},alt_every=0,wait=30m):$(dur 60s 20s)" \
       --phase "pinned=clean:$(dur 3m 60s)" \
-      --phase "release=operator(op=lane_${op},wait=30m):$(dur 60s 20s)" \
+      --phase "release=operator(op=lane_${op},wait=90m):$(dur 60s 20s)" \
       --phase "after=clean:$(dur 5m 90s)"
   done
 }

@@ -258,7 +258,7 @@ impl Operator {
             "probe" => self.probe(&command.args).await,
             "pause" => self.pause_or_resume(&command.args, true).await,
             "resume" => self.pause_or_resume(&command.args, false).await,
-            "lane_cancel" => self.lane_cancel().await,
+            "lane_cancel" => self.lane_cancel(&command.args).await,
             "lane_move" => {
                 let to =
                     arg_str(&command.args, "to").unwrap_or_else(|| self.bench_queues[0].clone());
@@ -442,8 +442,11 @@ impl Operator {
         Ok(out)
     }
 
-    /// Cancel every job of the haystack through `admin::bulk_cancel`.
-    async fn lane_cancel(&self) -> Result<Map<String, Value>, String> {
+    /// Cancel every job of the haystack through `admin::bulk_cancel`, newest
+    /// first by default (`order=forward` cancels in lane order, which moves
+    /// the lane's claim cursor even without awa #797).
+    async fn lane_cancel(&self, args: &Map<String, Value>) -> Result<Map<String, Value>, String> {
+        let forward = arg_str(args, "order").as_deref() == Some("forward");
         let haystack = self
             .haystack
             .lock()
@@ -453,7 +456,11 @@ impl Operator {
         let pool = self.pool().await?;
         let started = Instant::now();
         let mut cancelled = 0_usize;
-        for chunk in haystack.ids.chunks(HAYSTACK_BATCH as usize) {
+        let mut ids = haystack.ids.clone();
+        if !forward {
+            ids.reverse();
+        }
+        for chunk in ids.chunks(HAYSTACK_BATCH as usize) {
             cancelled += admin::bulk_cancel(pool, chunk)
                 .await
                 .map_err(|err| format!("bulk_cancel: {err}"))?
@@ -463,6 +470,7 @@ impl Operator {
         out.insert("mode".into(), json!("native"));
         out.insert("cancelled".into(), json!(cancelled));
         out.insert("requested".into(), json!(haystack.ids.len()));
+        out.insert("forward".into(), json!(forward));
         out.insert("api_s".into(), json!(started.elapsed().as_secs_f64()));
         out.insert("done_ms".into(), json!(now_ms()));
         Ok(out)

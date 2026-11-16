@@ -99,8 +99,11 @@ moving, reprioritising or cancelling its jobs should release it (awa PR #797).
 Run a `haystack` with `alt_every=0` first, so every haystack job has the
 bench kind, and let the ring pin behind it.
 
-- `lane_cancel`: `admin::bulk_cancel` over every haystack id, 1,000 at a
-  time. Outcome `{mode, cancelled, requested, api_s, done_ms}`.
+- `lane_cancel` — args `{order=reverse}`: `admin::bulk_cancel` over every
+  haystack id, 1,000 at a time, newest first. Cancels in lane order
+  (`order=forward`) move the lane's claim cursor without awa #797, so the
+  default takes the order that only #797 releases. Outcome `{mode, cancelled,
+  requested, forward, api_s, done_ms}`.
 - `lane_move` — args `{queue="haystack", to=<first bench queue>}`: a
   `MoveQueue` batch operation over `queue`'s available jobs, waited on until
   the maintenance leader finishes it. The bench worker completes the moved

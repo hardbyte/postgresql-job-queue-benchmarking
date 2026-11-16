@@ -1467,7 +1467,9 @@ def _lane_release_summary(
     awa-bench's maintenance samples (the leader's, max over replicas):
     `pinned_age_at_op_s` is the pinned lane's age just before the op and
     `generation_change_60s_before_op` how far the queue ring generation moved
-    in the minute before it (0 = the ring had stopped). `pin_released_s` is
+    in the minute before it (0 = the ring had stopped). `op_s` is how long the
+    op itself took (issue to done; a bulk cancel or batch operation can run
+    for minutes). `pin_released_s` is
     when the pinned age first read 0, `generation_advanced_s` when the
     generation first moved, and `prune_resumed_s` when queue prune next
     reported `pruned`; None when that never happened within the run.
@@ -1505,8 +1507,25 @@ def _lane_release_summary(
     generation_at_op = last_before(generation, t0)
     generation_minute_before = last_before(generation, t0 - 60)
     pruned_at_op = last_before(pruned, t0) or 0.0
+    op_fields: dict[str, float] = {}
+    for row in rows:
+        if (
+            row["system"] == system
+            and row.get("subject_kind") == "operator"
+            and row.get("subject") == release.label
+        ):
+            try:
+                op_fields[row["metric"]] = float(row["value"])
+            except (TypeError, ValueError):
+                continue
+    op_s = (
+        (op_fields["op_done_ms"] - op_fields["op_issued_ms"]) / 1000.0
+        if "op_done_ms" in op_fields and "op_issued_ms" in op_fields
+        else None
+    )
     return {
         "op": release.param("op"),
+        "op_s": op_s,
         "pinned_age_at_op_s": last_before(pinned, t0),
         "generation_change_60s_before_op": (
             generation_at_op - generation_minute_before
