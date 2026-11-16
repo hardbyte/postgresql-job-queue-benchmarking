@@ -25,14 +25,21 @@ soak off another harness's Postgres.
 | `brownout` | Two replicas at 1,000 jobs/s each through `pg-backend-kill(rate=1)` and a `postgres-restart`. |
 | `idle200_resume` | 200 queues on one weighted pool of 16 workers and 24 connections: load, ten minutes idle, load again. Ring generations and prune/rotate outcomes show rotation resuming after the idle. |
 | `callback_1000` | 1,000 handlers parked in `wait_for_callback` during `settle`, all resolved early in `resolve`, with `pg_stat_statements` on. |
+| `pinned_lane_release_{cancel,move,reprioritise}` | awa #779: a 200,000-job haystack (`LANE_JOBS`) in a queue nobody serves pins the queue ring during `pinned`; `release` then cancels the jobs, moves them onto the bench queue or reprioritises them. `systems.awa.lane_release` in `summary.json` has the pinned age and ring movement before the op and the seconds until the pin cleared, the ring generation moved and queue prune next pruned; `systems.awa.operator.release` has the op's counts. Release needs awa #797; without it the ring should stay pinned. See [operator scenarios](operator-scenarios.md). |
 | `mixed_fleet` | Replica 0 on an older build, replica 1 on the candidate, with maintenance leadership moved between them. |
 
 `RETRY_RATE`, `RETRY_FAILURES`, `RETRY_ALIGN_MS` and `RETRY_MAX_ATTEMPTS`
-change the retry cells. When the awa pin has
-`ClientBuilder::max_concurrent_finalizes` (awa PR #793; release/0.6.6 at
-1f08ad37 does not), build with `AWA_BENCH_FEATURES=finalize_gate` and set
-`AWA_MAX_CONCURRENT_FINALIZES=<n>`; without the feature awa-bench refuses the
-setting rather than ignore it.
+change the retry cells. `FINALIZE_GATE_AB=1` adds
+`retry_small_pool_<conns>_fin<conns/2>`: the same cell with
+`max_concurrent_finalizes` at half the pool rather than awa's default quarter
+(at least 4). That needs an awa pin with
+`ClientBuilder::max_concurrent_finalizes` (awa #793, on release/0.6.6 from
+db3a6181); the script builds awa-bench with `AWA_BENCH_FEATURES=finalize_gate`
+for those cells. `AWA_MAX_CONCURRENT_FINALIZES=<n>` sets it in any cell built
+with the feature; without the feature awa-bench refuses the setting rather
+than ignore it. Compare the pairs on `finalize_pending`,
+`finalize_latency_est_ms`, `pool_saturated_frac`, the rescue and duplicate
+counters, the pool-timeout counters and the `heartbeat_age_max_s` evidence.
 
 ## Mixed fleet
 
@@ -75,12 +82,13 @@ each replica's last value of the run.
 | `awa_jobs_{completed,retried,failed,waiting_external}_total` | awa's outcome counters, counted when the finalize applied |
 | `handler_returns_total` | every return from a bench handler |
 | `finalize_pending` | `handler_returns_total` minus applied outcomes and failed finalizes: finalizes queued or running (also counts finalizes awa dropped as stale after a rescue) |
+| `finalize_latency_est_ms` | `finalize_pending` over the window's rate of applied outcomes (Little's law): the mean wait from handler return to applied finalize |
 | `finalize_failed_total`, `finalize_failed_pool_timeout_total` | awa's `Failed to complete job` log events, and those whose error was a pool acquire timeout; the attempt is left to rescue |
 | `pool_timeout_log_total` | any awa WARN/ERROR event mentioning `pool timed out` |
 | `awa_finalize_deadlock_retries_total` | finalize transactions re-run after a deadlock |
 | `completion_flush_p99_ms`, `completion_flush_max_ms` | batched completion flushes: p99 over the last sample window (bucket upper bound), max since start |
 | `claim_query_p99_ms`, `claim_query_max_ms` | claim queries, same shape |
-| `awa_completion_flushes_total`, `awa_heartbeat_batches_total`, `awa_jobs_in_flight` | awa counters |
+| `awa_completion_flushes_total`, `awa_heartbeat_batches_total`, `awa_jobs_in_flight`, `awa_claim_cursor_advances_total` | awa counters; the last only on awa with #797, leader only |
 | `awa_rescues_<kind>_total`, `rescue_oldest_attempt_age_<kind>_s` | rescues by kind (`heartbeat`, `deadline`, `callback_timeout`, `*_duplicate_cancelled`) and the oldest attempt the latest pass rescued; leader only |
 | `pool_in_use_max`, `pool_saturated_frac` | the adapter's pool sampled every 100 ms: most connections in use, and the share of samples with all in use |
 | `duplicate_concurrent_starts_total` | a job started while an earlier attempt of it was still running in this process: a live claim was rescued and re-dispatched |
@@ -88,8 +96,9 @@ each replica's last value of the run.
 | `maintenance_active` | 1 while this replica's maintenance counters move (it leads) |
 
 awa exports nothing for direct (unbatched) finalize latency, the finalize
-gate, heartbeat age or pool waits; `finalize_pending`, the log counters and
-the pool sampler stand in for them, and `heartbeat_age_max_s` below reads
+gate, heartbeat age or pool waits; `finalize_pending`,
+`finalize_latency_est_ms`, the log counters and the pool sampler stand in for
+them, and `heartbeat_age_max_s` below reads
 heartbeat age from the database. The duplicate counters see one process's
 own producer jobs only, so a job run on two replicas is not counted there.
 The cell log is also grepped: `run_index.tsv`'s log line reports
@@ -123,4 +132,7 @@ and per-phase `evidence_value@<name>`:
 | `heartbeat_age_max_s` | oldest heartbeat among running and waiting attempts |
 
 These read ring partitions that prune truncates, so they only see rows
-still retained when polled; `peak` is the figure to read.
+still retained when polled; `peak` is the figure to read. Like the state
+queries, each poll runs under a `BENCH_STATE_QUERY_TIMEOUT_MS` (2 s)
+statement timeout and a 500 ms lock timeout, so a slow count is skipped
+rather than holding locks that prune needs.
