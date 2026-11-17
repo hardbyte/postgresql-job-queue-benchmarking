@@ -11,6 +11,7 @@ regardless of when each system's run started within that second.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import sys
@@ -36,6 +37,48 @@ class PollTargets:
     # Minimum seconds between state-query polls; 0 polls every tick. Large
     # backlogs make these counts expensive, so mass_abandon spaces them out.
     state_query_every_s: float = 0.0
+    # {name: single-value SQL} from adapter.json -> evidence_queries, polled
+    # every `evidence_query_every_s` when BENCH_EVIDENCE_QUERIES is set.
+    evidence_queries: dict[str, str] = field(default_factory=dict)
+    evidence_query_every_s: float = 30.0
+    # statement_timeout for state and evidence queries. On a large backlog a
+    # count can run for minutes, holding AccessShareLock on ring partitions
+    # that awa's prune must TRUNCATE; a poll that times out is skipped.
+    state_query_timeout_ms: int = field(
+        default_factory=lambda: int(os.environ.get("BENCH_STATE_QUERY_TIMEOUT_MS", "2000"))
+    )
+
+
+STATE_QUERY_LOCK_TIMEOUT_MS = 500
+
+
+def bounded_query(
+    conn: "psycopg.Connection",
+    cur: "psycopg.Cursor",
+    sql: str,
+    *,
+    statement_timeout_ms: int,
+    lock_timeout_ms: int = STATE_QUERY_LOCK_TIMEOUT_MS,
+):
+    """fetchone() of `sql` under statement and lock timeouts, inside a
+    savepoint that is then rolled back: the timeouts end with it, the locks
+    the query took are released at once, and an error or timeout returns
+    None without aborting the enclosing transaction."""
+    row = None
+    with conn.transaction():
+        cur.execute(
+            "SELECT set_config('statement_timeout', %s, true),"
+            " set_config('lock_timeout', %s, true)",
+            (str(statement_timeout_ms), str(lock_timeout_ms)),
+        )
+        try:
+            with conn.transaction():
+                cur.execute(sql)
+                row = cur.fetchone()
+        except psycopg.Error:
+            row = None
+        raise psycopg.Rollback()
+    return row
 
 
 def resource_metric_name(subject: str, reading: str) -> str:
@@ -111,7 +154,13 @@ SELECT pg_database_size(current_database())::double precision / (1024 * 1024)
 _PG_STAT_STATEMENTS_SQL = """
 SELECT
   COALESCE(sum(calls), 0)::double precision,
-  COALESCE(sum(calls) FILTER (WHERE query ~* '\\m(pg_)?notify\\M'), 0)::double precision
+  COALESCE(sum(calls) FILTER (WHERE query ~* '\\m(pg_)?notify\\M'), 0)::double precision,
+  -- awa's queue-storage check_callback_state poll (one per wait_for_callback poll).
+  COALESCE(sum(calls) FILTER (
+    WHERE query LIKE '%attempt.callback_result%'
+      AND query LIKE '%ORDER BY lease.run_lease DESC%'
+      AND query NOT LIKE '%pg_stat_statements%'
+  ), 0)::double precision
 FROM pg_stat_statements
 WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
 """
@@ -366,6 +415,7 @@ class MetricsDaemon(threading.Thread):
         self._relfilenode_prev: dict[str, str] = {}
         self._relfilenode_churn_total = 0
         self._state_polled_at = float("-inf")
+        self._evidence_polled_at = float("-inf")
 
     # ── one-shot boundary snapshots ─────────────────────────────────────
     def phase_boundary_snapshot(self) -> None:
@@ -586,6 +636,14 @@ class MetricsDaemon(threading.Thread):
             with conn.transaction():
                 cur.execute(sql, params)
                 return cur.fetchall() if fetchall else cur.fetchone()
+        except psycopg.Error:
+            return None
+
+    def _bounded_tick_query(self, conn, cur, sql: str):
+        try:
+            return bounded_query(
+                conn, cur, sql, statement_timeout_ms=self.targets.state_query_timeout_ms
+            )
         except psycopg.Error:
             return None
 
@@ -895,6 +953,13 @@ class MetricsDaemon(threading.Thread):
                     metric="pg_stmt_notify_calls_total",
                     value=float(row[1]),
                 )
+                if row[2]:
+                    self._emit(
+                        subject_kind="cluster",
+                        subject="",
+                        metric="pg_stmt_callback_poll_calls_total",
+                        value=float(row[2]),
+                    )
 
             if self.cpu_probe is not None:
                 try:
@@ -918,7 +983,7 @@ class MetricsDaemon(threading.Thread):
             for state, state_sql in (
                 self.targets.state_queries.items() if state_due else ()
             ):
-                row = self._tick_query(conn, cur, state_sql)
+                row = self._bounded_tick_query(conn, cur, state_sql)
                 if row is None or row[0] is None:
                     continue
                 self._emit(
@@ -927,6 +992,22 @@ class MetricsDaemon(threading.Thread):
                     metric="job_state_count",
                     value=float(row[0]),
                 )
+
+            if self.targets.evidence_queries and (
+                time.monotonic() - self._evidence_polled_at
+                >= self.targets.evidence_query_every_s
+            ):
+                self._evidence_polled_at = time.monotonic()
+                for name, evidence_sql in self.targets.evidence_queries.items():
+                    row = self._bounded_tick_query(conn, cur, evidence_sql)
+                    if row is None or row[0] is None:
+                        continue
+                    self._emit(
+                        subject_kind="evidence",
+                        subject=name,
+                        metric="evidence_value",
+                        value=float(row[0]),
+                    )
 
             rows = self._tick_query(conn, cur, _ACTIVE_XACT_SQL, fetchall=True) or []
             self._emit(

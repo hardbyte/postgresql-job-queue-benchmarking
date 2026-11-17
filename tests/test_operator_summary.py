@@ -70,3 +70,35 @@ def test_pause_counts_restarted_process_and_resume_timings():
     assert out["resume"]["first_start_ms"] == 150
     assert out["resume"]["baseline_rate"] == 200
     assert out["resume"]["recovery_s"] == 2.0
+
+
+def test_lane_release_needs_the_pin_to_stay_clear():
+    from bench_harness.writers import _lane_release_summary
+
+    phases = [
+        parse_phase_spec("pinned=clean:60s"),
+        parse_phase_spec("release=operator(op=lane_cancel):60s"),
+        parse_phase_spec("after=clean:60s"),
+    ]
+
+    def row(t, metric, value, label, kind="adapter"):
+        return {"system": "awa", "elapsed_s": t, "phase_label": label,
+                "metric": metric, "value": value, "subject_kind": kind, "subject": ""}
+
+    rows = [row(60, "phase_start_elapsed_s", 60, "release", kind="phase")]
+    # A pinned ring that steps once and reads 0 for one sample, then re-pins.
+    for t, age, gen in [(30, 30, 5), (70, 70, 5), (90, 0, 6), (100, 100, 6), (170, 170, 6)]:
+        label = "pinned" if t < 60 else ("release" if t < 120 else "after")
+        rows += [row(t, "prune_pinned_ready_age_max_s", age, label),
+                 row(t, "ring_generation_queue", gen, label)]
+    pinned = _lane_release_summary(rows, system="awa", phases=phases)
+    assert pinned["pin_released_s"] is None
+    assert pinned["generation_change_by_end"] == 1
+
+    for t, gen in [(175, 7), (180, 12)]:
+        rows += [row(t, "prune_pinned_ready_age_max_s", 0, "after"),
+                 row(t, "ring_generation_queue", gen, "after")]
+    released = _lane_release_summary(rows, system="awa", phases=phases)
+    assert released["pin_released_s"] == 115
+    assert released["generation_advanced_s"] == 115
+    assert released["generation_change_by_end"] == 7

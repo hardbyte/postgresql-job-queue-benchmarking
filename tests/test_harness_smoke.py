@@ -1449,6 +1449,8 @@ def test_phase_rate_overrides():
     # 1000 jobs over 10s split across 2 replicas → 50 jobs/s per replica.
     assert parse_phase_spec("p=preload(jobs=1000):10s").rate_override(replicas=2) == 50.0
     assert parse_phase_spec("p=operator(op=probe,rate=2):10s").rate_override() is None
+    assert parse_phase_spec("k=pg-backend-kill(rate=1):10s").rate_override() is None
+    assert parse_phase_spec("n=neighbour-oltp(load=1,rate=300):10s").rate_override() is None
     with pytest.raises(ValueError, match="jobs"):
         parse_phase_spec("p=preload:10s").rate_override()
     with pytest.raises(ValueError, match="rate"):

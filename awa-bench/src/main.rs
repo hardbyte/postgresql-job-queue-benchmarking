@@ -16,6 +16,7 @@
 //! `QueueStorage::install` + `QueueStorage::reset` to ensure a clean slot set
 //! before measuring.
 
+mod callbacks;
 mod diagnostics;
 mod long_horizon;
 mod operator;
@@ -139,6 +140,7 @@ fn install_metrics() -> SdkMeterProvider {
         );
     }
     let provider = builder.build();
+    diagnostics::register_provider(&provider);
     global::set_meter_provider(provider.clone());
     provider
 }
@@ -621,9 +623,19 @@ async fn main() {
                 .expect("valid tracing directive"),
         );
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_writer(std::io::stderr)
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::Layer;
+    let log_counter = diagnostics::soak_diagnostics_enabled().then(|| {
+        diagnostics::LogCounter.with_filter(tracing_subscriber::filter::LevelFilter::WARN)
+    });
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_filter(env_filter),
+        )
+        .with(log_counter)
         .init();
     let _meter_provider = install_metrics();
 

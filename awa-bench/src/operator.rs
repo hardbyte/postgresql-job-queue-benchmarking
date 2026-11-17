@@ -6,12 +6,25 @@
 //! op it saw; instance 0 performs each op on its own small pool and merges
 //! the outcome into `OPERATOR_RESULT_FILE`.
 //!
+//! The lane ops (`lane_cancel`, `lane_move`, `lane_reprioritise`) act on the
+//! haystack this process enqueued, which pins awa's queue ring while no
+//! worker claims it: `admin::bulk_cancel` on its ids, or a batch operation
+//! (`MoveQueue` to a consumed queue, `SetPriority`) over its queue, waited on
+//! until the maintenance leader finishes it. Moved jobs reach the bench
+//! worker, which completes them and counts them (`haystack_completed_total`).
+//!
 //! The probes use awa's public admin API. The default build targets 0.6
 //! (`get_job`, `list_jobs`, `queue_overview`); the `awa07` feature targets
 //! 0.7 (`get_job`, `find_jobs`, `queue_overview`, and the tag-index build after
 //! the haystack).
 
-use awa_model::{admin, insert_many_copy_from_pool, AwaError, InsertOpts, InsertParams, JobRow};
+use awa_model::batch_operations::{
+    get_batch_operation, submit_batch_operation, BatchOperationFilter, BatchOperationSpec,
+    BatchOperationState, SubmitBatchOperation,
+};
+use awa_model::{
+    admin, insert_many_copy_from_pool, AwaError, InsertOpts, InsertParams, JobRow, JobState,
+};
 use serde_json::{json, Map, Value};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -96,6 +109,8 @@ struct Haystack {
     alt_every: i64,
     /// Uniform sample of `(job id, seq)`.
     pairs: Vec<(i64, i64)>,
+    /// Every id, for `lane_cancel`.
+    ids: Vec<i64>,
 }
 
 impl Haystack {
@@ -104,6 +119,9 @@ impl Haystack {
     }
 
     fn alt_matches(&self) -> i64 {
+        if self.alt_every == 0 {
+            return 0;
+        }
         (self.jobs + self.alt_every - 1) / self.alt_every
     }
 }
@@ -240,6 +258,21 @@ impl Operator {
             "probe" => self.probe(&command.args).await,
             "pause" => self.pause_or_resume(&command.args, true).await,
             "resume" => self.pause_or_resume(&command.args, false).await,
+            "lane_cancel" => self.lane_cancel(&command.args).await,
+            "lane_move" => {
+                let to =
+                    arg_str(&command.args, "to").unwrap_or_else(|| self.bench_queues[0].clone());
+                let spec = BatchOperationSpec::MoveQueue {
+                    queue: to,
+                    priority: None,
+                };
+                self.lane_batch(&command.args, spec).await
+            }
+            "lane_reprioritise" => {
+                let priority = arg_i64(&command.args, "priority", 3) as i16;
+                self.lane_batch(&command.args, BatchOperationSpec::SetPriority { priority })
+                    .await
+            }
             other => Err(format!("unknown op {other:?}")),
         };
         let mut outcome = match result {
@@ -277,7 +310,9 @@ impl Operator {
         let jobs = arg_i64(args, "jobs", 0).max(0);
         let queue = arg_str(args, "queue").unwrap_or_else(|| "haystack".into());
         let tenants = arg_i64(args, "tenants", 1000).max(1);
-        let alt_every = arg_i64(args, "alt_every", 20).max(1);
+        // alt_every=0: every job gets the bench kind, so a lane op can move
+        // the whole haystack onto a consumed queue.
+        let alt_every = arg_i64(args, "alt_every", 20).max(0);
         let pool = self.pool().await?;
 
         // `QueueStorage::enqueue_params_copy` returns only a count, so the
@@ -286,6 +321,7 @@ impl Operator {
         let started = Instant::now();
         let mut rng = Rng::seeded();
         let mut pairs: Vec<(i64, i64)> = Vec::with_capacity(KEPT_PAIRS);
+        let mut ids: Vec<i64> = Vec::with_capacity(jobs as usize);
         let mut offered: usize = 0;
         let mut enqueued: i64 = 0;
         let mut seq = 0;
@@ -299,6 +335,7 @@ impl Operator {
                 .map_err(|err| format!("haystack insert at seq {seq}: {err}"))?;
             enqueued += rows.len() as i64;
             for row in rows {
+                ids.push(row.id);
                 let Some(job_seq) = row.args.get("seq").and_then(Value::as_i64) else {
                     continue;
                 };
@@ -322,6 +359,7 @@ impl Operator {
             tenants,
             alt_every,
             pairs,
+            ids,
         }));
         let mut out = Map::new();
         out.insert("enqueued".into(), json!(enqueued));
@@ -404,6 +442,99 @@ impl Operator {
         Ok(out)
     }
 
+    /// Cancel every job of the haystack through `admin::bulk_cancel`, newest
+    /// first by default (`order=forward` cancels in lane order, which moves
+    /// the lane's claim cursor even without awa #797).
+    async fn lane_cancel(&self, args: &Map<String, Value>) -> Result<Map<String, Value>, String> {
+        let forward = arg_str(args, "order").as_deref() == Some("forward");
+        let haystack = self
+            .haystack
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("no haystack enqueued by this process")?;
+        let pool = self.pool().await?;
+        let started = Instant::now();
+        let mut cancelled = 0_usize;
+        let mut ids = haystack.ids.clone();
+        if !forward {
+            ids.reverse();
+        }
+        for chunk in ids.chunks(HAYSTACK_BATCH as usize) {
+            cancelled += admin::bulk_cancel(pool, chunk)
+                .await
+                .map_err(|err| format!("bulk_cancel: {err}"))?
+                .len();
+        }
+        let mut out = Map::new();
+        out.insert("mode".into(), json!("native"));
+        out.insert("cancelled".into(), json!(cancelled));
+        out.insert("requested".into(), json!(haystack.ids.len()));
+        out.insert("forward".into(), json!(forward));
+        out.insert("api_s".into(), json!(started.elapsed().as_secs_f64()));
+        out.insert("done_ms".into(), json!(now_ms()));
+        Ok(out)
+    }
+
+    /// Submit a batch operation over the haystack queue's available jobs
+    /// and wait for the maintenance leader to finish it.
+    async fn lane_batch(
+        &self,
+        args: &Map<String, Value>,
+        spec: BatchOperationSpec,
+    ) -> Result<Map<String, Value>, String> {
+        let queue = arg_str(args, "queue").unwrap_or_else(|| "haystack".into());
+        let pool = self.pool().await?;
+        let started = Instant::now();
+        let submitted = submit_batch_operation(
+            pool,
+            SubmitBatchOperation {
+                spec,
+                filter: BatchOperationFilter {
+                    queue: Some(queue),
+                    state: Some(JobState::Available),
+                    ..Default::default()
+                },
+                submitted_by: Some(PAUSED_BY.into()),
+                allow_all: false,
+            },
+        )
+        .await
+        .map_err(|err| format!("submit_batch_operation: {err}"))?;
+        let submit_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let operation = loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let operation = get_batch_operation(pool, submitted.id)
+                .await
+                .map_err(|err| format!("get_batch_operation: {err}"))?;
+            if matches!(
+                operation.state,
+                BatchOperationState::Completed
+                    | BatchOperationState::Cancelled
+                    | BatchOperationState::Failed
+            ) {
+                break operation;
+            }
+        };
+        let mut out = Map::new();
+        out.insert("mode".into(), json!("native"));
+        out.insert(
+            "completed".into(),
+            json!(operation.state == BatchOperationState::Completed),
+        );
+        out.insert("matched".into(), json!(operation.total_matched));
+        out.insert("processed".into(), json!(operation.processed));
+        out.insert("skipped".into(), json!(operation.skipped));
+        out.insert("errored".into(), json!(operation.errored));
+        out.insert("submit_ms".into(), json!(submit_ms));
+        out.insert("api_s".into(), json!(started.elapsed().as_secs_f64()));
+        out.insert("done_ms".into(), json!(now_ms()));
+        if let Some(error) = operation.last_error {
+            out.insert("error".into(), json!(error));
+        }
+        Ok(out)
+    }
+
     async fn pause_or_resume(
         &self,
         args: &Map<String, Value>,
@@ -435,7 +566,7 @@ impl Operator {
 
 fn haystack_params(seq: i64, queue: &str, tenants: i64, alt_every: i64) -> InsertParams {
     InsertParams {
-        kind: if seq % alt_every == 0 {
+        kind: if alt_every > 0 && seq % alt_every == 0 {
             ALT_KIND
         } else {
             PRIMARY_KIND

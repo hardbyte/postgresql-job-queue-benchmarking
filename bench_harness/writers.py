@@ -9,7 +9,6 @@ import csv
 import json
 import os
 import platform
-import shutil
 import statistics
 import subprocess
 import sys
@@ -628,6 +627,14 @@ def compute_summary(
                 phase_label=phase_label,
                 metric="pg_db_xacts_total",
             )
+            callback_polls = _cluster_counter_rate(
+                rows,
+                system=system,
+                phase_label=phase_label,
+                metric="pg_stmt_callback_poll_calls_total",
+            )
+            if callback_polls is not None:
+                phase_block["pg_stmt_callback_poll_calls_per_s"] = callback_polls
             phase_block.update(
                 _resource_phase_metrics(
                     rows, system=system, phase_label=phase_label
@@ -675,6 +682,9 @@ def compute_summary(
         operator = _operator_summary(rows, system=system, phases=phases)
         if operator is not None:
             system_block["operator"] = operator
+        lane_release = _lane_release_summary(rows, system=system, phases=phases)
+        if lane_release is not None:
+            system_block["lane_release"] = lane_release
         abandon = _abandon_summary(rows, system=system, phases=phases)
         if abandon is not None:
             system_block["abandon"] = abandon
@@ -686,6 +696,12 @@ def compute_summary(
                 run_block["completion_excess"] += rescued
         if run_block:
             system_block["run"] = run_block
+        evidence = _evidence_summary(rows, system=system)
+        if evidence:
+            system_block["evidence"] = evidence
+        soak = _soak_summary(rows, system=system)
+        if soak:
+            system_block["soak"] = soak
     _add_neighbour_baseline_ratios(out_systems, phases)
 
     return {
@@ -1436,6 +1452,180 @@ def _run_totals(rows: list[dict], *, system: str, phases: list[Phase]) -> dict:
                 None,
             )
     return out
+
+
+LANE_RELEASE_OPS = ("lane_cancel", "lane_move", "lane_reprioritise")
+
+
+def _lane_release_summary(
+    rows: list[dict], *, system: str, phases: list[Phase]
+) -> dict | None:
+    """awa queue-ring release after an op on the lane pinning it (awa #779).
+
+    Timed from the start of the first `operator(op=lane_*)` phase, from
+    awa-bench's maintenance samples (the leader's, max over replicas):
+    `pinned_age_at_op_s` is the pinned lane's age just before the op and
+    `generation_change_60s_before_op` how far the queue ring generation moved
+    in the minute before it (0 = the ring had stopped). `op_s` is how long the
+    op itself took (issue to done; a bulk cancel or batch operation can run
+    for minutes). `pin_released_s` is when the pinned age last went to 0
+    and stayed there to the end of the run (None if the run ended pinned),
+    and `generation_advanced_s` and `prune_resumed_s` are when the queue ring
+    generation next moved and queue prune next reported `pruned` from then
+    on (from the op when the pin never cleared); a pinned ring still steps
+    now and then, so firsts timed from the op alone read as a release.
+    `generation_change_by_end` is how far the generation moved from the op to
+    the end of the run.
+    """
+    release = next(
+        (
+            p
+            for p in phases
+            if p.type is PhaseType.OPERATOR and p.param("op") in LANE_RELEASE_OPS
+        ),
+        None,
+    )
+    if release is None:
+        return None
+    t0 = _phase_start_elapsed(rows, system=system, phase_label=release.label)
+    if t0 is None:
+        return None
+    labels = [p.label for p in phases]
+
+    def series(metric: str) -> list[tuple[float, float]]:
+        return _timeline(
+            rows, system=system, phase_labels=labels, metric=metric, subject_kind="adapter"
+        )
+
+    def last_before(points: list[tuple[float, float]], t: float) -> float | None:
+        before = [v for at, v in points if at < t]
+        return before[-1] if before else None
+
+    def first_after(
+        points: list[tuple[float, float]], test, start: float
+    ) -> float | None:
+        return next((at - t0 for at, v in points if at >= start and test(v)), None)
+
+    def cleared_for_good(points: list[tuple[float, float]]) -> float | None:
+        after = [(at, v) for at, v in points if at >= t0]
+        if not after or after[-1][1] > 0:
+            return None
+        cleared = after[-1][0]
+        for at, v in reversed(after):
+            if v > 0:
+                break
+            cleared = at
+        return cleared
+
+    pinned = series("prune_pinned_ready_age_max_s")
+    generation = series("ring_generation_queue")
+    pruned = series("maint_prune_queue_pruned_total")
+    generation_at_op = last_before(generation, t0)
+    generation_minute_before = last_before(generation, t0 - 60)
+    released = cleared_for_good(pinned)
+    since = released if released is not None else t0
+    generation_from = last_before(generation, since) if released is not None else generation_at_op
+    op_fields: dict[str, float] = {}
+    for row in rows:
+        if (
+            row["system"] == system
+            and row.get("subject_kind") == "operator"
+            and row.get("subject") == release.label
+        ):
+            try:
+                op_fields[row["metric"]] = float(row["value"])
+            except (TypeError, ValueError):
+                continue
+    op_s = (
+        (op_fields["op_done_ms"] - op_fields["op_issued_ms"]) / 1000.0
+        if "op_done_ms" in op_fields and "op_issued_ms" in op_fields
+        else None
+    )
+    return {
+        "op": release.param("op"),
+        "op_s": op_s,
+        "pinned_age_at_op_s": last_before(pinned, t0),
+        "generation_change_60s_before_op": (
+            generation_at_op - generation_minute_before
+            if generation_at_op is not None and generation_minute_before is not None
+            else None
+        ),
+        "pin_released_s": released - t0 if released is not None else None,
+        "generation_advanced_s": (
+            first_after(generation, lambda v: v > generation_from, since)
+            if generation_from is not None
+            else None
+        ),
+        "prune_resumed_s": first_after(
+            pruned, lambda v: v > (last_before(pruned, since) or 0.0), since
+        ),
+        "generation_change_by_end": (
+            generation[-1][1] - generation_at_op
+            if generation and generation_at_op is not None
+            else None
+        ),
+    }
+
+
+def _evidence_summary(rows: list[dict], *, system: str) -> dict[str, dict]:
+    """Integrity checks polled with BENCH_EVIDENCE_QUERIES: the last and the
+    peak value of each over the run. Peak matters because ring prune drops
+    the rows a count is built from."""
+    series: dict[str, list[tuple[float, float]]] = {}
+    for row in rows:
+        if row["system"] != system or row.get("subject_kind") != "evidence":
+            continue
+        try:
+            series.setdefault(row["subject"], []).append(
+                (float(row["elapsed_s"]), float(row["value"]))
+            )
+        except (TypeError, ValueError):
+            continue
+    return {
+        name: {"last": sorted(points)[-1][1], "peak": max(v for _, v in points)}
+        for name, points in sorted(series.items())
+    }
+
+
+# awa-bench AWA_SOAK_DIAGNOSTICS / callback-mode metrics reported in the
+# summary's `soak` block as each replica's last value of the run.
+SOAK_LAST_PREFIXES = (
+    "callback_",
+    "duplicate_",
+    "haystack_",
+    "finalize_",
+    "handler_returns_total",
+    "pool_timeout_log_total",
+    "awa_jobs_",
+    "awa_rescues_",
+    "awa_finalize_deadlock_retries_total",
+    "completion_flush_max_ms",
+    "claim_query_max_ms",
+)
+
+
+def _soak_summary(rows: list[dict], *, system: str) -> dict[str, dict[str, float]]:
+    latest: dict[str, dict[str, tuple[float, float]]] = {}
+    for row in rows:
+        if (
+            row["system"] != system
+            or row.get("subject_kind") != "adapter"
+            or not row["metric"].startswith(SOAK_LAST_PREFIXES)
+        ):
+            continue
+        try:
+            elapsed_s = float(row["elapsed_s"])
+            value = float(row["value"])
+        except (TypeError, ValueError):
+            continue
+        per_instance = latest.setdefault(row["metric"], {})
+        instance_id = str(row.get("instance_id") or "0")
+        if instance_id not in per_instance or elapsed_s >= per_instance[instance_id][0]:
+            per_instance[instance_id] = (elapsed_s, value)
+    return {
+        metric: {instance: value for instance, (_, value) in sorted(values.items())}
+        for metric, values in sorted(latest.items())
+    }
 
 
 def _last_adapter_values(
