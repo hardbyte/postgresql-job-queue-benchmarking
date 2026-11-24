@@ -206,8 +206,24 @@ cell_rolling_upgrade() {
       --phase "after=clean:$(dur 2m 20s)" )
 }
 
+# Producers that enqueue in the application's own REPEATABLE READ, then
+# SERIALIZABLE, transactions (#847), from two replicas contending on the same
+# lanes while the queue ring rotates every 200 ms. On 0.6.18 a batch whose
+# snapshot predated a rotation could land behind its lane's claim cursor and
+# be pruned unclaimed; after the drain every enqueued job must have completed.
+# Serialization failures are retried by awa-bench, as an application would.
+cell_isolation_producers() {
+  local level
+  for level in repeatable_read serializable; do
+    ( export AWA_PRODUCER_ISOLATION="$level" QUEUE_ROTATE_MS=200
+      run_cell isolation "producers_${level}" --replicas 2 --producer-rate 800 --worker-count 32 \
+        --phase "warmup=warmup:$(dur 30s 15s)" --phase "load=clean:$(dur 10m 2m)" \
+        --phase "drain=idle-background(rate=0):$(dur 3m 60s)" )
+  done
+}
+
 cells=("$@")
-[[ ${#cells[@]} -eq 0 ]] && cells=(retry_small_pool retry_high brownout idle200_resume callback_1000 pinned_lane_release mixed_fleet rolling_upgrade)
+[[ ${#cells[@]} -eq 0 ]] && cells=(retry_small_pool retry_high brownout idle200_resume callback_1000 pinned_lane_release isolation_producers mixed_fleet rolling_upgrade)
 for cell in "${cells[@]}"; do
   log "==== ${cell} ===="
   "cell_${cell}"
