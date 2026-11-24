@@ -6,6 +6,9 @@
 #
 #   ARMS="v0618=3903ea9c rc=c927b2c7" bash scripts/run_awa_release_ab.sh [cell ...]
 #
+# With one arm, only that arm runs; the report can then compare it with an
+# earlier run's baseline (awa_release_report.py --baseline-index).
+#
 # Each arm gets its own worktree of this checkout under ARM_ROOT (default
 # ../awa-release-arms), with awa-bench pinned to that awa revision, so each
 # arm has its own compose project and Postgres container. Cells: sat_w64,
@@ -20,8 +23,8 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-read -r -a arms <<< "${ARMS:?set ARMS to two name=awa-revision pairs}"
-[[ ${#arms[@]} -eq 2 ]] || { echo "ARMS needs exactly two name=revision pairs" >&2; exit 2; }
+read -r -a arms <<< "${ARMS:?set ARMS to one or two name=awa-revision pairs}"
+[[ ${#arms[@]} -ge 1 && ${#arms[@]} -le 2 ]] || { echo "ARMS needs one or two name=revision pairs" >&2; exit 2; }
 ARM_ROOT="${ARM_ROOT:-$(dirname "$ROOT")/awa-release-arms}"
 RESULTS_ROOT="${RESULTS_ROOT:-$ROOT/results/$(date -u +%Y-%m-%d)-awa-release-ab}"
 ROUNDS="${ROUNDS:-2}"
@@ -144,9 +147,10 @@ run_cell() {
 }
 
 for arm in "${arms[@]}"; do prepare_arm "$arm"; done
-a="${arms[0]}"; b="${arms[1]}"
+a="${arms[0]}"; b="${arms[1]:-}"
 for ((r = 1; r <= ROUNDS; r++)); do
-  if (( r % 2 == 1 )); then order=("$a" "$b"); else order=("$b" "$a"); fi
+  if [[ -z "$b" ]]; then order=("$a")
+  elif (( r % 2 == 1 )); then order=("$a" "$b"); else order=("$b" "$a"); fi
   for arm in "${order[@]}"; do
     for cell in "${cells[@]}"; do run_cell "$arm" "$r" "$cell"; done
   done
