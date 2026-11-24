@@ -455,6 +455,57 @@ fn instance_id() -> u32 {
     env_u32("BENCH_INSTANCE_ID", 0)
 }
 
+/// `AWA_PRODUCER_ISOLATION=repeatable_read|serializable`: enqueue each batch
+/// in the application's own transaction at that isolation level, through
+/// `insert_many`, as a service enqueueing alongside its own writes would.
+/// Unset, the producer uses awa's own enqueue paths, which run at READ
+/// COMMITTED. Applies to queue storage only.
+fn producer_isolation() -> Option<&'static str> {
+    match std::env::var("AWA_PRODUCER_ISOLATION").ok()?.as_str() {
+        "" | "read_committed" => None,
+        "repeatable_read" => Some("REPEATABLE READ"),
+        "serializable" => Some("SERIALIZABLE"),
+        other => panic!(
+            "AWA_PRODUCER_ISOLATION must be read_committed, repeatable_read or serializable; got {other}"
+        ),
+    }
+}
+
+/// Insert `params` in one transaction at `level`. A serialization failure
+/// (SQLSTATE 40001) rolls the whole batch back, so it is retried from the
+/// start, a few times, as an application would.
+async fn insert_in_application_transaction(
+    pool: &sqlx::PgPool,
+    level: &str,
+    params: &[InsertParams],
+) -> Result<usize, awa_model::AwaError> {
+    const ATTEMPTS: u32 = 5;
+    let mut attempt = 1;
+    loop {
+        let result: Result<usize, awa_model::AwaError> = async {
+            let mut tx = pool.begin().await.map_err(awa_model::AwaError::from)?;
+            sqlx::query(&format!("SET TRANSACTION ISOLATION LEVEL {level}"))
+                .execute(&mut *tx)
+                .await
+                .map_err(awa_model::AwaError::from)?;
+            let inserted = awa_model::insert_many(&mut *tx, params).await?.len();
+            tx.commit().await.map_err(awa_model::AwaError::from)?;
+            Ok(inserted)
+        }
+        .await;
+        match result {
+            Err(awa_model::AwaError::Database(ref err))
+                if attempt < ATTEMPTS
+                    && err.as_database_error().and_then(|db| db.code()).as_deref()
+                        == Some("40001") =>
+            {
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
 fn producer_enabled() -> bool {
     // Only instance 0 observes queue depth, so in depth-target mode it is
     // the only replica that can produce against the target.
@@ -696,6 +747,7 @@ pub async fn run() {
     let latency_window = Duration::from_millis(env_u64("LATENCY_WINDOW_MS", 30_000).max(1));
     let producer_batch_ms = env_u64("PRODUCER_BATCH_MS", 25).max(1);
     let producer_batch_max = env_u64("PRODUCER_BATCH_MAX", 128).max(1) as usize;
+    let producer_isolation = producer_isolation();
     let queue_claimers = env_u16("AWA_QUEUE_CLAIMERS", 1).max(1);
     let claim_batch_size = env_u64("AWA_CLAIM_BATCH_SIZE", 512).max(1) as usize;
     // Per-replica connection pool. Sized to cover the steady-state
@@ -1140,9 +1192,17 @@ pub async fn run() {
                     // multi-row INSERT path. Set
                     // AWA_QS_PRODUCER_PATH=batch to A/B back to the
                     // old path for diagnostic comparison.
-                    match std::env::var("AWA_QS_PRODUCER_PATH").as_deref() {
-                        Ok("batch") => store.enqueue_params_batch(&producer_pool, &params).await,
-                        _ => store.enqueue_params_copy(&producer_pool, &params).await,
+                    match (
+                        producer_isolation,
+                        std::env::var("AWA_QS_PRODUCER_PATH").as_deref(),
+                    ) {
+                        (Some(level), _) => {
+                            insert_in_application_transaction(&producer_pool, level, &params).await
+                        }
+                        (None, Ok("batch")) => {
+                            store.enqueue_params_batch(&producer_pool, &params).await
+                        }
+                        (None, _) => store.enqueue_params_copy(&producer_pool, &params).await,
                     }
                 }
                 super::StorageEngineMode::Canonical => {
@@ -1580,6 +1640,21 @@ pub async fn run() {
                     "subject": "",
                     "metric": "enqueue_rate",
                     "value": enq_rate,
+                    "window_s": sample_every_s as f64,
+                }));
+                // Cumulative, so a run can compare every job this instance
+                // enqueued with the fleet's awa_jobs_completed_total after
+                // a drain: a job pruned unclaimed leaves the queue empty
+                // too, and only the totals show it.
+                emit(json!({
+                    "t": ts,
+                    "system": system_name,
+                    "instance_id": instance_id(),
+                    "kind": "adapter",
+                    "subject_kind": "adapter",
+                    "subject": "",
+                    "metric": "jobs_enqueued_total",
+                    "value": enq,
                     "window_s": sample_every_s as f64,
                 }));
             }

@@ -26,8 +26,16 @@ soak off another harness's Postgres.
 | `idle200_resume` | 200 queues on one weighted pool of 16 workers and 24 connections: load, ten minutes idle, load again. Ring generations and prune/rotate outcomes show rotation resuming after the idle. |
 | `callback_1000` | 1,000 handlers parked in `wait_for_callback` during `settle`, all resolved early in `resolve`, with `pg_stat_statements` on. |
 | `pinned_lane_release_{cancel,move,reprioritise}` | awa #779: a 200,000-job haystack (`LANE_JOBS`) in a queue nobody serves pins the queue ring during `pinned`; `release` then cancels the jobs, moves them onto the bench queue or reprioritises them. `systems.awa.lane_release` in `summary.json` has the pinned age and ring movement before the op and the seconds until the pin cleared, the ring generation moved and queue prune next pruned; `systems.awa.operator.release` has the op's counts. `LANE_OPS` picks the ops and `LANE_AFTER` (`5m`) the watch after the op; a lane cancelled newest first is released by maintenance a few thousand rows per prune attempt, so 200,000 jobs need longer. Release needs awa #797; without it the ring should stay pinned. See [operator scenarios](operator-scenarios.md). |
+| `producers_repeatable_read`, `producers_serializable` (`isolation_producers`) | awa #847: two replicas each enqueue 800 jobs/s in the application's own `REPEATABLE READ`, then `SERIALIZABLE`, transactions (`AWA_PRODUCER_ISOLATION`), contending on the same lanes while the queue ring rotates every 200 ms (`QUEUE_ROTATE_MS=200`), then drain. Before 0.6.19 such a batch could land behind its lane's claim cursor and be pruned unclaimed. After the drain the script logs `ACCOUNTING <cell>: enqueued=… completed=… missing=…` from each replica's last `jobs_enqueued_total` and `awa_jobs_completed_total`; `missing` must be 0; otherwise the cell goes into `failures.tsv` in the results directory and the script exits 1 at the end. |
 | `mixed_fleet` | Replica 0 on an older build, replica 1 on the candidate, with maintenance leadership moved between them. |
 | `rolling_upgrade` | Both replicas start on the older build (`MIXED_OLD_BINARY`), so the schema starts at its version. Each is then stopped gracefully and restarted on the candidate, which applies the newer migrations and patches while the other replica still runs the older build. |
+
+`AWA_PRODUCER_ISOLATION=repeatable_read|serializable` works in any awa run on
+queue storage: awa-bench then enqueues each batch with `insert_many` in its own
+transaction at that level, which goes through `awa.insert_jobs_compat_batch`,
+and retries a batch that fails with a serialization error (SQLSTATE 40001) up
+to five times. Unset, it uses awa's own enqueue paths, which run at
+`READ COMMITTED`.
 
 `RETRY_RATE`, `RETRY_FAILURES`, `RETRY_ALIGN_MS` and `RETRY_MAX_ATTEMPTS`
 change the retry cells. `FINALIZE_GATE_AB=1` adds
@@ -50,7 +58,7 @@ counters, the pool-timeout counters and the `heartbeat_age_max_s` evidence.
 `AWA_BENCH_BINARY_<instance>` (an absolute path) makes the harness launch that
 awa-bench build for replica `<instance>` instead of this checkout's. Build the
 older side from a checkout of this repository pinned to the older awa (main
-pins 0.6.17), so both replicas speak the same adapter protocol:
+pins release/0.6.6 at the 0.6.19 candidate), so both replicas speak the same adapter protocol:
 
 ```sh
 git worktree add --detach ../soak-0617 HEAD   # awa-bench pinned at 0.6.17

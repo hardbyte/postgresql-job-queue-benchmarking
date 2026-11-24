@@ -206,10 +206,65 @@ cell_rolling_upgrade() {
       --phase "after=clean:$(dur 2m 20s)" )
 }
 
+# Producers that enqueue in the application's own REPEATABLE READ, then
+# SERIALIZABLE, transactions (#847), from two replicas contending on the same
+# lanes while the queue ring rotates every 200 ms. On 0.6.18 a batch whose
+# snapshot predated a rotation could land behind its lane's claim cursor and
+# be pruned unclaimed; after the drain every enqueued job must have completed.
+# Serialization failures are retried by awa-bench, as an application would.
+cell_isolation_producers() {
+  local level
+  for level in repeatable_read serializable; do
+    ( export AWA_PRODUCER_ISOLATION="$level" QUEUE_ROTATE_MS=200
+      run_cell isolation "producers_${level}" --replicas 2 --producer-rate 800 --worker-count 32 \
+        --phase "warmup=warmup:$(dur 30s 15s)" --phase "load=clean:$(dur 10m 2m)" \
+        --phase "drain=idle-background(rate=0):$(dur 3m 60s)"
+      check_accounting "producers_${level}" )
+  done
+}
+
+# Every job the fleet enqueued completed: the last jobs_enqueued_total and
+# awa_jobs_completed_total of each instance, summed over instances, match. A
+# mismatch, or a run with no counters to compare, is recorded in failures.tsv
+# and fails the soak at the end.
+check_accounting() {
+  local cell_id="$1" run_dir result rc
+  run_dir=$(grep -oE 'results/custom-[0-9TZ]+-[a-f0-9]+' "$RESULTS_ROOT/logs/${cell_id}.log" | head -1)
+  if [[ -z "$run_dir" || ! -f "$run_dir/raw.csv" ]]; then
+    result="no raw.csv"; rc=1
+  else
+    result=$(python3 - "$run_dir/raw.csv" <<'PY'
+import csv, sys
+last = {}
+for row in csv.DictReader(open(sys.argv[1])):
+    if row["metric"] in ("jobs_enqueued_total", "awa_jobs_completed_total"):
+        last[(row["metric"], row["instance_id"])] = float(row["value"])
+enqueued = sum(v for (m, _), v in last.items() if m == "jobs_enqueued_total")
+completed = sum(v for (m, _), v in last.items() if m == "awa_jobs_completed_total")
+ok = enqueued > 0 and enqueued == completed
+print(f"enqueued={enqueued:.0f} completed={completed:.0f} missing={enqueued - completed:.0f} "
+      f"{'ok' if ok else 'MISMATCH'}")
+sys.exit(0 if ok else 1)
+PY
+)
+    rc=$?
+  fi
+  log "ACCOUNTING ${cell_id}: ${result}"
+  if [[ $rc -ne 0 ]]; then
+    echo -e "${cell_id}\taccounting\t${result}" >> "$RESULTS_ROOT/failures.tsv"
+  fi
+  return $rc
+}
+
 cells=("$@")
-[[ ${#cells[@]} -eq 0 ]] && cells=(retry_small_pool retry_high brownout idle200_resume callback_1000 pinned_lane_release mixed_fleet rolling_upgrade)
+[[ ${#cells[@]} -eq 0 ]] && cells=(retry_small_pool retry_high brownout idle200_resume callback_1000 pinned_lane_release isolation_producers mixed_fleet rolling_upgrade)
 for cell in "${cells[@]}"; do
   log "==== ${cell} ===="
   "cell_${cell}"
 done
+if [[ -s "$RESULTS_ROOT/failures.tsv" ]]; then
+  log "soak FAILED: $RESULTS_ROOT/failures.tsv"
+  cat "$RESULTS_ROOT/failures.tsv" | tee -a "$MASTER_LOG"
+  exit 1
+fi
 log "soak complete: $RESULTS_ROOT"
