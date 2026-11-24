@@ -64,6 +64,9 @@ prepare_arm() {
   if [[ ! -d "$dir" ]]; then
     mkdir -p "$ARM_ROOT"
     git worktree add -q --detach "$dir" HEAD
+  else
+    git -C "$dir" checkout -q -- awa-bench/Cargo.toml awa-bench/Cargo.lock
+    git -C "$dir" checkout -q --detach "$(git rev-parse HEAD)"
   fi
   (
     cd "$dir/awa-bench"
