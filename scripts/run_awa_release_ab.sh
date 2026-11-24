@@ -15,8 +15,8 @@
 # in ab_index.tsv are skipped, so the script resumes.
 #
 # AWA_BENCH_FEATURES_<arm> sets an arm's awa-bench features (for example
-# AWA_BENCH_FEATURES_rc=finalize_gate). Other AWA_ and BENCH_ settings reach
-# every cell.
+# AWA_BENCH_FEATURES_rc=finalize_gate). BENCH_PG_PORT (default 15561) is the
+# Postgres port. Other AWA_ and BENCH_ settings reach every cell.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -29,6 +29,8 @@ cells=("$@")
 [[ ${#cells[@]} -eq 0 ]] && cells=(sat_w64 sat_tuned_k4 ref800 idle fanout_q200)
 [[ "${IDLE_MEMORY:-0}" == 1 ]] && cells+=(idle30)
 AWA_GIT="${AWA_GIT:-https://github.com/hardbyte/awa}"
+# Its own Postgres port, so a run doesn't collide with another harness on 15555.
+export BENCH_PG_PORT="${BENCH_PG_PORT:-15561}"
 mkdir -p "$RESULTS_ROOT/logs"
 INDEX="$RESULTS_ROOT/ab_index.tsv"
 [[ -f "$INDEX" ]] || echo -e "arm\tround\tcell\trun_dir\texit_code\tstarted_at\tended_at\tawa_rev" > "$INDEX"
