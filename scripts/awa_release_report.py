@@ -1,9 +1,13 @@
 """Per-cell tables and release bounds for a run of scripts/run_awa_release_ab.sh.
 
     python3 scripts/awa_release_report.py RESULTS_ROOT [--baseline ARM]
+        [--baseline-index EARLIER_ROOT/ab_index.tsv]
 
 The baseline arm (default: the arm listed first in ab_index.tsv) is compared
-with the other arm, cell by cell, on the median over rounds. Bounds:
+with the other arm, cell by cell, on the median over rounds. With
+--baseline-index, the baseline arm's rows come from an earlier run's index (a
+run on the same host), so a candidate-only run can be judged against it.
+Bounds:
 
 - throughput in the saturation cells no more than 5% below the baseline;
 - claim p99 no more than 15% (plus 5 ms) above the baseline in every cell
@@ -125,16 +129,31 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("results_root")
     parser.add_argument("--baseline")
+    parser.add_argument("--baseline-index")
     args = parser.parse_args()
     root = Path(args.results_root)
-    rows = [r for r in csv.DictReader((root / "ab_index.tsv").open(), delimiter="\t") if r["exit_code"] == "0"]
+
+    def read_index(path: Path) -> list[dict]:
+        rows = [r for r in csv.DictReader(path.open(), delimiter="\t") if r["exit_code"] == "0"]
+        for r in rows:
+            r["_root"] = str(path.parent)
+        return rows
+
+    rows = read_index(root / "ab_index.tsv")
+    if args.baseline_index:
+        if not args.baseline:
+            print("--baseline-index needs --baseline ARM", file=sys.stderr)
+            return 2
+        rows = [r for r in rows if r["arm"] != args.baseline] + [
+            r for r in read_index(Path(args.baseline_index)) if r["arm"] == args.baseline
+        ]
     arms = list(dict.fromkeys(r["arm"] for r in rows))
     if len(arms) != 2:
         print(f"expected two arms, found {arms}", file=sys.stderr)
         return 2
     base = args.baseline or arms[0]
     cand = next(a for a in arms if a != base)
-    revs = {r["arm"]: r.get("awa_rev", "")[:10] for r in rows}
+    revs = {r["arm"]: (r.get("awa_rev") or "")[:10] for r in rows}
     out = [f"# awa release A/B: {cand} ({revs[cand]}) vs {base} ({revs[base]})", ""]
     failures = []
 
@@ -167,7 +186,7 @@ def main() -> int:
             for r in [r for r in rows if r["cell"] == "idle30"]:
                 at = [memory_at(r["run_dir"], m) for m in (1, 6, 15, 25)]
                 totals[r["arm"]].append(at[3])
-                growth, named = pooled_growth(root / f"backends-{r['arm']}-r{r['round']}-idle30.tsv")
+                growth, named = pooled_growth(Path(r["_root"]) / f"backends-{r['arm']}-r{r['round']}-idle30.tsv")
                 g = f"max {fmt(max(growth))}, median {fmt(statistics.median(growth))}" if growth else "not sampled"
                 out.append(f"| {r['arm']} | {r['round']} | {' / '.join(fmt(x) for x in at)} | {g} | {', '.join(f'{k} {fmt(v)}' for k, v in named.items()) or '–'} |")
                 if growth and max(growth) > POOLED_GROWTH_MB and r["arm"] == cand:
