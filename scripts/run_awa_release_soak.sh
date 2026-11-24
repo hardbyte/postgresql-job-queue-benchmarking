@@ -8,7 +8,7 @@
 #   RESULTS_ROOT=results/2026-11-rc0618 bash scripts/run_awa_release_soak.sh [cell...]
 #
 # Cells: retry_small_pool retry_high brownout idle200_resume callback_1000
-# pinned_lane_release mixed_fleet (default: all, in that order), and retry_gate
+# pinned_lane_release mixed_fleet rolling_upgrade (default: all, in that order), and retry_gate
 # (only when named). Cells already recorded in
 # run_index.tsv are skipped, so the script can be re-run to resume.
 #
@@ -186,8 +186,28 @@ cell_mixed_fleet() {
       --phase "after=clean:$(dur 2m 20s)" )
 }
 
+# A rolling deploy under load: both replicas start on the older build (so
+# the schema starts at its version), then each is stopped gracefully and
+# restarted on this checkout's build, which applies the newer migrations and
+# patches while the other replica still runs the older one.
+cell_rolling_upgrade() {
+  if [[ -z "${MIXED_OLD_BINARY:-}" ]]; then
+    log "SKIP rolling_upgrade: set MIXED_OLD_BINARY to an older awa-bench build"
+    return 0
+  fi
+  ( export AWA_BENCH_BINARY_0="$MIXED_OLD_BINARY" AWA_BENCH_BINARY_1="$MIXED_OLD_BINARY" \
+      AWA_BENCH_BINARY_0_RELAUNCH=current AWA_BENCH_BINARY_1_RELAUNCH=current
+    run_cell upgrade rolling_upgrade --replicas 2 --producer-rate 400 --worker-count 32 \
+      --phase "warmup=warmup:$(dur 30s 15s)" --phase "old_fleet=clean:$(dur 3m 40s)" \
+      --phase "stop_1=stop-worker(instance=1):$(dur 20s 10s)" \
+      --phase "upgrade_1=start-worker(instance=1):$(dur 3m 40s)" \
+      --phase "stop_0=stop-worker(instance=0):$(dur 20s 10s)" \
+      --phase "upgrade_0=start-worker(instance=0):$(dur 3m 40s)" \
+      --phase "after=clean:$(dur 2m 20s)" )
+}
+
 cells=("$@")
-[[ ${#cells[@]} -eq 0 ]] && cells=(retry_small_pool retry_high brownout idle200_resume callback_1000 pinned_lane_release mixed_fleet)
+[[ ${#cells[@]} -eq 0 ]] && cells=(retry_small_pool retry_high brownout idle200_resume callback_1000 pinned_lane_release mixed_fleet rolling_upgrade)
 for cell in "${cells[@]}"; do
   log "==== ${cell} ===="
   "cell_${cell}"
