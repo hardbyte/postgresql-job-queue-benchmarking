@@ -218,8 +218,29 @@ cell_isolation_producers() {
     ( export AWA_PRODUCER_ISOLATION="$level" QUEUE_ROTATE_MS=200
       run_cell isolation "producers_${level}" --replicas 2 --producer-rate 800 --worker-count 32 \
         --phase "warmup=warmup:$(dur 30s 15s)" --phase "load=clean:$(dur 10m 2m)" \
-        --phase "drain=idle-background(rate=0):$(dur 3m 60s)" )
+        --phase "drain=idle-background(rate=0):$(dur 3m 60s)"
+      check_accounting "producers_${level}" )
   done
+}
+
+# Every job the fleet enqueued completed: the last jobs_enqueued_total and
+# awa_jobs_completed_total of each instance, summed over instances, match.
+check_accounting() {
+  local cell_id="$1" run_dir
+  run_dir=$(grep -oE 'results/custom-[0-9TZ]+-[a-f0-9]+' "$RESULTS_ROOT/logs/${cell_id}.log" | head -1)
+  [[ -n "$run_dir" && -f "$run_dir/raw.csv" ]] || { log "ACCOUNTING ${cell_id}: no raw.csv"; return 0; }
+  log "ACCOUNTING ${cell_id}: $(python3 - "$run_dir/raw.csv" <<'PY'
+import csv, sys
+last = {}
+for row in csv.DictReader(open(sys.argv[1])):
+    if row["metric"] in ("jobs_enqueued_total", "awa_jobs_completed_total"):
+        last[(row["metric"], row["instance_id"])] = float(row["value"])
+enqueued = sum(v for (m, _), v in last.items() if m == "jobs_enqueued_total")
+completed = sum(v for (m, _), v in last.items() if m == "awa_jobs_completed_total")
+verdict = "ok" if enqueued == completed else "MISMATCH"
+print(f"enqueued={enqueued:.0f} completed={completed:.0f} missing={enqueued - completed:.0f} {verdict}")
+PY
+)"
 }
 
 cells=("$@")

@@ -1642,6 +1642,21 @@ pub async fn run() {
                     "value": enq_rate,
                     "window_s": sample_every_s as f64,
                 }));
+                // Cumulative, so a run can compare every job this instance
+                // enqueued with the fleet's awa_jobs_completed_total after
+                // a drain: a job pruned unclaimed leaves the queue empty
+                // too, and only the totals show it.
+                emit(json!({
+                    "t": ts,
+                    "system": system_name,
+                    "instance_id": instance_id(),
+                    "kind": "adapter",
+                    "subject_kind": "adapter",
+                    "subject": "",
+                    "metric": "jobs_enqueued_total",
+                    "value": enq,
+                    "window_s": sample_every_s as f64,
+                }));
             }
 
             if let Some((p50, p95, p99)) = subscriber_latency {
