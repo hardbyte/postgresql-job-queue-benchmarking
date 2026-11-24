@@ -250,6 +250,20 @@ def enter_kill_worker(runtime: PhaseRuntime) -> None:
     pool.kill_worker(instance)
 
 
+def enter_stop_worker(runtime: PhaseRuntime) -> None:
+    """Graceful stop (SIGTERM, SIGKILL after `timeout`, default 30 s): a
+    rolling deploy takes a replica down this way, where kill-worker is a crash."""
+    pool = runtime.state.get("replica_pool")
+    if pool is None:
+        raise RuntimeError(
+            "stop-worker requires state['replica_pool']. "
+            "The orchestrator sets this in run_one_system; running a "
+            "stop-worker phase outside that context is a misconfiguration."
+        )
+    instance = runtime.phase.int_param("instance", default=0)
+    pool.stop_worker(instance, timeout_s=runtime.phase.float_param("timeout", 30.0))
+
+
 def enter_start_worker(runtime: PhaseRuntime) -> None:
     pool = runtime.state.get("replica_pool")
     if pool is None:

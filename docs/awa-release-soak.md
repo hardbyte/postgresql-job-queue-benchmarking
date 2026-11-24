@@ -27,6 +27,7 @@ soak off another harness's Postgres.
 | `callback_1000` | 1,000 handlers parked in `wait_for_callback` during `settle`, all resolved early in `resolve`, with `pg_stat_statements` on. |
 | `pinned_lane_release_{cancel,move,reprioritise}` | awa #779: a 200,000-job haystack (`LANE_JOBS`) in a queue nobody serves pins the queue ring during `pinned`; `release` then cancels the jobs, moves them onto the bench queue or reprioritises them. `systems.awa.lane_release` in `summary.json` has the pinned age and ring movement before the op and the seconds until the pin cleared, the ring generation moved and queue prune next pruned; `systems.awa.operator.release` has the op's counts. `LANE_OPS` picks the ops and `LANE_AFTER` (`5m`) the watch after the op; a lane cancelled newest first is released by maintenance a few thousand rows per prune attempt, so 200,000 jobs need longer. Release needs awa #797; without it the ring should stay pinned. See [operator scenarios](operator-scenarios.md). |
 | `mixed_fleet` | Replica 0 on an older build, replica 1 on the candidate, with maintenance leadership moved between them. |
+| `rolling_upgrade` | Both replicas start on the older build (`MIXED_OLD_BINARY`), so the schema starts at its version. Each is then stopped gracefully and restarted on the candidate, which applies the newer migrations and patches while the other replica still runs the older build. |
 
 `RETRY_RATE`, `RETRY_FAILURES`, `RETRY_ALIGN_MS` and `RETRY_MAX_ATTEMPTS`
 change the retry cells. `FINALIZE_GATE_AB=1` adds
@@ -139,3 +140,25 @@ still retained when polled; `peak` is the figure to read. Like the state
 queries, each poll runs under a `BENCH_STATE_QUERY_TIMEOUT_MS` (2 s)
 statement timeout and a 500 ms lock timeout, so a slow count is skipped
 rather than holding locks that prune needs.
+
+## Release A/B
+
+`scripts/run_awa_release_ab.sh` runs the regression cells on two awa
+revisions, rounds interleaved A B B A, each arm in its own worktree with
+awa-bench pinned to that revision:
+
+    ARMS="v0618=v0.6.18 rc=release/0.6.6" AWA_CHECKOUT=~/dev/awa IDLE_MEMORY=1 \
+      bash scripts/run_awa_release_ab.sh
+    python3 scripts/awa_release_report.py results/<date>-awa-release-ab
+
+The cells are `sat_w64`, `sat_tuned_k4`, `ref800`, `idle` and `fanout_q200`,
+plus `idle30` with `IDLE_MEMORY=1`: 30 minutes idle while every Postgres
+backend's private memory is sampled by `application_name`. The report gives
+per-cell medians and fails the candidate when:
+
+- saturation throughput is more than 5% below the baseline;
+- claim p99 under load is more than 15% (plus 5 ms) above it;
+- idle transactions/s or WAL bytes/s are more than 10% above it;
+- total Postgres private memory at 25 idle minutes is more than 50 MB above
+  it, or any pooled connection grows more than 8 MB after minute 6.
+

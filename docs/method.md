@@ -149,6 +149,7 @@ aren't visible from the version number alone:
 | `active-readers` | Opens N (default 4, set via `ACTIVE_READER_COUNT`) `REPEATABLE READ` connections doing repeating scans against the adapter's hot tables. Simulates analytics readers on the OLTP path. |
 | `recovery` | Producer load drops to baseline; the bench measures how the system catches up after a stress phase. |
 | `kill-worker(instance=N)` | SIGKILLs replica N and waits for the configured duration. Used inside `crash_recovery` scenarios. |
+| `stop-worker(instance=N,timeout=S)` | Stops replica N gracefully (SIGTERM, SIGKILL after `timeout`, default 30 s), the way a rolling deploy does. `start-worker` brings it back, on `AWA_BENCH_BINARY_<N>_RELAUNCH` when set (`current` for this checkout's build). |
 | `start-worker(instance=N)` | Restarts a previously killed replica and watches for re-registration. |
 | `postgres-restart` | `docker compose stop postgres` for half the duration, then `start` for the rest. Drives the harness-managed compose lifecycle. |
 | `pg-backend-kill(rate=N)` | Opens an admin connection that runs `pg_terminate_backend(pid)` against the SUT's database `N` times per second. |
