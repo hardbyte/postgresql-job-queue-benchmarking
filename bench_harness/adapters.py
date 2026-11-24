@@ -395,11 +395,26 @@ def _base_env(manifest: AdapterManifest, overrides: dict[str, str]) -> dict[str,
 AWA_BENCH_BINARY_PREFIX = "AWA_BENCH_BINARY_"
 
 
+_awa_launches: dict[str, int] = {}
+
+
 def awa_bench_binary(instance_id: str) -> str | None:
     """``AWA_BENCH_BINARY_<instance>``: an absolute path to another awa-bench
     build for that replica, e.g. one built against an older awa, so a run can
-    mix awa versions in one fleet. Unset: this checkout's release build."""
-    path = os.environ.get(f"{AWA_BENCH_BINARY_PREFIX}{instance_id}")
+    mix awa versions in one fleet. ``AWA_BENCH_BINARY_<instance>_RELAUNCH``:
+    the build that replica runs when it is started again (start-worker after
+    a stop or kill), so a run can roll a replica onto another version; set it
+    to ``current`` for this checkout's build. Unset: this checkout's release
+    build."""
+    launches = _awa_launches.get(instance_id, 0)
+    _awa_launches[instance_id] = launches + 1
+    path = None
+    if launches > 0:
+        path = os.environ.get(f"{AWA_BENCH_BINARY_PREFIX}{instance_id}_RELAUNCH")
+        if path == "current":
+            return None
+    if not path:
+        path = os.environ.get(f"{AWA_BENCH_BINARY_PREFIX}{instance_id}")
     if not path:
         return None
     if not os.path.isabs(path) or not os.access(path, os.X_OK):

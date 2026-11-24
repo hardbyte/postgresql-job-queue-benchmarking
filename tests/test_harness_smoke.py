@@ -949,6 +949,24 @@ def test_kill_worker_default_instance_is_zero():
     assert p.int_param("instance", 0) == 0
 
 
+def test_stop_worker_stops_gracefully_with_a_timeout():
+    from bench_harness.hooks import enter_stop_worker
+
+    calls = []
+
+    class Pool:
+        def stop_worker(self, instance_id, *, timeout_s):
+            calls.append((instance_id, timeout_s))
+
+    phase = parse_phase_spec("s=stop-worker(instance=1,timeout=45):20s")
+    assert phase.type is PhaseType.STOP_WORKER
+    enter_stop_worker(PhaseRuntime(database_url="", phase=phase, state={"replica_pool": Pool()}))
+    enter_stop_worker(
+        PhaseRuntime(database_url="", phase=parse_phase_spec("s=stop-worker:20s"), state={"replica_pool": Pool()})
+    )
+    assert calls == [(1, 45.0), (0, 30.0)]
+
+
 def test_start_worker_phase_type_present():
     p = parse_phase_spec("r=start-worker(instance=0):30s")
     assert p.type is PhaseType.START_WORKER

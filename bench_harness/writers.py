@@ -463,6 +463,7 @@ def compute_summary(
     # exact definitions.
     chaos_phase_types = {
         PhaseType.KILL_WORKER,
+        PhaseType.STOP_WORKER,
         PhaseType.START_WORKER,  # lifecycle pair phase that bridges kill→recovery
         PhaseType.POSTGRES_RESTART,
         PhaseType.PG_BACKEND_KILL,

@@ -28,6 +28,7 @@ class PhaseType(str, Enum):
     HIGH_LOAD = "high-load"
     # Destructive / lifecycle phases. See UNIFIED_DRIVER_DESIGN.md §2.
     KILL_WORKER = "kill-worker"
+    STOP_WORKER = "stop-worker"
     START_WORKER = "start-worker"
     # Chaos phase types (folded in from chaos.py — see issue #13).
     POSTGRES_RESTART = "postgres-restart"
@@ -79,6 +80,7 @@ PHASE_TINTS: dict[PhaseType, tuple[str, float]] = {
     PhaseType.HIGH_LOAD:       ("#A378C8", 0.30),
     # Destructive: kill is scream-red, start is calm-green.
     PhaseType.KILL_WORKER:     ("#C04A4A", 0.35),
+    PhaseType.STOP_WORKER:     ("#C08A4A", 0.30),
     PhaseType.START_WORKER:    ("#6CAF6C", 0.25),
     # Chaos: shades of red/orange to flag stress phases visually.
     PhaseType.POSTGRES_RESTART: ("#A03030", 0.40),
@@ -114,6 +116,7 @@ PHASE_INCLUDED_IN_SUMMARY: dict[PhaseType, bool] = {
     PhaseType.ACTIVE_READERS:  True,
     PhaseType.HIGH_LOAD:       True,
     PhaseType.KILL_WORKER:     True,
+    PhaseType.STOP_WORKER:     True,
     PhaseType.START_WORKER:    True,
     PhaseType.POSTGRES_RESTART: True,
     PhaseType.PG_BACKEND_KILL:  True,
@@ -724,6 +727,8 @@ def default_registry() -> HookRegistry:
     # state["replica_pool"] — see hooks.enter_kill_worker / enter_start_worker.
     registry.register(PhaseType.KILL_WORKER,
                       enter=hooks.enter_kill_worker)
+    registry.register(PhaseType.STOP_WORKER,
+                      enter=hooks.enter_stop_worker)
     registry.register(PhaseType.START_WORKER,
                       enter=hooks.enter_start_worker)
     # Chaos phase types — folded in from chaos.py. See hooks.py.

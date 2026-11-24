@@ -9,6 +9,11 @@ def manifest() -> AdapterManifest:
     return AdapterManifest.load(ADAPTERS["awa"].bench_dir)
 
 
+@pytest.fixture(autouse=True)
+def fresh_launch_counts(monkeypatch):
+    monkeypatch.setattr(adapters, "_awa_launches", {})
+
+
 def test_instance_binary_override(tmp_path, monkeypatch, manifest):
     old_build = tmp_path / "awa-bench-0617"
     old_build.write_text("#!/bin/sh\n")
@@ -29,3 +34,21 @@ def test_instance_binary_must_be_absolute_executable(monkeypatch, manifest):
     monkeypatch.setenv("AWA_BENCH_BINARY_0", "target/release/awa-bench")
     with pytest.raises(RuntimeError, match="AWA_BENCH_BINARY_0"):
         adapters.launch_awa(manifest, {"BENCH_INSTANCE_ID": "0"})
+
+
+def test_relaunch_rolls_a_replica_onto_another_build(tmp_path, monkeypatch, manifest):
+    old_build = tmp_path / "awa-bench-0618"
+    old_build.write_text("#!/bin/sh\n")
+    old_build.chmod(0o755)
+    current = str(tmp_path / "target" / "release" / "awa-bench")
+    monkeypatch.setattr(adapters, "_cargo_target_dir", lambda _path: tmp_path / "target")
+    for instance in ("0", "1"):
+        monkeypatch.setenv(f"AWA_BENCH_BINARY_{instance}", str(old_build))
+    monkeypatch.setenv("AWA_BENCH_BINARY_1_RELAUNCH", "current")
+
+    first = [adapters.launch_awa(manifest, {"BENCH_INSTANCE_ID": i}).argv for i in ("0", "1")]
+    again = [adapters.launch_awa(manifest, {"BENCH_INSTANCE_ID": i}).argv for i in ("0", "1")]
+
+    assert first == [[str(old_build)], [str(old_build)]]
+    # Replica 0 has no relaunch build, so it restarts on the same one.
+    assert again == [[str(old_build)], [current]]
