@@ -1,5 +1,5 @@
 {
-  "intro": "Every system ran the same scenarios, one after another, against a fresh PostgreSQL 18.6 cluster capped at 4 CPUs, on one host, in November 2026. In saturation, the Postgres restart and many queues, every system had a pool of workers + 8 connections per process. In the other scenarios Awa and Absurd had that pool and the other systems their adapter's default (4 connections for Procrastinate, 10 for pg-boss). Absolute numbers depend on this host; the comparisons within a section are the point.",
+  "intro": "Every system ran the same scenarios, one after another, against a fresh PostgreSQL 18.6 cluster capped at 4 CPUs, on one host, in November 2026. Awa's results are from 0.6.19, run on 27 November on the same host with the same settings; the other systems' are from 11–16 November. In saturation, the Postgres restart and many queues, every system had a pool of workers + 8 connections per process. In the other scenarios Awa and Absurd had that pool and the other systems their adapter's default (4 connections for Procrastinate, 10 for pg-boss). Absolute numbers depend on this host; the comparisons within a section are the point.",
   "contracts": [
     {
       "systems": [
@@ -157,10 +157,10 @@
       "findings": [
         "PgQue completes the most events (47,282/s tuned), but it acknowledges a batch at a time and its single producer was the limit: the queue stayed empty with Postgres at 1.1 cores, so treat it as a floor.",
         "PGMQ peaks at 12,013/s with 16 workers. With more readers each pgmq.read scans past the others' in-flight rows, Postgres saturates and throughput falls (3,678/s at 128 workers; 5,710/s tuned over 16 queues).",
-        "Among job frameworks, tuned and sharded over 4 queues, River (10,905/s on 2.2 Postgres cores) and Awa (10,762/s on 4.0 cores) lead, then Oban (5,673/s), pg-boss (3,495/s, Postgres-bound), Absurd (1,625/s) and Procrastinate (1,472/s).",
+        "Among job frameworks, tuned and sharded over 4 queues, Awa (11,296/s on 4.0 Postgres cores) and River (10,905/s on 2.2 cores) lead, then Oban (5,673/s), pg-boss (3,495/s, Postgres-bound), Absurd (1,625/s) and Procrastinate (1,472/s).",
         "Configuration matters most for River (2,509/s at 128 workers with the adapter's 50 ms fetch cooldown) and Procrastinate (451/s on one process, 3.3× with four)."
       ],
-      "headline": "Tuned: River 10.9k and Awa 10.8k jobs/s; PgQue 47k events/s, producer-bound."
+      "headline": "Tuned: Awa 11.3k and River 10.9k jobs/s; PgQue 47k events/s, producer-bound."
     },
     {
       "id": "ref800",
@@ -189,10 +189,10 @@
         }
       ],
       "findings": [
-        "Awa, Oban and PGMQ pick up within 20 ms at p99; PgQue at 107 ms (its consumer's 100 ms poll); pg-boss at 410 ms.",
+        "PGMQ (7 ms) and Oban (20 ms) pick up within 20 ms at p99; Awa at 52 ms, because 0.6.19 coalesces its wake-up notifications into one per 50 ms window; PgQue at 107 ms (its consumer's 100 ms poll); pg-boss at 410 ms.",
         "River (634/s), Procrastinate (442/s) and Absurd (223/s) fell behind and their queues grew. River's adapter cooldown caps 32 workers at 640 jobs/s; Procrastinate and Absurd are limited per process (see saturation)."
       ],
-      "headline": "Awa, Oban and PGMQ pick up within 20 ms p99; three systems fall behind."
+      "headline": "PGMQ and Oban pick up within 20 ms p99, Awa 52 ms; three systems fall behind."
     },
     {
       "id": "idle",
@@ -224,10 +224,10 @@
         }
       ],
       "findings": [
-        "Oban, pg-boss, Absurd and River each cost Postgres about 16–24 transactions/s when idle; PGMQ costs 160/s from its polling consumers.",
-        "Awa keeps 276 MB of private Postgres memory while idle, against 18–59 MB for the others: each of its connections caches metadata and prepared plans for its 220 ring tables."
+        "Oban, pg-boss, Absurd, River and Awa each cost Postgres about 16–26 transactions/s when idle; PGMQ costs 160/s from its polling consumers.",
+        "Awa keeps 250 MB of private Postgres memory while idle, against 18–59 MB for the others: each of its connections caches metadata and prepared plans for its 220 ring tables."
       ],
-      "headline": "16–24 xacts/s for most; PGMQ polls at 160/s; Awa holds 276 MB of Postgres memory."
+      "headline": "16–26 xacts/s for most; PGMQ polls at 160/s; Awa holds 250 MB of Postgres memory."
     },
     {
       "id": "chaos",
@@ -282,7 +282,7 @@
       ],
       "findings": [
         "No system cut the neighbour's throughput (all within 1% of baseline).",
-        "With the queue at 4× load, the neighbour's p99 ranged from 2.4 ms (PgQue) and 5–7 ms (Procrastinate, Awa, River) to 18 ms (PGMQ)."
+        "With the queue at 4× load, the neighbour's p99 ranged from 2.4 ms (PgQue), 3.2 ms (Awa) and 5–7 ms (Procrastinate, River) to 18 ms (PGMQ)."
       ],
       "headline": "Neighbour throughput unchanged everywhere; p99 at 4× from 2.4 to 18 ms."
     },
@@ -317,7 +317,7 @@
         }
       ],
       "findings": [
-        "Awa at 1a53fd9e now gives every table a replica identity (0 tables without one, down from 19 on 0.6.17) but still leaves the most dead catalog tuples while the slot is stalled (11,374, down from 19,024; the others 20–214).",
+        "Awa 0.6.19 gives every table a replica identity (0 tables without one, down from 19 on 0.6.17) but still leaves the most dead catalog tuples while the slot is stalled (11,492, down from 19,024 on 0.6.17; the others 20–214).",
         "PGMQ has 2 and PgQue 5 tables without a replica identity, so logical replication of updates and deletes on them fails."
       ],
       "headline": "Awa 19 → 0 tables without replica identity; still the most catalog churn."
@@ -347,10 +347,10 @@
         }
       ],
       "findings": [
-        "PGMQ starts 20,000 simultaneous scheduled jobs within 1.9 s (p99), Awa within 12 s and Oban 21 s; Procrastinate 41 s, River 63 s, pg-boss 77 s, Absurd 137 s.",
+        "PGMQ starts 20,000 simultaneous scheduled jobs within 1.9 s (p99), Awa within 11.5 s and Oban 21 s; Procrastinate 41 s, River 63 s, pg-boss 77 s, Absurd 137 s.",
         "Immediate jobs keep flowing during the herd on Awa, Oban, Procrastinate and PGMQ (p99 under 50 ms); River's, pg-boss's and Absurd's wait seconds behind it. PgQue has no per-job scheduling."
       ],
-      "headline": "PGMQ 1.9 s, Awa 12 s, Oban 21 s to start a 20,000-job herd."
+      "headline": "PGMQ 1.9 s, Awa 11.5 s, Oban 21 s to start a 20,000-job herd."
     },
     {
       "id": "retry",
@@ -564,10 +564,10 @@
         }
       ],
       "findings": [
-        "Keeping 40 s jobs running costs between 4.6 KB/s of WAL (PGMQ) and 28 KB/s (Awa, whose lease heartbeats write more often).",
+        "Keeping 40 s jobs running costs between 4.6 KB/s of WAL (PGMQ) and 25 KB/s (Awa, whose lease heartbeats write more often).",
         "Absurd (1,134), PGMQ (610), River (360) and Oban (298) ran some 40 s jobs more than once in this cell."
       ],
-      "headline": "WAL to keep 40 s jobs alive: 4.6 KB/s (PGMQ) to 28 KB/s (Awa)."
+      "headline": "WAL to keep 40 s jobs alive: 4.6 KB/s (PGMQ) to 25 KB/s (Awa)."
     },
     {
       "id": "drain",
@@ -591,7 +591,7 @@
         }
       ],
       "findings": [
-        "PGMQ and PgQue drain a 200,000-job backlog at about 14,500 jobs/s; Awa at 5,154/s, Oban 4,206/s, pg-boss 2,510/s, River 1,226/s, Procrastinate 579/s; Absurd did not finish in 6 minutes.",
+        "PGMQ and PgQue drain a 200,000-job backlog at about 14,500 jobs/s; Awa at 6,093/s, Oban 4,206/s, pg-boss 2,510/s, River 1,226/s, Procrastinate 579/s; Absurd did not finish in 6 minutes.",
         "Only Awa's database shrinks back afterwards (21 MB)."
       ],
       "headline": "PGMQ and PgQue drain at ~14.5k jobs/s; only Awa shrinks back."
@@ -696,13 +696,13 @@
         }
       ],
       "findings": [
-        "Getting one job by id is fast everywhere it's possible: under 2 ms at p99 for Absurd, Oban, pg-boss, Procrastinate, River and PGMQ, and 103 ms for Awa 0.6, whose get_job checks each of its storage locations. PgQue can't look up an event.",
-        "Finding one job by a unique field: River 2.4 ms at p50 (GIN on metadata); Absurd 73 ms, PGMQ 144 ms, Oban 188 ms and pg-boss 192 ms, which scan. Awa 0.6 timed out at 30 s every time (tags are checked after loading, with no index); Procrastinate and PgQue can't filter on job data.",
-        "A first page by kind and state is quick for PGMQ, pg-boss, River and Oban (1–3 ms at p50); Absurd takes 107 ms, Procrastinate 405 ms (it returns all 50,000 matches, with no LIMIT) and Awa 0.6 1.4 s.",
+        "Getting one job by id is fast everywhere it's possible: under 2 ms at p99 for Absurd, Oban, pg-boss, Procrastinate, River and PGMQ, and 233 ms for Awa 0.6.19, whose get_job checks each of its storage locations. PgQue can't look up an event.",
+        "Finding one job by a unique field: River 2.4 ms at p50 (GIN on metadata); Absurd 73 ms, PGMQ 144 ms, Oban 188 ms and pg-boss 192 ms, which scan. Awa 0.6.19 timed out at 30 s every time (tags are checked after loading, with no index); Procrastinate and PgQue can't filter on job data.",
+        "A first page by kind and state is quick for PGMQ, pg-boss, River and Oban (1–3 ms at p50); Absurd takes 107 ms, Procrastinate 405 ms (it returns all 50,000 matches, with no LIMIT) and Awa 0.6.19 1.2 s.",
         "Procrastinate's ordinary work stalled behind the haystack: with a million jobs queued in another queue, its worker's fetch had to scan past them, and the bench queue fell to 10–18 jobs/s with a pickup p99 of 91–200 s. Probing didn't hurt any other system's live load.",
-        "Awa 0.7 (unreleased) answers every probe, including the tag filters that time out on 0.6, but each takes 0.5–1.2 s. Two queries in the unreleased build are responsible: a job lookup that hash-joins every ready row, and a queue count that walks every available job. Both are being fixed before release."
+        "Awa 0.7 (unreleased) answers every probe, including the tag filters that time out on 0.6.19, but each takes 0.5–1.2 s. Two queries in the unreleased build are responsible: a job lookup that hash-joins every ready row, and a queue count that walks every available job. Both are being fixed before release."
       ],
-      "headline": "River finds one job in 2 ms; Awa 0.6 times out; Procrastinate stalls behind the haystack."
+      "headline": "River finds one job in 2 ms; Awa 0.6.19 times out; Procrastinate stalls behind the haystack."
     },
     {
       "id": "pause",
@@ -822,11 +822,11 @@
         }
       ],
       "findings": [
-        "PgQue redelivers abandoned batches at once (16 s); among per-job systems PGMQ finishes in 5.9 min, pg-boss 14 min, Awa 20.5 min, Absurd 28.5 min and Procrastinate 32 min.",
+        "PgQue redelivers abandoned batches at once (16 s); among per-job systems PGMQ finishes in 5.9 min, Awa 10.8 min, pg-boss 14 min, Absurd 28.5 min and Procrastinate 32 min.",
         "Oban's Lifeline rescued about a fifth of the jobs in 30 minutes (798,438 still unfinished).",
         "Apart from Oban's unfinished jobs, none went missing; a few ran twice (Absurd 43, pg-boss 80, PGMQ 102, PgQue 12)."
       ],
-      "headline": "PgQue 16 s, PGMQ 5.9 min, pg-boss 14 min, Awa 20.5 min to finish 1M abandoned jobs."
+      "headline": "PgQue 16 s, PGMQ 5.9 min, Awa 10.8 min, pg-boss 14 min to finish 1M abandoned jobs."
     }
   ],
   "overview": [

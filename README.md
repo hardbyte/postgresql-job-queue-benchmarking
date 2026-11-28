@@ -22,14 +22,14 @@ A closed-loop harness: producers enqueue at a controlled rate, workers claim and
 
 ### What the latest run found
 
-Eight Postgres-backed queues ran on one host, under the same harness and the same scenarios, between 11 and 13 November 2026 (PostgreSQL 18.6, capped at 4 CPUs). The lineup spans four contracts: job frameworks, a durable-workflow engine, a visibility-timeout queue and an event queue. So the list below is not one ranking. [SUMMARY.md](results/2026-11-12-full-sweep/SUMMARY.md) has every cell, which run each number comes from, and resource and lock tables. The [website](https://hardbyte.github.io/postgresql-job-queue-benchmarking/benchmarks/) charts them by scenario.
+Eight Postgres-backed queues ran on one host, under the same harness and the same scenarios, between 11 and 13 November 2026 (PostgreSQL 18.6, capped at 4 CPUs); awa was run again on 0.6.19 on 27 November, on the same host with the same settings ([summary](results/2026-11-27-awa0619/SUMMARY.md)). The lineup spans four contracts: job frameworks, a durable-workflow engine, a visibility-timeout queue and an event queue. So the list below is not one ranking. [SUMMARY.md](results/2026-11-12-full-sweep/SUMMARY.md) has every cell, which run each number comes from, and resource and lock tables. The [website](https://hardbyte.github.io/postgresql-job-queue-benchmarking/benchmarks/) charts them by scenario.
 
 | System | Contract | Best measured (jobs/s) | Configuration | 1M abandoned jobs done again |
 |---|---|---:|---|---|
 | pgque | event queue (batch ack) | 47,282 | tuned, producer-bound | 16 s |
 | pgmq | visibility-timeout | 12,013 | 16 workers | 5.9 min |
+| awa | job framework | 11,296 | tuned, 4 queues | 10.8 min |
 | river | job framework | 10,905 | tuned, 4 queues | held no claims |
-| awa | job framework | 10,762 | tuned, 4 queues | 20.5 min |
 | oban | job framework | 5,673 | tuned | about a fifth in 30 min |
 | pg-boss | job framework | 3,495 | tuned, Postgres-bound | 14 min |
 | absurd | durable workflow | 1,625 | tuned, 4 queues | 28.5 min |
@@ -39,7 +39,7 @@ Eight Postgres-backed queues ran on one host, under the same harness and the sam
 
 **Operator scenarios** ([summary](results/2026-11-16-operator/SUMMARY.md)):
 - **Pause:** a pause survives a process restart only where the system stores it (awa, River, PgQue). Oban holds it in memory, and the other four have no pause.
-- **Find:** River finds one job by a unique field among a million in 2.4 ms. awa 0.6 times out on tag filters. Procrastinate can't filter on job data, and its ordinary queue stalls behind a large backlog in another queue.
+- **Find:** River finds one job by a unique field among a million in 2.4 ms. awa 0.6.19 times out on tag filters. Procrastinate can't filter on job data, and its ordinary queue stalls behind a large backlog in another queue.
 
 ### The three contracts
 
